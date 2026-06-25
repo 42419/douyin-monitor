@@ -1,0 +1,9 @@
+# 抖音监控用户列表
+# 格式：sec_user_id|昵称
+# - sec_user_id 是抖音账号的加密用户 ID（可在浏览器开发者工具的接口请求里找到），不是抖音号
+# - 昵称仅用于通知展示，可以重复，不影响监控逻辑（脚本内部按 sec_user_id 区分用户）
+# - 以 # 开头的行和空行会被忽略
+# - 脚本每轮都会重新读取本文件，修改后无需重启脚本
+
+MS4wLjABAAAA_example_sec_user_id_1|示例用户A
+MS4wLjABAAAA_example_sec_user_id_2|示例用户B
