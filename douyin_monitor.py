@@ -510,6 +510,17 @@ class Monitor:
                 "cover_url": ((item.get("cover_original_scale") or {}).get("url_list") or [None])[0],
             }
 
+        # 防御：API 返回了非空列表，但里面每一条都没带 aweme_id（字段结构异常/接口改版/
+        # 半个坏包），导致 current_map build 出来是空的。如果不拦住，会被后面的逻辑当成
+        # "本轮一个视频都没有"，known_ids 里所有视频全部进入 disappeared_ids，经过几轮
+        # 这种坏响应后会被 pending_deletes 确认成"批量删除"，等接口恢复正常后又会把它们
+        # 全部当"新视频"重新推一遍——比之前的单轮抖动更严重。这里直接当失败处理，
+        # 不触碰 videos/pending_deletes。
+        if aweme_list and not current_map:
+            logging.error(f"❌ 用户 {nickname} API 返回的视频列表字段异常（缺少 aweme_id），本轮跳过")
+            self._on_fail(state, nickname)
+            return {"status": "fail", "new_count": 0, "deleted_count": 0}
+
         current_ids = set(current_map)
         known_ids = set(videos)
 
@@ -646,6 +657,13 @@ class Monitor:
             for vid, _ in oldest:
                 videos.pop(vid, None)
                 pending_deletes.pop(vid, None)
+
+        # 修复：原逻辑里，只有"完全无变化"或"首次初始化"或"空列表失败"这几条路径会调用
+        # _check_stale 去刷新 resp_hash / resp_hash_since；真正检测到新视频或删除的这一轮
+        # 反而被漏掉了。后果不是误报，而是每次真实更新后，"响应哈希连续无变化"这个计时器
+        # 会晚一轮才重新开始计时——本身影响很小，但既然是本该覆盖的分支就顺手修一下，
+        # 保持"每一轮成功拿到数据都刷新一次 stale 状态"这个不变量。
+        self._check_stale(state, nickname, aweme_list)
 
         return {"status": "ok", "new_count": len(new_ids), "deleted_count": real_deleted_count}
 
