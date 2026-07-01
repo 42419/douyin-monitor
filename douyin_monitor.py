@@ -10,6 +10,8 @@
 核心特性：
   - 多用户监控，users.conf 支持热加载（运行中修改无需重启脚本）
   - 新视频 / 删除视频检测，自动区分"真实删除"与"被新视频挤出抓取窗口"两种情况
+  - 删除判定带二次确认（debounce），避免单轮 API 抖动造成"先删后发"的假警报，
+    置顶视频判定更保守
   - 置顶视频的置顶状态变化只做静默同步，不会被误判为新增或删除
   - 连续请求失败告警与自动恢复通知，均带冷却时间，避免刷屏
   - 两级 Cookie 失效检测：API 响应内容长时间无变化 + 长期无新视频兜底
@@ -51,7 +53,7 @@ from dotenv import dotenv_values
 from dingtalkchatbot.chatbot import ActionCard, CardItem, DingtalkChatbot
 
 # =================== 路径配置 ===================
-WORK_DIR = Path(os.environ.get("DOUYIN_MONITOR_HOME", "/opt/douyin-monitor"))
+WORK_DIR = Path(os.environ.get("DOUYIN_MONITOR_HOME", "/mnt/douyin-monitor"))
 USERS_CONF = WORK_DIR / "users.conf"
 STATE_DIR = WORK_DIR / "state"
 LOG_DIR = WORK_DIR / "log"
@@ -73,6 +75,8 @@ STALE_ALERT_COOLDOWN = 3600        # 过时告警冷却时间（秒）
 STALE_FALLBACK_DAYS = 14           # 无新视频兜底告警天数
 HTTP_TIMEOUT = 10                  # 单次 HTTP 请求超时（秒）
 DEFAULT_API_URL = "http://localhost/api/douyin/web/fetch_user_post_videos"
+DELETE_CONFIRM_ROUNDS = 2          # 普通视频：连续消失多少轮才判定为真实删除
+DELETE_CONFIRM_ROUNDS_TOP = 3      # 置顶视频：更保守，连续消失多少轮才判定为真实删除
 
 # DingtalkChatbot 库内部发请求时没有显式设置超时（requests.post 不传 timeout），
 # 这里用全局 socket 超时兜底，避免钉钉接口异常挂起时把整个监控主循环卡死。
@@ -224,6 +228,7 @@ class UserState:
             "initialized_at": None,
             "last_update_at": None,
             "videos": {},  # video_id -> {title, create_time, is_top}
+            "pending_deletes": {},  # video_id -> 连续消失轮数，用于二次确认删除
             "consecutive_fails": 0,
             "last_fail_alert_at": None,
             "fail_alerted": False,
@@ -492,6 +497,7 @@ class Monitor:
         self._on_success(state, nickname)
 
         videos: Dict[str, dict] = state.data.setdefault("videos", {})
+        pending_deletes: Dict[str, int] = state.data.setdefault("pending_deletes", {})
         current_map: Dict[str, dict] = {}
         for item in aweme_list:
             vid = item.get("aweme_id")
@@ -506,6 +512,11 @@ class Monitor:
 
         current_ids = set(current_map)
         known_ids = set(videos)
+
+        # 任何这一轮重新出现的视频，清除它之前积累的"疑似消失"确认计数
+        for vid in list(pending_deletes):
+            if vid in current_ids:
+                pending_deletes.pop(vid, None)
 
         # 首次记录：全部加入已知列表，不发通知
         if not videos:
@@ -539,25 +550,63 @@ class Monitor:
         content_changed = False
         real_deleted_count = 0
 
-        # --- 删除检测：消失的视频是"被新视频挤出窗口"还是"被用户删除"？ ---
-        # 有新视频 → 视为窗口滚动挤出，静默清理；无新视频 → 视为真实删除，告警。
-        # （与原脚本相同的启发式，但现在基于完整已知集合，不再受置顶状态干扰）
-        if disappeared_ids:
-            if new_ids:
-                logging.info(
-                    f"🔄 用户 {nickname} 有 {len(disappeared_ids)} 条视频被新视频挤出窗口，静默清理"
-                )
-                for vid in disappeared_ids:
-                    videos.pop(vid, None)
-            else:
-                deleted_entries = [(vid, videos.get(vid, {})) for vid in disappeared_ids]
-                logging.info(f"🗑️ 用户 {nickname} 检测到 {len(deleted_entries)} 条视频被删除")
-                self.notifier.send_deleted(nickname, deleted_entries, self.cfg.at_mobiles)
-                for vid in disappeared_ids:
-                    videos.pop(vid, None)
-                content_changed = True
-                real_deleted_count = len(deleted_entries)
-                time.sleep(1)  # 避免钉钉限流
+        # --- 删除检测：消失的视频需要区分"被新视频挤出窗口"、"真实删除疑似"两种情况 ---
+        # 修复点（对应"先删除通知、再新视频通知"的假警报问题）：
+        #   1. 不再"单轮消失即判定删除"，而是用 pending_deletes 做二次确认——
+        #      普通视频连续消失 DELETE_CONFIRM_ROUNDS 轮、置顶视频连续消失
+        #      DELETE_CONFIRM_ROUNDS_TOP 轮才真正判定为删除并告警。
+        #      单轮 API 抖动漏返的视频，下一轮只要重新出现就会被上面的清除逻辑
+        #      归零计数，不会触发任何通知。
+        #   2. 置顶视频不再享受"有新视频就静默当作挤出窗口清理"的快速通道——
+        #      置顶视频正常情况下不该被挤出窗口，它的消失本身就是异常信号
+        #      （取消置顶/被删/接口抖动），一律走二次确认流程，避免误删状态。
+        scrolled_out_ids: List[str] = []
+        confirmed_deleted_ids: List[str] = []
+
+        for vid in disappeared_ids:
+            meta = videos.get(vid, {})
+            is_top = bool(meta.get("is_top"))
+
+            # 非置顶视频 + 本轮有新视频 => 大概率是被新内容挤出抓取窗口，走快速静默清理
+            if not is_top and new_ids:
+                scrolled_out_ids.append(vid)
+                pending_deletes.pop(vid, None)
+                continue
+
+            # 其余情况（置顶视频消失 / 非置顶视频在无新视频时消失）都需要二次确认
+            required = DELETE_CONFIRM_ROUNDS_TOP if is_top else DELETE_CONFIRM_ROUNDS
+            count = pending_deletes.get(vid, 0) + 1
+            pending_deletes[vid] = count
+            if count >= required:
+                confirmed_deleted_ids.append(vid)
+
+        if scrolled_out_ids:
+            logging.info(
+                f"🔄 用户 {nickname} 有 {len(scrolled_out_ids)} 条视频被新视频挤出窗口，静默清理"
+            )
+            for vid in scrolled_out_ids:
+                videos.pop(vid, None)
+
+        if confirmed_deleted_ids:
+            deleted_entries = [(vid, videos.get(vid, {})) for vid in confirmed_deleted_ids]
+            logging.info(f"🗑️ 用户 {nickname} 确认检测到 {len(deleted_entries)} 条视频被删除")
+            self.notifier.send_deleted(nickname, deleted_entries, self.cfg.at_mobiles)
+            for vid in confirmed_deleted_ids:
+                videos.pop(vid, None)
+                pending_deletes.pop(vid, None)
+            content_changed = True
+            real_deleted_count = len(deleted_entries)
+            time.sleep(1)  # 避免钉钉限流
+
+        still_pending = [
+            vid for vid in disappeared_ids
+            if vid not in scrolled_out_ids and vid not in confirmed_deleted_ids
+        ]
+        if still_pending:
+            logging.debug(
+                f"⏳ 用户 {nickname} 有 {len(still_pending)} 条视频疑似消失，"
+                f"待后续轮次确认（未达到确认阈值，暂不告警/不移除）"
+            )
 
         # --- 新视频通知（按发布时间从早到晚）---
         if new_ids:
@@ -587,11 +636,16 @@ class Monitor:
             state.data["last_update_at"] = now_iso()
 
         # 裁剪已知视频列表上限（保留最新的 N 条）
+        # 修复：置顶视频通常是最早发布的视频，若按 create_time 裁剪不排除置顶视频，
+        # 一旦已知列表超限，最先被裁掉的很可能就是置顶视频——裁掉之后它又会在
+        # 下一轮被误判为"新视频"重新推送一遍。这里排除置顶视频，只从非置顶视频里裁剪。
         if len(videos) > KNOWN_IDS_MAX:
             overflow = len(videos) - KNOWN_IDS_MAX
-            oldest = sorted(videos.items(), key=lambda kv: kv[1].get("create_time", 0))[:overflow]
+            non_top_entries = [(vid, m) for vid, m in videos.items() if not m.get("is_top")]
+            oldest = sorted(non_top_entries, key=lambda kv: kv[1].get("create_time", 0))[:overflow]
             for vid, _ in oldest:
                 videos.pop(vid, None)
+                pending_deletes.pop(vid, None)
 
         return {"status": "ok", "new_count": len(new_ids), "deleted_count": real_deleted_count}
 
