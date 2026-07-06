@@ -13,3 +13,6 @@ state/
 log/
 status.json
 monitor.pid
+
+# ===== Agent 工具 =====
+.mimocode/
