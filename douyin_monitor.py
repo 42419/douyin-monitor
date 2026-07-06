@@ -299,7 +299,9 @@ class UserState:
             "fail_alerted": False,
             "resp_hash": None,
             "resp_hash_since": None,
-            "last_stale_alert_at": None,
+            "last_stale_alert_at": None,  # 已拆分为下面两个字段，保留仅为兼容老状态文件
+            "last_hash_stale_alert_at": None,
+            "last_fallback_stale_alert_at": None,
         }
 
     def save(self) -> None:
@@ -457,6 +459,13 @@ class Monitor:
 
     # ---- 过时 / Cookie 失效检测 ----
     def _check_stale(self, state: UserState, nickname: str, aweme_list: Optional[list]) -> None:
+        # 修复：原来两类过时检测（响应哈希无变化 / 长期无新视频）共用同一个
+        # last_stale_alert_at 冷却字段，会出现"检测1刚发完告警，检测2被误伤进入
+        # 冷却期而发不出来"的情况——这两种告警传达的信息不一样，应该分开冷却。
+        # 兼容处理：老的 state 文件里只有 last_stale_alert_at，这里读取时对两个新
+        # 字段都做一次回退，保证老数据升级后不会立刻重新告警一遍。
+        legacy_alert_at = state.data.get("last_stale_alert_at")
+
         # 检测 1：API 响应哈希连续不变（修复：不再因"从未更新过"而整体跳过此检测）
         if aweme_list is not None:
             ids_sorted = sorted(item.get("aweme_id", "") for item in aweme_list)
@@ -467,7 +476,9 @@ class Monitor:
                 elapsed = seconds_since(state.data.get("resp_hash_since")) or 0
                 if elapsed >= self.cfg.stale_threshold:
                     hours = int(elapsed // 3600)
-                    last_alert_elapsed = seconds_since(state.data.get("last_stale_alert_at"))
+                    last_alert_elapsed = seconds_since(
+                        state.data.get("last_hash_stale_alert_at") or legacy_alert_at
+                    )
                     if last_alert_elapsed is None or last_alert_elapsed >= STALE_ALERT_COOLDOWN:
                         logging.error(
                             f"🚨 用户 {nickname} API 响应连续 {hours} 小时无变化，疑似 Cookie 过期"
@@ -479,7 +490,7 @@ class Monitor:
                             "建议：更新 Cookie 后重启监控脚本\n\n"
                             f"⏱ {now_str()}",
                         )
-                        state.data["last_stale_alert_at"] = now_iso()
+                        state.data["last_hash_stale_alert_at"] = now_iso()
             else:
                 state.data["resp_hash"] = resp_hash
                 state.data["resp_hash_since"] = now_iso()
@@ -490,7 +501,9 @@ class Monitor:
         if elapsed_days is not None and elapsed_days >= STALE_FALLBACK_DAYS * 86400:
             # 优化：若已有未恢复的"连续失败"告警在生效，跳过此提醒，避免重复刷群
             if not state.data.get("fail_alerted"):
-                last_alert_elapsed = seconds_since(state.data.get("last_stale_alert_at"))
+                last_alert_elapsed = seconds_since(
+                    state.data.get("last_fallback_stale_alert_at") or legacy_alert_at
+                )
                 if last_alert_elapsed is None or last_alert_elapsed >= STALE_ALERT_COOLDOWN:
                     days = int(elapsed_days // 86400)
                     logging.info(f"ℹ️ 用户 {nickname} 已 {days} 天无新视频")
@@ -500,7 +513,7 @@ class Monitor:
                         "可能是用户近期未更新，或 Cookie 已过期\n\n"
                         f"⏱ {now_str()}",
                     )
-                    state.data["last_stale_alert_at"] = now_iso()
+                    state.data["last_fallback_stale_alert_at"] = now_iso()
 
     # ---- 单用户检测主逻辑 ----
     def check_user(self, sec_user_id: str, nickname: str) -> dict:
@@ -698,7 +711,7 @@ class Monitor:
                 pending_deletes.pop(vid, None)
             content_changed = True
             real_deleted_count = len(deleted_entries)
-            time.sleep(1)  # 避免钉钉限流
+            stop_event.wait(1)  # 避免钉钉限流；用 stop_event.wait 而非 time.sleep，退出信号能立即打断
 
         still_pending = [
             vid for vid in disappeared_ids
@@ -731,7 +744,7 @@ class Monitor:
                     "create_time": item["create_time"],
                     "is_top": item["is_top"],
                 }
-                time.sleep(1)  # 避免钉钉限流
+                stop_event.wait(1)  # 避免钉钉限流；用 stop_event.wait 而非 time.sleep，退出信号能立即打断
             content_changed = True
 
         if content_changed:
@@ -813,7 +826,14 @@ def _gzip_rotator(source: str, dest: str) -> None:
     减少长期运行后归档日志占用的磁盘空间。"""
     with open(source, "rb") as f_in, gzip.open(dest, "wb") as f_out:
         shutil.copyfileobj(f_in, f_out)
-    os.remove(source)
+    try:
+        os.remove(source)
+    except OSError as e:
+        # 删除源文件失败（比如文件被其他进程占用）不应该让整个轮转流程抛异常中断——
+        # 压缩归档已经成功了，最坏结果只是源文件多留了一份，下次轮转再试一次删除，
+        # 总比因为这里抛异常导致日志系统出问题要好。
+        logging.getLogger().warning(f"⚠️ 日志轮转后删除源文件失败: {source} ({e})")
+
 
 
 def _make_rotating_handler(path: Path, level: int) -> logging.handlers.RotatingFileHandler:
@@ -905,14 +925,24 @@ def print_status() -> None:
 
 # =================== 主循环 ===================
 def cleanup_orphaned_tmp_files() -> None:
-    """清理上次进程被强杀（kill -9）时可能残留的状态临时文件。
+    """清理上次进程被强杀（kill -9）时可能残留的临时文件。
     用于在进程被强行终止（kill -9）后下次启动时做兜底清理。"""
-    if not STATE_DIR.exists():
-        return
-    for f in STATE_DIR.glob(".*.json.tmp.*"):
+    if STATE_DIR.exists():
+        for f in STATE_DIR.glob(".*.json.tmp.*"):
+            try:
+                f.unlink()
+                logging.info(f"🧹 清理残留临时文件: {f.name}")
+            except OSError:
+                pass
+
+    # status.json 的临时文件（write_status_snapshot 里用 STATUS_FILE.with_suffix(".tmp")
+    # 生成，固定文件名不带 pid，正常情况下每轮都会被覆盖/原子替换掉；只有进程在
+    # write_text 和 replace 之间被强杀才会残留，顺手一并清理。
+    status_tmp = STATUS_FILE.with_suffix(".tmp")
+    if status_tmp.exists():
         try:
-            f.unlink()
-            logging.info(f"🧹 清理残留临时文件: {f.name}")
+            status_tmp.unlink()
+            logging.info(f"🧹 清理残留临时文件: {status_tmp.name}")
         except OSError:
             pass
 
@@ -941,22 +971,32 @@ def run_loop(once: bool = False) -> None:
 
 
     last_users_mtime = None
+    cached_users: List[Tuple[str, str]] = []
     # 跨轮次持续生效的节奏控制器：即使换了新的一轮，相邻两次请求之间的最小间隔
     # 依然保持在 3~8 秒，不会因为"上一轮最后一个请求"和"这一轮第一个请求"
     # 恰好挨得很近而突然打破节奏。
     request_pacer = RequestPacer(USER_REQUEST_INTERVAL_MIN, USER_REQUEST_INTERVAL_MAX)
     while not stop_event.is_set():
-        users = load_users_conf(USERS_CONF)
+        # 优化：只有 mtime 变化（或首次启动）才真正重新读取 + 解析 users.conf，
+        # 文件没变就复用上一轮解析好的结果，避免账号数一多时每轮都做一遍不必要的
+        # 文件 IO + 解析。
+        try:
+            mtime = USERS_CONF.stat().st_mtime
+        except OSError:
+            mtime = None
+
+        if mtime is None:
+            cached_users = []
+            last_users_mtime = None
+        elif last_users_mtime is None or mtime != last_users_mtime:
+            cached_users = load_users_conf(USERS_CONF)
+            if last_users_mtime is not None:
+                logging.info("🔄 检测到 users.conf 变更，已重新加载")
+            last_users_mtime = mtime
+
+        users = cached_users
         if not users:
             logging.warning(f"⚠️ users.conf 为空或不存在: {USERS_CONF}")
-        else:
-            try:
-                mtime = USERS_CONF.stat().st_mtime
-                if last_users_mtime is not None and mtime != last_users_mtime:
-                    logging.info("🔄 检测到 users.conf 变更，已重新加载")
-                last_users_mtime = mtime
-            except OSError:
-                pass
 
         # 优化：不再逐用户打日志，改为按轮次汇总成一行，
         # 大幅降低"长期无事发生"场景下的日志体积（真正的事件——新视频/
