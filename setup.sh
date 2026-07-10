@@ -99,6 +99,7 @@ setup_workdir() {
     # 复制脚本文件
     info "复制脚本文件..."
     cp "$SCRIPT_DIR/douyin_monitor.py" "$DEFAULT_WORK_DIR/"
+    cp -r "$SCRIPT_DIR/douyin_monitor" "$DEFAULT_WORK_DIR/"
     cp "$SCRIPT_DIR/requirements.txt" "$DEFAULT_WORK_DIR/"
     cp "$SCRIPT_DIR/.env.example" "$DEFAULT_WORK_DIR/" 2>/dev/null || true
     cp "$SCRIPT_DIR/users.conf.example" "$DEFAULT_WORK_DIR/" 2>/dev/null || true
