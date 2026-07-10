@@ -57,7 +57,7 @@ validate_input() {
 
 # =================== 配置变量 ===================
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DEFAULT_WORK_DIR="/mnt/douyin-monitor"
+DEFAULT_WORK_DIR="/opt/douyin-monitor"
 SERVICE_NAME="douyin-monitor"
 
 # =================== 步骤 1：检查运行环境 ===================
@@ -88,6 +88,31 @@ check_environment() {
     fi
 
     ok "Python $PYTHON_VERSION"
+}
+
+# =================== 步骤 1.5：配置工作目录 ===================
+configure_workdir() {
+    echo ""
+    echo "=========================================="
+    echo "  配置工作目录"
+    echo "=========================================="
+    echo ""
+    echo "工作目录用于存放脚本、配置文件、状态数据和日志。"
+    echo "默认路径: $DEFAULT_WORK_DIR"
+    echo ""
+    read -p "请指定工作目录路径（直接回车使用默认）: " custom_dir
+    if [ -n "$custom_dir" ]; then
+        # 去除首尾空格
+        custom_dir="$(echo "$custom_dir" | xargs)"
+        if [ -z "$custom_dir" ]; then
+            info "输入为空，使用默认路径: $DEFAULT_WORK_DIR"
+        else
+            DEFAULT_WORK_DIR="$custom_dir"
+            ok "工作目录已设置为: $DEFAULT_WORK_DIR"
+        fi
+    else
+        info "使用默认路径: $DEFAULT_WORK_DIR"
+    fi
 }
 
 # =================== 步骤 2：创建工作目录 ===================
@@ -344,6 +369,7 @@ main() {
     echo ""
 
     check_environment
+    configure_workdir
     setup_workdir
     setup_venv
     configure_env
