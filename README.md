@@ -26,12 +26,27 @@
 
 ## 文件说明
 
-| 文件 | 作用 |
+| 文件/目录 | 作用 |
 |---|---|
-| `douyin_monitor.py` | 主脚本 |
+| `douyin_monitor.py` | 主入口脚本（兼容 `python3 douyin_monitor.py` 直接运行） |
+| `douyin_monitor/` | 核心逻辑包（模块拆分后的代码） |
 | `requirements.txt` | 依赖列表，`pip install -r requirements.txt` 安装 |
 | `.env.example` | 环境变量配置示例，部署时复制为 `.env` 并填写 |
 | `users.conf.example` | 监控用户列表示例，部署时复制为 `users.conf` |
+
+核心包 `douyin_monitor/` 内部模块说明：
+
+| 模块 | 作用 |
+|---|---|
+| `__main__.py` | 支持 `python -m douyin_monitor` 运行 |
+| `cli.py` | 命令行入口：主循环、信号处理、PID 锁、状态查看 |
+| `config.py` | 配置管理：.env 解析、Config 数据类、路径常量、users.conf 加载 |
+| `state.py` | 每用户运行状态管理（JSON 持久化） |
+| `monitor.py` | 监控核心逻辑：API 请求、单用户检测、状态快照 |
+| `notifier.py` | 钉钉群机器人推送通知 |
+| `pacer.py` | 请求节奏控制器（保证并发场景下整体请求频率不变） |
+| `logging_setup.py` | 日志配置：info/debug 双文件轮转 + 终端输出 |
+| `utils.py` | 时间工具和通用辅助函数 |
 
 脚本运行时会在工作目录下自动创建以下内容：
 
@@ -117,7 +132,9 @@ sudo journalctl -u douyin-monitor -f   # 实时看终端输出
 | `API_URL` | 否 | `http://localhost/api/douyin/web/fetch_user_post_videos` | 抓取抖音视频列表的接口地址 |
 | `STALE_THRESHOLD` | 否 | `604800`（7 天，单位秒） | API 响应内容连续多久不变就提醒"疑似 Cookie 过期" |
 | `FETCH_COUNT` | 否 | `10` | 单次请求拉取的视频条数。如果某用户经常一次发布很多视频，建议调大，否则可能漏检 |
-| `MAX_CONCURRENT_USERS` | 否 | `5` | 并发检查账号数的安全上限。正常情况下真正控制请求节奏的是脚本内置的 3~8 秒随机间隔，这个值只是防止极端情况下（比如同时有多个账号请求卡在超时边缘）同时挂起的请求数失控，一般不需要调整 |
+| `MAX_CONCURRENT_USERS` | 否 | `5` | 并发检查账号数的安全上限。正常情况下真正控制请求节奏的是下面的轮询间隔，这个值只是防止极端情况下同时挂起的请求数失控，一般不需要调整 |
+| `POLL_INTERVAL_MIN` | 否 | `15` | 每轮检测之间的最小等待间隔（秒）。密集监控可设小（如 10），佛系监控可设大（如 300） |
+| `POLL_INTERVAL_MAX` | 否 | `40` | 每轮检测之间的最大等待间隔（秒）。实际间隔为 [POLL_INTERVAL_MIN, POLL_INTERVAL_MAX] 之间的随机值 |
 | `AT_MOBILES` | 否 | 空 | 告警时需要 @ 的手机号，多个用逗号分隔 |
 | `LOG_LEVEL` | 否 | `INFO` | 终端/`journalctl` 实时输出的详细程度，不影响日志文件内容（见下文） |
 
