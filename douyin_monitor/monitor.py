@@ -24,7 +24,7 @@ from .config import (
     STATUS_FILE,
     Config,
 )
-from .notifier import DingTalkNotifier
+from .notifiers.base import BaseNotifier
 from .state import UserState
 from .utils import now_iso, now_str, seconds_since
 
@@ -46,7 +46,7 @@ def fetch_user_videos(api_url: str, sec_user_id: str, count: int) -> Tuple[int, 
 
 # =================== 监控核心逻辑 ===================
 class Monitor:
-    def __init__(self, cfg: Config, notifier: DingTalkNotifier, stop_event: threading.Event):
+    def __init__(self, cfg: Config, notifier: BaseNotifier, stop_event: threading.Event):
         self.cfg = cfg
         self.notifier = notifier
         self._stop_event = stop_event
@@ -214,6 +214,7 @@ class Monitor:
         if aweme_list and not current_map:
             logging.error(f"用户 {nickname} API 返回的视频列表字段异常（缺少 aweme_id），本轮跳过")
             self._on_fail(state, nickname)
+            self._check_stale(state, nickname, aweme_list)
             return {"status": "fail", "new_count": 0, "deleted_count": 0}
 
         current_ids = set(current_map)
