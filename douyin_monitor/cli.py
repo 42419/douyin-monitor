@@ -116,7 +116,7 @@ def run_loop(once: bool = False) -> None:
 
     if cfg.web_enabled:
         try:
-            start_web_server(cfg.web_host, cfg.web_port, stop_event)
+            start_web_server(cfg.web_host, cfg.web_port, stop_event, cfg.notify_channels)
         except OSError as e:
             logging.error(f"状态面板启动失败（端口 {cfg.web_port} 可能被占用）: {e}")
 
