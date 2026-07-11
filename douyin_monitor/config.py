@@ -60,10 +60,14 @@ def load_env(path: Path) -> Dict[str, str]:
 
 
 # =================== 配置 ===================
+DEFAULT_NOTIFY_CHANNELS = ["dingtalk"]
+DEFAULT_BARK_SERVER = "https://api.day.app"
+
+
 @dataclass
 class Config:
-    dingtalk_token: str
-    dingtalk_secret: str
+    dingtalk_token: str = ""
+    dingtalk_secret: str = ""
     api_url: str = DEFAULT_API_URL
     stale_threshold: int = 7 * 86400
     fetch_count: int = 10
@@ -72,6 +76,16 @@ class Config:
     max_concurrent_users: int = 5
     poll_interval_min: int = 15
     poll_interval_max: int = 40
+    notify_channels: List[str] = field(default_factory=lambda: list(DEFAULT_NOTIFY_CHANNELS))
+    bark_server: str = DEFAULT_BARK_SERVER
+    bark_device_key: str = ""
+    wecom_webhook_key: str = ""
+    serverchan_sendkey: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    web_enabled: bool = False
+    web_host: str = "127.0.0.1"
+    web_port: int = 8787
 
     @classmethod
     def load(cls) -> "Config":
@@ -80,20 +94,27 @@ class Config:
             sys.exit(1)
         env = load_env(ENV_FILE)
 
-        token = env.get("DINGTALK_TOKEN")
-        if not token:
-            logging.error("错误：.env 中未配置 DINGTALK_TOKEN")
-            sys.exit(1)
-        secret = env.get("DINGTALK_SECRET")
-        if not secret:
-            logging.error("错误：.env 中未配置 DINGTALK_SECRET")
-            sys.exit(1)
-        if not secret.startswith("SEC"):
-            logging.warning(
-                "DINGTALK_SECRET 不是以 SEC 开头，这通常意味着填错了密钥"
-                "（钉钉「加签」密钥都是 SEC 开头）。如果机器人安全设置选的是「加签」，"
-                "请去钉钉群机器人设置页面重新复制正确的密钥，否则推送会一直签名失败。"
-            )
+        notify_channels = [
+            c.strip().lower()
+            for c in env.get("NOTIFY_CHANNELS", "").split(",")
+            if c.strip()
+        ] or list(DEFAULT_NOTIFY_CHANNELS)
+
+        token = env.get("DINGTALK_TOKEN", "")
+        secret = env.get("DINGTALK_SECRET", "")
+        if "dingtalk" in notify_channels:
+            if not token:
+                logging.error("错误：已启用 dingtalk 渠道，但 .env 中未配置 DINGTALK_TOKEN")
+                sys.exit(1)
+            if not secret:
+                logging.error("错误：已启用 dingtalk 渠道，但 .env 中未配置 DINGTALK_SECRET")
+                sys.exit(1)
+            if not secret.startswith("SEC"):
+                logging.warning(
+                    "DINGTALK_SECRET 不是以 SEC 开头，这通常意味着填错了密钥"
+                    "（钉钉「加签」密钥都是 SEC 开头）。如果机器人安全设置选的是「加签」，"
+                    "请去钉钉群机器人设置页面重新复制正确的密钥，否则推送会一直签名失败。"
+                )
 
         at_mobiles = [m.strip() for m in env.get("AT_MOBILES", "").split(",") if m.strip()]
 
@@ -126,6 +147,17 @@ class Config:
         if poll_interval_max < poll_interval_min:
             poll_interval_max = poll_interval_min + 25
 
+        def _bool_env(key: str, default: bool) -> bool:
+            val = env.get(key)
+            if val is None or not val.strip():
+                return default
+            return val.strip().lower() in ("1", "true", "yes", "on")
+
+        web_port = _int_env("WEB_PORT", 8787)
+        if not (1 <= web_port <= 65535):
+            logging.warning(f".env 中 WEB_PORT={web_port} 不合法，使用默认值 8787")
+            web_port = 8787
+
         return cls(
             dingtalk_token=token,
             dingtalk_secret=secret,
@@ -137,6 +169,16 @@ class Config:
             max_concurrent_users=max_concurrent_users,
             poll_interval_min=poll_interval_min,
             poll_interval_max=poll_interval_max,
+            notify_channels=notify_channels,
+            bark_server=env.get("BARK_SERVER", DEFAULT_BARK_SERVER).rstrip("/") or DEFAULT_BARK_SERVER,
+            bark_device_key=env.get("BARK_DEVICE_KEY", ""),
+            wecom_webhook_key=env.get("WECOM_WEBHOOK_KEY", ""),
+            serverchan_sendkey=env.get("SERVERCHAN_SENDKEY", ""),
+            telegram_bot_token=env.get("TELEGRAM_BOT_TOKEN", ""),
+            telegram_chat_id=env.get("TELEGRAM_CHAT_ID", ""),
+            web_enabled=_bool_env("WEB_ENABLED", False),
+            web_host=env.get("WEB_HOST", "127.0.0.1"),
+            web_port=web_port,
         )
 
 

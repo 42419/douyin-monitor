@@ -23,9 +23,10 @@ from .config import (
 )
 from .logging_setup import setup_logging
 from .monitor import Monitor
-from .notifier import DingTalkNotifier
+from .notifiers import build_notifier
 from .pacer import RequestPacer
 from .utils import now_str
+from .webui import start_web_server
 
 # 全局停止事件
 stop_event = threading.Event()
@@ -106,10 +107,22 @@ def run_loop(once: bool = False) -> None:
 
     cfg = Config.load()
     console_handler.setLevel(getattr(logging, cfg.log_level, logging.INFO))
-    notifier = DingTalkNotifier(cfg.dingtalk_token, cfg.dingtalk_secret, cfg.at_mobiles)
+    try:
+        notifier = build_notifier(cfg)
+    except ValueError as e:
+        logging.error(f"错误：{e}")
+        sys.exit(1)
     monitor = Monitor(cfg, notifier, stop_event)
 
-    logging.info(f"抖音监控服务已启动（PID {os.getpid()}，使用钉钉群机器人推送）")
+    if cfg.web_enabled:
+        try:
+            start_web_server(cfg.web_host, cfg.web_port, stop_event)
+        except OSError as e:
+            logging.error(f"状态面板启动失败（端口 {cfg.web_port} 可能被占用）: {e}")
+
+    logging.info(
+        f"抖音监控服务已启动（PID {os.getpid()}，推送渠道: {', '.join(cfg.notify_channels)}）"
+    )
     logging.info(
         f"过时检测: API 响应不变 {cfg.stale_threshold // 86400} 天 | 兜底 14 天 "
         f"| 抓取窗口 {cfg.fetch_count} 条/用户 | 请求间隔 {cfg.poll_interval_min}~{cfg.poll_interval_max}秒/次 "

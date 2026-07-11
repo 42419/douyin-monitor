@@ -1,4 +1,4 @@
-"""钉钉群机器人推送通知。"""
+"""钉钉群机器人推送。"""
 
 from __future__ import annotations
 
@@ -8,32 +8,14 @@ from typing import List, Optional, Tuple
 
 from dingtalkchatbot.chatbot import ActionCard, CardItem, DingtalkChatbot
 
-from .utils import md_escape, now_str
+from ..utils import md_escape, now_str
+from .base import BaseNotifier, format_count, format_duration
 
 
-def _format_count(n: int) -> str:
-    """格式化数字：1234 -> 1234, 12345 -> 1.2万, 12345678 -> 1234.5万"""
-    if n >= 100_000_000:
-        return f"{n / 100_000_000:.1f}亿"
-    if n >= 10_000:
-        return f"{n / 10_000:.1f}万"
-    return str(n)
-
-
-def _format_duration(ms: int) -> str:
-    """将毫秒时长格式化为可读字符串，如 38634 -> 38秒, 128000 -> 2分8秒"""
-    if ms <= 0:
-        return ""
-    total_sec = ms // 1000
-    if total_sec < 60:
-        return f"{total_sec}秒"
-    minutes = total_sec // 60
-    seconds = total_sec % 60
-    return f"{minutes}分{seconds}秒" if seconds else f"{minutes}分钟"
-
-
-class DingTalkNotifier:
+class DingTalkNotifier(BaseNotifier):
     """钉钉群自定义机器人推送。"""
+
+    name = "dingtalk"
 
     def __init__(self, token: str, secret: str, default_at_mobiles: Optional[List[str]] = None):
         webhook = f"https://oapi.dingtalk.com/robot/send?access_token={token}"
@@ -44,14 +26,11 @@ class DingTalkNotifier:
         try:
             result = fn(*args, **kwargs)
         except Exception as e:
-            logging.error(f"钉钉推送异常: {e}")
-            return False
+            return self._log_result(False, str(e))
         errcode = result.get("errcode", 0) if isinstance(result, dict) else 0
         if errcode == 0:
-            logging.info("钉钉推送成功")
-            return True
-        logging.error(f"钉钉返回错误: errcode={errcode} errmsg={result.get('errmsg')}")
-        return False
+            return self._log_result(True)
+        return self._log_result(False, f"errcode={errcode} errmsg={result.get('errmsg')}")
 
     def send_text(self, title: str, content: str, at_mobiles: Optional[List[str]] = None) -> bool:
         mobiles = at_mobiles if at_mobiles is not None else self.default_at_mobiles
@@ -84,14 +63,14 @@ class DingTalkNotifier:
         display_title = md_escape(desc) if desc else md_escape(title)
 
         # 时长
-        duration_str = _format_duration(duration_ms)
+        duration_str = format_duration(duration_ms)
 
         # 互动数据（带文字标签，空格隔开）
         stats_line = (
-            f"❤ 点赞: {_format_count(digg_count)}   "
-            f"💬 评论: {_format_count(comment_count)}   "
-            f"🔗 分享: {_format_count(share_count)}   "
-            f"⭐ 收藏: {_format_count(collect_count)}"
+            f"❤ 点赞: {format_count(digg_count)}   "
+            f"💬 评论: {format_count(comment_count)}   "
+            f"🔗 分享: {format_count(share_count)}   "
+            f"⭐ 收藏: {format_count(collect_count)}"
         )
 
         text = (
@@ -106,10 +85,10 @@ class DingTalkNotifier:
         # 卡片标题：nickname + 互动数据（无文字标签，空格隔开）
         card_title = (
             f"{nickname} "
-            f"❤{_format_count(digg_count)} "
-            f"💬{_format_count(comment_count)} "
-            f"🔗{_format_count(share_count)} "
-            f"⭐{_format_count(collect_count)}"
+            f"❤{format_count(digg_count)} "
+            f"💬{format_count(comment_count)} "
+            f"🔗{format_count(share_count)} "
+            f"⭐{format_count(collect_count)}"
         )
 
         card = ActionCard(
@@ -137,7 +116,6 @@ class DingTalkNotifier:
         content = (
             f"用户：**{nickname}**\n\n"
             f"删除数量：**{len(deleted_entries)}** 条\n\n"
-            f"被删除的视频：\n" + "\n".join(lines) + "\n\n---\n"
-            f"{now_str()}"
+            f"被删除的视频：\n" + "\n".join(lines)
         )
         return self.send_text(f"{nickname} 删除了视频", content, at_mobiles)
