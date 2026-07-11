@@ -15,6 +15,11 @@ state/
 log/
 status.json
 monitor.pid
+nohup.log
+.backup_*/
+
+# ===== 部署脚本相关 =====
+*.bak_*
 
 # ===== Agent 工具 =====
 .mimocode/
