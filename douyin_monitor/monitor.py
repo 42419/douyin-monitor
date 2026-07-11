@@ -195,11 +195,20 @@ class Monitor:
             vid = item.get("aweme_id")
             if not vid:
                 continue
+            stats = item.get("statistics") or {}
+            video_info = item.get("video") or {}
+            cover_info = video_info.get("cover") or {}
             current_map[vid] = {
                 "title": item.get("item_title") or item.get("desc") or "无标题",
+                "desc": item.get("desc") or "",
                 "create_time": int(item.get("create_time") or 0),
                 "is_top": bool(item.get("is_top")),
-                "cover_url": ((item.get("cover_original_scale") or {}).get("url_list") or [None])[0],
+                "cover_url": (cover_info.get("url_list") or [None])[0],
+                "digg_count": int(stats.get("digg_count") or 0),
+                "comment_count": int(stats.get("comment_count") or 0),
+                "share_count": int(stats.get("share_count") or 0),
+                "collect_count": int(stats.get("collect_count") or 0),
+                "duration_ms": int(item.get("duration") or video_info.get("duration") or 0),
             }
 
         if aweme_list and not current_map:
@@ -325,7 +334,17 @@ class Monitor:
             logging.info(f"用户 {nickname} 检测到 {len(new_items)} 条新视频")
             for item in new_items:
                 self.notifier.send_video(
-                    nickname, item["id"], item["title"], item["create_time"], item.get("cover_url")
+                    nickname,
+                    item["id"],
+                    item["title"],
+                    item["create_time"],
+                    item.get("cover_url"),
+                    digg_count=item.get("digg_count", 0),
+                    comment_count=item.get("comment_count", 0),
+                    share_count=item.get("share_count", 0),
+                    collect_count=item.get("collect_count", 0),
+                    duration_ms=item.get("duration_ms", 0),
+                    desc=item.get("desc", ""),
                 )
                 videos[item["id"]] = {
                     "title": item["title"],

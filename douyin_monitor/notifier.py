@@ -11,6 +11,27 @@ from dingtalkchatbot.chatbot import ActionCard, CardItem, DingtalkChatbot
 from .utils import md_escape, now_str
 
 
+def _format_count(n: int) -> str:
+    """格式化数字：1234 -> 1234, 12345 -> 1.2万, 12345678 -> 1234.5万"""
+    if n >= 100_000_000:
+        return f"{n / 100_000_000:.1f}亿"
+    if n >= 10_000:
+        return f"{n / 10_000:.1f}万"
+    return str(n)
+
+
+def _format_duration(ms: int) -> str:
+    """将毫秒时长格式化为可读字符串，如 38634 -> 38秒, 128000 -> 2分8秒"""
+    if ms <= 0:
+        return ""
+    total_sec = ms // 1000
+    if total_sec < 60:
+        return f"{total_sec}秒"
+    minutes = total_sec // 60
+    seconds = total_sec % 60
+    return f"{minutes}分{seconds}秒" if seconds else f"{minutes}分钟"
+
+
 class DingTalkNotifier:
     """钉钉群自定义机器人推送。"""
 
@@ -44,6 +65,12 @@ class DingTalkNotifier:
         title: str,
         create_time: int,
         cover_url: Optional[str] = None,
+        digg_count: int = 0,
+        comment_count: int = 0,
+        share_count: int = 0,
+        collect_count: int = 0,
+        duration_ms: int = 0,
+        desc: str = "",
     ) -> bool:
         time_str = (
             datetime.fromtimestamp(create_time).strftime("%Y-%m-%d %H:%M:%S")
@@ -52,14 +79,41 @@ class DingTalkNotifier:
         )
         video_url = f"https://www.douyin.com/video/{video_id}"
         cover_md = f"![cover]({cover_url})\n\n" if cover_url else ""
+
+        # 标题行：使用 desc（含 # 话题标签）
+        display_title = md_escape(desc) if desc else md_escape(title)
+
+        # 时长
+        duration_str = _format_duration(duration_ms)
+
+        # 互动数据（带文字标签，空格隔开）
+        stats_line = (
+            f"❤ 点赞: {_format_count(digg_count)}   "
+            f"💬 评论: {_format_count(comment_count)}   "
+            f"🔗 分享: {_format_count(share_count)}   "
+            f"⭐ 收藏: {_format_count(collect_count)}"
+        )
+
         text = (
-            f"{cover_md}**作者：** {md_escape(nickname)}\n\n"
-            f"**标题：** {md_escape(title)}\n\n"
+            f"{cover_md}"
+            f"**标题：** {display_title}\n\n"
+            f"**数据：** {stats_line}\n\n"
+            f"**时长：** {duration_str}\n\n"
             f"**发布时间：** {time_str}\n\n"
             f"**检测时间：** {now_str()}"
         )
+
+        # 卡片标题：nickname + 互动数据（无文字标签，空格隔开）
+        card_title = (
+            f"{nickname} "
+            f"❤{_format_count(digg_count)} "
+            f"💬{_format_count(comment_count)} "
+            f"🔗{_format_count(share_count)} "
+            f"⭐{_format_count(collect_count)}"
+        )
+
         card = ActionCard(
-            title=f"{nickname} 发布新视频",
+            title=card_title,
             text=text,
             btns=[CardItem(title="观看视频", url=video_url)],
         )
