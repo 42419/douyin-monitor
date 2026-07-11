@@ -29,7 +29,20 @@ class RecordingNotifier:
         self.texts.append((title, content))
         return True
 
-    def send_video(self, nickname, video_id, title, create_time, cover_url=None):
+    def send_video(
+        self,
+        nickname,
+        video_id,
+        title,
+        create_time,
+        cover_url=None,
+        digg_count=0,
+        comment_count=0,
+        share_count=0,
+        collect_count=0,
+        duration_ms=0,
+        desc="",
+    ):
         self.videos.append((nickname, video_id, title))
         return True
 
