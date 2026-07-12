@@ -258,3 +258,57 @@ def test_new_video_notification_includes_gap_days_when_previously_stale(state_di
     )
     monitor.check_user("sec1", "阿直")
     assert notifier.videos[1][3] == 0
+
+
+def test_classify_update_frequency():
+    from douyin_monitor.monitor import _classify_update_frequency
+
+    def _videos(days_apart, n=4):
+        vids = {}
+        t = 1_700_000_000
+        for i in range(n):
+            vids[str(i)] = {"create_time": t, "is_top": False}
+            t += int(days_apart * 86400)
+        return vids
+
+    assert _classify_update_frequency(_videos(1)) == "日更"
+    assert _classify_update_frequency(_videos(3)) == "隔天更新"
+    assert _classify_update_frequency(_videos(7)) == "周更"
+    assert _classify_update_frequency(_videos(15)) == "半月更"
+    assert _classify_update_frequency(_videos(30)) == "月更"
+    assert _classify_update_frequency(_videos(90)) == "更新较少"
+    assert _classify_update_frequency(_videos(1, n=1)) is None  # 视频不足 2 条
+    assert _classify_update_frequency({}) is None
+
+    # 置顶视频的发布时间很旧，不应该干扰基于最近视频算出的更新频率
+    mixed = {
+        "top": {"create_time": 1_000_000, "is_top": True},
+        "a": {"create_time": 1_700_000_000, "is_top": False},
+        "b": {"create_time": 1_700_000_000 + 86400, "is_top": False},
+    }
+    assert _classify_update_frequency(mixed) == "日更"
+
+
+def test_status_snapshot_includes_update_frequency(state_dir, monkeypatch, tmp_path):
+    monitor, notifier = _make_monitor(monkeypatch)
+    monkeypatch.setattr(
+        monitor_module,
+        "fetch_user_videos",
+        lambda *a, **k: _resp([_item("A", create_time=1_700_000_000)]),
+    )
+    monitor.check_user("sec1", "阿直")
+    monkeypatch.setattr(
+        monitor_module,
+        "fetch_user_videos",
+        lambda *a, **k: _resp(
+            [_item("A", create_time=1_700_000_000), _item("B", create_time=1_700_086_400)]
+        ),
+    )
+    monitor.check_user("sec1", "阿直")
+
+    status_file = tmp_path / "status.json"
+    monkeypatch.setattr(monitor_module, "STATUS_FILE", status_file)
+    monitor.write_status_snapshot([("sec1", "阿直")])
+
+    data = json.loads(status_file.read_text(encoding="utf-8"))
+    assert data["users"][0]["update_frequency"] == "日更"
