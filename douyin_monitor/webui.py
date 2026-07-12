@@ -185,6 +185,12 @@ _PAGE = Template(r"""<!DOCTYPE html>
     font-weight: 600; font-size: 14.5px; color: var(--text);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  .freq-tag {
+    flex: 0 0 auto;
+    font-size: 11px; font-weight: 500; color: var(--text2);
+    background: var(--panel); border: 1px solid var(--line);
+    padding: 1px 7px; border-radius: 3px; white-space: nowrap;
+  }
   .row-status {
     flex: 0 0 auto; font-size: 12px; font-weight: 600;
     padding: 2px 8px; border-radius: 3px; min-width: 76px; text-align: center;
@@ -194,7 +200,7 @@ _PAGE = Template(r"""<!DOCTYPE html>
   .row-status.amber { background: var(--amber-soft); color: var(--amber); }
   .row-status.off   { background: var(--off-soft); color: var(--text3); }
   .row-count { flex: 0 0 auto; font-size: 13px; color: var(--text2); min-width: 56px; text-align: right; }
-  .row-time  { flex: 0 0 auto; font-size: 12px; color: var(--text3); min-width: 96px; text-align: right; }
+  .row-time  { flex: 0 0 auto; font-size: 12px; color: var(--text3); min-width: 128px; text-align: right; }
 
   .empty {
     padding: 60px 24px; text-align: center; color: var(--text3);
@@ -215,6 +221,7 @@ _PAGE = Template(r"""<!DOCTYPE html>
     h1 { font-size: 24px; }
     .stat { min-width: 45%; }
     .row-time { display: none; }
+    .freq-tag { display: none; }
   }
   @media (prefers-reduced-motion: reduce) {
     .eyebrow .dot { animation: none; opacity: 1; }
@@ -254,10 +261,13 @@ _STAT_TEMPLATE = Template("""<div class="stat">
 _ROW_TEMPLATE = Template("""<div class="row">
   <span class="row-badge" style="background:$badge_color"></span>
   <span class="row-name">$nickname</span>
+  $freq_tag
   <span class="row-status $status_color">$status_text</span>
   <span class="row-count mono">$known_videos 条</span>
-  <span class="row-time mono">$last_update_ago</span>
+  <span class="row-time mono">$last_update_text</span>
 </div>""")
+
+_FREQ_TAG = Template('<span class="freq-tag">$label</span>')
 
 _LEGEND_ITEM = Template('<span><i style="background:$color"></i>$label $count</span>')
 
@@ -266,16 +276,16 @@ _LED_SLOTS = 24
 
 # =================== 渲染逻辑 ===================
 
-def _format_ago(hours: "int | None") -> str:
+def _format_last_update(hours: "int | None") -> str:
+    """按用户要求，明确展示"距上次更新 X 天"这样的具体天数，而不是模糊的相对时间。"""
     if hours is None:
         return "从未更新"
     if hours < 1:
         return "刚刚更新"
     if hours < 24:
-        return f"{hours} 小时前"
+        return f"距上次更新 {hours} 小时"
     days = hours // 24
-    h = hours % 24
-    return f"{days} 天 {h} 小时前" if h else f"{days} 天前"
+    return f"距上次更新 {days} 天"
 
 
 def _overall_line(total: int, active: int, failing: int, stale: int) -> str:
@@ -423,8 +433,13 @@ def _render_status_html(channels: str = "-") -> str:
                     status_color=status_color,
                     status_text=status_text,
                     nickname=_escape_html(u.get("nickname") or "-"),
+                    freq_tag=(
+                        _FREQ_TAG.substitute(label=_escape_html(u["update_frequency"]))
+                        if u.get("update_frequency")
+                        else ""
+                    ),
                     known_videos=u.get("known_videos", 0),
-                    last_update_ago=_format_ago(hours),
+                    last_update_text=_format_last_update(hours),
                 )
             )
         list_html = (

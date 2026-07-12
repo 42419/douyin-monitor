@@ -401,16 +401,18 @@ class Monitor:
                 last_update = data.get("last_update_at") or data.get("initialized_at")
                 elapsed = seconds_since(last_update)
                 age_hours = int(elapsed // 3600) if elapsed is not None else None
+                videos = data.get("videos", {})
                 entries.append(
                     {
                         "sec_user_id": sec_user_id,
                         "nickname": nickname,
                         "last_update": last_update,
                         "initialized_at": data.get("initialized_at"),
-                        "known_videos": len(data.get("videos", {})),
+                        "known_videos": len(videos),
                         "hours_since_update": age_hours,
                         "consecutive_fails": data.get("consecutive_fails", 0),
                         "in_users_conf": sec_user_id in current_ids,
+                        "update_frequency": _classify_update_frequency(videos),
                     }
                 )
 
@@ -419,3 +421,34 @@ class Monitor:
         tmp = STATUS_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(STATUS_FILE)
+
+
+def _classify_update_frequency(videos: Dict[str, dict]) -> Optional[str]:
+    """根据已知视频（排除置顶，因为置顶视频的发布时间不代表更新节奏）之间
+    的平均发布间隔，粗略估计这个账号的更新频率，用于 Web 面板展示。
+    已知视频不足 2 条时没法算间隔，返回 None（面板上不显示频率标签）。
+    """
+    create_times = sorted(
+        meta.get("create_time", 0)
+        for meta in videos.values()
+        if not meta.get("is_top") and meta.get("create_time")
+    )
+    if len(create_times) < 2:
+        return None
+
+    gaps = [b - a for a, b in zip(create_times, create_times[1:]) if b > a]
+    if not gaps:
+        return None
+    avg_days = (sum(gaps) / len(gaps)) / 86400
+
+    if avg_days <= 1.5:
+        return "日更"
+    if avg_days <= 4:
+        return "隔天更新"
+    if avg_days <= 10:
+        return "周更"
+    if avg_days <= 20:
+        return "半月更"
+    if avg_days <= 45:
+        return "月更"
+    return "更新较少"
