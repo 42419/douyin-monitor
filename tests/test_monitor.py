@@ -168,3 +168,39 @@ def test_http_failure_increments_consecutive_fails_and_alerts(state_dir, monkeyp
     # 达到连续失败阈值应触发一次告警
     assert len(notifier.texts) == 1
     assert "连续" in notifier.texts[0][1]
+
+
+def test_stale_fallback_alert_does_not_repeat_hourly(state_dir, monkeypatch):
+    """回归测试：14 天无更新的提醒之前和"响应哈希不变"共用 1 小时冷却，
+    导致每小时都会重新推送一次（用户反馈的 bug）。现在两者的冷却时间是独立的，
+    默认 24 小时，过去 1 小时左右这个时间点不应该再次提醒。"""
+    from datetime import timedelta
+
+    from douyin_monitor.config import STALE_FALLBACK_ALERT_COOLDOWN
+    from douyin_monitor.state import UserState
+    from douyin_monitor.utils import now
+
+    assert STALE_FALLBACK_ALERT_COOLDOWN >= 24 * 3600  # 确认默认值已经不是 1 小时
+
+    monitor, notifier = _make_monitor(monkeypatch)
+    state = UserState(monitor_module.STATE_DIR / "sec1.json")
+    state.data["last_update_at"] = (now() - timedelta(days=15)).isoformat()
+
+    # 第一次检测：14 天无更新条件成立，且从未提醒过 -> 应该提醒一次
+    monitor._check_stale(state, "阿直", aweme_list=None)
+    assert len(notifier.texts) == 1
+    assert "长期无更新提醒" in notifier.texts[0][0]
+
+    # 模拟 1 小时 5 分钟后又跑了一轮检测（旧的 1 小时冷却在这里就会被触发重新提醒）
+    state.data["last_fallback_stale_alert_at"] = (
+        now() - timedelta(hours=1, minutes=5)
+    ).isoformat()
+    monitor._check_stale(state, "阿直", aweme_list=None)
+    assert len(notifier.texts) == 1  # 不应该有第二条
+
+    # 冷却时间（24 小时）真正过期后，应该可以再次提醒
+    state.data["last_fallback_stale_alert_at"] = (
+        now() - timedelta(hours=25)
+    ).isoformat()
+    monitor._check_stale(state, "阿直", aweme_list=None)
+    assert len(notifier.texts) == 2

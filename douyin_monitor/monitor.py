@@ -18,8 +18,9 @@ from .config import (
     HTTP_TIMEOUT,
     KNOWN_IDS_MAX,
     MAX_CONSECUTIVE_FAILS,
-    STALE_ALERT_COOLDOWN,
+    STALE_FALLBACK_ALERT_COOLDOWN,
     STALE_FALLBACK_DAYS,
+    STALE_HASH_ALERT_COOLDOWN,
     STATE_DIR,
     STATUS_FILE,
     Config,
@@ -101,7 +102,7 @@ class Monitor:
                     last_alert_elapsed = seconds_since(
                         state.data.get("last_hash_stale_alert_at") or legacy_alert_at
                     )
-                    if last_alert_elapsed is None or last_alert_elapsed >= STALE_ALERT_COOLDOWN:
+                    if last_alert_elapsed is None or last_alert_elapsed >= STALE_HASH_ALERT_COOLDOWN:
                         logging.error(
                             f"用户 {nickname} API 响应连续 {hours} 小时无变化，疑似 Cookie 过期"
                         )
@@ -125,7 +126,7 @@ class Monitor:
                 last_alert_elapsed = seconds_since(
                     state.data.get("last_fallback_stale_alert_at") or legacy_alert_at
                 )
-                if last_alert_elapsed is None or last_alert_elapsed >= STALE_ALERT_COOLDOWN:
+                if last_alert_elapsed is None or last_alert_elapsed >= STALE_FALLBACK_ALERT_COOLDOWN:
                     days = int(elapsed_days // 86400)
                     logging.info(f"用户 {nickname} 已 {days} 天无新视频")
                     self.notifier.send_text(
