@@ -42,8 +42,9 @@ class RecordingNotifier:
         collect_count=0,
         duration_ms=0,
         desc="",
+        gap_days=None,
     ):
-        self.videos.append((nickname, video_id, title))
+        self.videos.append((nickname, video_id, title, gap_days))
         return True
 
     def send_deleted(self, nickname, deleted_entries, at_mobiles=None):

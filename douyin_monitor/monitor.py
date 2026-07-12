@@ -18,7 +18,6 @@ from .config import (
     HTTP_TIMEOUT,
     KNOWN_IDS_MAX,
     MAX_CONSECUTIVE_FAILS,
-    STALE_FALLBACK_ALERT_COOLDOWN,
     STALE_FALLBACK_DAYS,
     STALE_HASH_ALERT_COOLDOWN,
     STATE_DIR,
@@ -118,24 +117,24 @@ class Monitor:
                 state.data["resp_hash"] = resp_hash
                 state.data["resp_hash_since"] = now_iso()
 
-        # 检测 2：长期无新视频兜底
+        # 检测 2：长期无新视频兜底（一次性提醒：达到阈值只提醒一次，
+        # 不会每天/每小时反复刷屏；直到用户发布新视频、状态被重置后，
+        # 未来再次连续无更新达到阈值时才会重新提醒一次）
         last_update = state.data.get("last_update_at") or state.data.get("initialized_at")
         elapsed_days = seconds_since(last_update)
         if elapsed_days is not None and elapsed_days >= STALE_FALLBACK_DAYS * 86400:
-            if not state.data.get("fail_alerted"):
-                last_alert_elapsed = seconds_since(
-                    state.data.get("last_fallback_stale_alert_at") or legacy_alert_at
+            if not state.data.get("fail_alerted") and not state.data.get("stale_alerted"):
+                days = int(elapsed_days // 86400)
+                logging.info(f"用户 {nickname} 已 {days} 天无新视频，发送一次性提醒")
+                self.notifier.send_text(
+                    "长期无更新提醒",
+                    f"用户 **{nickname}** 已 **{days}** 天没有发布新视频\n\n"
+                    "可能是用户近期未更新，或 Cookie 已过期\n\n"
+                    "（这条提醒只会发一次，该用户发布新视频后才会重新计算）\n\n"
+                    f"{now_str()}",
                 )
-                if last_alert_elapsed is None or last_alert_elapsed >= STALE_FALLBACK_ALERT_COOLDOWN:
-                    days = int(elapsed_days // 86400)
-                    logging.info(f"用户 {nickname} 已 {days} 天无新视频")
-                    self.notifier.send_text(
-                        "长期无更新提醒",
-                        f"用户 **{nickname}** 已 **{days}** 天没有发布新视频\n\n"
-                        "可能是用户近期未更新，或 Cookie 已过期\n\n"
-                        f"{now_str()}",
-                    )
-                    state.data["last_fallback_stale_alert_at"] = now_iso()
+                state.data["last_fallback_stale_alert_at"] = now_iso()
+                state.data["stale_alerted"] = True
 
     def check_user(self, sec_user_id: str, nickname: str) -> dict:
         state = UserState(STATE_DIR / f"{sec_user_id}.json")
@@ -329,6 +328,16 @@ class Monitor:
                     f"用户 {nickname} 本轮新增 {len(new_ids)} 条视频，已达到抓取窗口上限 "
                     f"(FETCH_COUNT={self.cfg.fetch_count})，可能存在漏检，建议调大 FETCH_COUNT"
                 )
+            # 用户重新发布了新视频，长期无更新的一次性提醒重置，
+            # 以后再次连续无更新达到阈值时可以重新提醒一次
+            state.data["stale_alerted"] = False
+
+            # 距上次发布新视频的间隔天数（基于这一轮覆盖之前的 last_update_at 计算），
+            # 同一轮新增的多条视频共用这个间隔（都是相对"上一次已知更新"而言）
+            prev_last_update = state.data.get("last_update_at") or state.data.get("initialized_at")
+            gap_seconds = seconds_since(prev_last_update)
+            gap_days = int(gap_seconds // 86400) if gap_seconds is not None else None
+
             new_items = sorted(
                 ({**current_map[v], "id": v} for v in new_ids),
                 key=lambda x: x["create_time"],
@@ -347,6 +356,7 @@ class Monitor:
                     collect_count=item.get("collect_count", 0),
                     duration_ms=item.get("duration_ms", 0),
                     desc=item.get("desc", ""),
+                    gap_days=gap_days,
                 )
                 videos[item["id"]] = {
                     "title": item["title"],

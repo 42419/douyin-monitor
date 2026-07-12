@@ -37,6 +37,7 @@ class UserState:
             "last_stale_alert_at": None,
             "last_hash_stale_alert_at": None,
             "last_fallback_stale_alert_at": None,
+            "stale_alerted": False,
         }
 
     def save(self) -> None:

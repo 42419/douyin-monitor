@@ -61,6 +61,7 @@ class BaseNotifier(ABC):
         collect_count: int = 0,
         duration_ms: int = 0,
         desc: str = "",
+        gap_days: Optional[int] = None,
     ) -> bool:
         time_str = (
             datetime.fromtimestamp(create_time).strftime("%Y-%m-%d %H:%M:%S")
@@ -76,12 +77,14 @@ class BaseNotifier(ABC):
             f"🔗 分享: {format_count(share_count)}   "
             f"⭐ 收藏: {format_count(collect_count)}"
         )
+        gap_line = f"**距上次发布新视频间隔：** {gap_days} 天\n\n" if gap_days and gap_days >= 1 else ""
         content = (
             f"**作者：** {md_escape(nickname)}\n\n"
             f"**标题：** {display_title}\n\n"
             f"**数据：** {stats_line}\n\n"
             f"**时长：** {duration_str}\n\n"
             f"**发布时间：** {time_str}\n\n"
+            f"{gap_line}"
             f"**检测时间：** {now_str()}\n\n"
             f"**链接：** {video_url}"
         )
