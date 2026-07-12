@@ -213,8 +213,17 @@ _PAGE = Template(r"""<!DOCTYPE html>
   @media (max-width: 560px) {
     body { padding: 36px 16px 56px; }
     h1 { font-size: 24px; }
-    .stat { min-width: 45%; }
-    .row-time { display: none; }
+    .stat { min-width: 45%; padding: 12px 12px 12px 0; }
+    .stat + .stat { padding-left: 12px; }
+    .stat-value { font-size: 22px; }
+    .led { height: 14px; }
+    .row {
+      flex-wrap: wrap; gap: 6px 8px;
+      padding: 12px 4px;
+    }
+    .row-status { order: -1; }
+    .row-count { min-width: auto; text-align: left; font-size: 12px; }
+    .row-time { min-width: auto; text-align: left; font-size: 11px; flex-basis: 100%; }
   }
   @media (prefers-reduced-motion: reduce) {
     .eyebrow .dot { animation: none; opacity: 1; }
