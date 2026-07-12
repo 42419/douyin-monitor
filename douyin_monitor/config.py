@@ -42,12 +42,10 @@ LOG_MAX_SIZE = 10 * 1024 * 1024
 LOG_KEEP = 3
 MAX_CONSECUTIVE_FAILS = 5
 FAIL_COOLDOWN = 300
-# 过时检测有两种独立的判定方式（响应哈希连续不变 / 长期没有新视频兜底），
-# 之前共用同一个 1 小时冷却时间，导致像"14 天无更新"这种天级粒度的判定
-# 每隔一小时就会重新推送一次提醒，在群里疯狂刷屏。拆成两个独立常量，
-# 默认改成 24 小时一次：足够提醒到人，又不会打扰。
+# "响应哈希连续不变"这种细粒度检测仍然按冷却时间重复提醒（默认 24 小时一次）。
+# "长期无新视频"兜底检测改成一次性提醒（见 monitor.py 的 _check_stale），
+# 不再需要冷却时间常量。
 STALE_HASH_ALERT_COOLDOWN = 24 * 3600
-STALE_FALLBACK_ALERT_COOLDOWN = 24 * 3600
 STALE_FALLBACK_DAYS = 14
 HTTP_TIMEOUT = 10
 DEFAULT_API_URL = "http://localhost/api/douyin/web/fetch_user_post_videos"

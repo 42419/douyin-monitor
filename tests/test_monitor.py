@@ -170,17 +170,14 @@ def test_http_failure_increments_consecutive_fails_and_alerts(state_dir, monkeyp
     assert "连续" in notifier.texts[0][1]
 
 
-def test_stale_fallback_alert_does_not_repeat_hourly(state_dir, monkeypatch):
+def test_stale_fallback_alert_fires_once_then_stays_silent(state_dir, monkeypatch):
     """回归测试：14 天无更新的提醒之前和"响应哈希不变"共用 1 小时冷却，
-    导致每小时都会重新推送一次（用户反馈的 bug）。现在两者的冷却时间是独立的，
-    默认 24 小时，过去 1 小时左右这个时间点不应该再次提醒。"""
+    导致每小时都会重新推送一次（用户反馈的 bug）。现在改成一次性提醒：
+    达到阈值只提醒一次，之后哪怕一直无更新，也不会再重复提醒。"""
     from datetime import timedelta
 
-    from douyin_monitor.config import STALE_FALLBACK_ALERT_COOLDOWN
     from douyin_monitor.state import UserState
     from douyin_monitor.utils import now
-
-    assert STALE_FALLBACK_ALERT_COOLDOWN >= 24 * 3600  # 确认默认值已经不是 1 小时
 
     monitor, notifier = _make_monitor(monkeypatch)
     state = UserState(monitor_module.STATE_DIR / "sec1.json")
@@ -191,16 +188,73 @@ def test_stale_fallback_alert_does_not_repeat_hourly(state_dir, monkeypatch):
     assert len(notifier.texts) == 1
     assert "长期无更新提醒" in notifier.texts[0][0]
 
-    # 模拟 1 小时 5 分钟后又跑了一轮检测（旧的 1 小时冷却在这里就会被触发重新提醒）
-    state.data["last_fallback_stale_alert_at"] = (
-        now() - timedelta(hours=1, minutes=5)
-    ).isoformat()
-    monitor._check_stale(state, "阿直", aweme_list=None)
-    assert len(notifier.texts) == 1  # 不应该有第二条
+    # 之后不管过多久再跑检测，只要没有发布新视频，都不应该重复提醒
+    for hours_ago in (1, 25, 200, 400):
+        state.data["last_fallback_stale_alert_at"] = (
+            now() - timedelta(hours=hours_ago)
+        ).isoformat()
+        monitor._check_stale(state, "阿直", aweme_list=None)
+    assert len(notifier.texts) == 1
 
-    # 冷却时间（24 小时）真正过期后，应该可以再次提醒
-    state.data["last_fallback_stale_alert_at"] = (
-        now() - timedelta(hours=25)
-    ).isoformat()
-    monitor._check_stale(state, "阿直", aweme_list=None)
-    assert len(notifier.texts) == 2
+
+def test_stale_alert_resets_after_new_video_then_can_fire_again(state_dir, monkeypatch):
+    """用户重新发布新视频后，一次性提醒的标记应该被重置；如果这个用户之后
+    又进入了新一轮的长期无更新，应该能够重新收到一次提醒（而不是永远沉默）。"""
+    monitor, notifier = _make_monitor(monkeypatch)
+    monkeypatch.setattr(
+        monitor_module, "fetch_user_videos", lambda *a, **k: _resp([_item("A")])
+    )
+    monitor.check_user("sec1", "阿直")  # 初始化
+
+    from douyin_monitor.state import UserState
+
+    state = UserState(monitor_module.STATE_DIR / "sec1.json")
+    state.data["stale_alerted"] = True  # 模拟之前已经提醒过一次
+    state.save()
+
+    # 用户发布了新视频 B
+    monkeypatch.setattr(
+        monitor_module, "fetch_user_videos", lambda *a, **k: _resp([_item("A"), _item("B")])
+    )
+    monitor.check_user("sec1", "阿直")
+
+    state = UserState(monitor_module.STATE_DIR / "sec1.json")
+    assert state.data.get("stale_alerted") is False  # 已经被重置
+
+
+def test_new_video_notification_includes_gap_days_when_previously_stale(state_dir, monkeypatch):
+    """用户长期没更新后重新发布新视频，通知里应该带上距上次发布的间隔天数；
+    间隔很短（比如几小时内连续发布）则不需要显示，避免信息噪音。"""
+    from datetime import timedelta
+
+    from douyin_monitor.state import UserState
+    from douyin_monitor.utils import now
+
+    monitor, notifier = _make_monitor(monkeypatch)
+    monkeypatch.setattr(
+        monitor_module, "fetch_user_videos", lambda *a, **k: _resp([_item("A")])
+    )
+    monitor.check_user("sec1", "阿直")  # 初始化
+
+    # 把上次更新时间改到 20 天前，模拟长期无更新之后终于发新视频
+    state = UserState(monitor_module.STATE_DIR / "sec1.json")
+    state.data["last_update_at"] = (now() - timedelta(days=20)).isoformat()
+    state.save()
+
+    monkeypatch.setattr(
+        monitor_module, "fetch_user_videos", lambda *a, **k: _resp([_item("A"), _item("B")])
+    )
+    monitor.check_user("sec1", "阿直")
+
+    assert len(notifier.videos) == 1
+    gap_days = notifier.videos[0][3]
+    assert gap_days == 20
+
+    # 紧接着又发了一条（间隔很短），不应该出现明显的间隔天数
+    monkeypatch.setattr(
+        monitor_module,
+        "fetch_user_videos",
+        lambda *a, **k: _resp([_item("A"), _item("B"), _item("C")]),
+    )
+    monitor.check_user("sec1", "阿直")
+    assert notifier.videos[1][3] == 0
