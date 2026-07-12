@@ -18,6 +18,8 @@ from .config import (
     HTTP_TIMEOUT,
     PID_FILE,
     STATUS_FILE,
+    USER_REQUEST_INTERVAL_MAX,
+    USER_REQUEST_INTERVAL_MIN,
     USERS_CONF,
     load_users_conf,
 )
@@ -132,7 +134,7 @@ def run_loop(once: bool = False) -> None:
 
     last_users_mtime = None
     cached_users: List[Tuple[str, str]] = []
-    request_pacer = RequestPacer(cfg.poll_interval_min, cfg.poll_interval_max, stop_event)
+    request_pacer = RequestPacer(USER_REQUEST_INTERVAL_MIN, USER_REQUEST_INTERVAL_MAX, stop_event)
 
     while not stop_event.is_set():
         try:
