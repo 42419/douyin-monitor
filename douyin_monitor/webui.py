@@ -355,6 +355,17 @@ _PAGE = Template(r"""<!DOCTYPE html>
 </div>
 
 <script>
+// 点击账号名打开详情：用 data-uid 属性 + 事件委托，而不是把 uid
+// 拼进内联 onclick 的 JS 字符串里——HTML 实体转义没法防住内联事件处理器
+// 里的 JS 字符串截断（浏览器解析属性值时会先做实体解码，解码结果才是
+// 真正拿去当 JS 源码执行的内容，所以 &#39; 这类转义在这个上下文里防不住
+// 单引号截断），用 dataset 读取就完全没有这个问题。
+document.querySelectorAll('.row-name').forEach(function(el) {
+  el.addEventListener('click', function() {
+    var uid = el.closest('.row').dataset.uid;
+    if (uid) openDetail(uid);
+  });
+});
 function openDetail(uid) {
   document.getElementById('detailOverlay').classList.add('open');
   document.getElementById('detailName').textContent = '加载中...';
@@ -402,7 +413,14 @@ function di(label, value, tip) {
   var t = tip ? ' title="' + esc(tip) + '"' : '';
   return '<div class="detail-item"' + t + '><div class="dl">' + esc(label) + '</div><div class="dv">' + esc(value) + '</div></div>';
 }
-function esc(s) { var d = document.createElement('div'); d.textContent = s || '-'; return d.innerHTML; }
+function esc(s) {
+  var d = document.createElement('div');
+  d.textContent = s || '-';
+  // div.innerHTML 只转义内容上下文特殊字符（&<>），不转义引号；
+  // esc() 的结果既会用在元素内容里，也会用在 title="..." 这种属性值里，
+  // 补上引号转义让它在两种上下文里都安全，不依赖调用方自己判断用在哪
+  return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 // 移动端 freq-tag 触摸切换 tooltip
 document.querySelectorAll('.freq-tag').forEach(function(el) {
@@ -426,7 +444,7 @@ _STAT_TEMPLATE = Template("""<div class="stat">
 
 _ROW_TEMPLATE = Template("""<div class="row" data-uid="$uid">
   <span class="row-badge" style="background:$badge_color"></span>
-  <span class="row-name" onclick="openDetail('$uid')">$nickname</span>
+  <span class="row-name">$nickname</span>
   $freq_tag
   <span class="row-status $status_color">$status_text</span>
   <span class="row-count mono">$known_videos 条</span>
@@ -636,6 +654,7 @@ def _escape_html(text: str) -> str:
         .replace("<", "&lt;")
         .replace(">", "&gt;")
         .replace('"', "&quot;")
+        .replace("'", "&#39;")
     )
 
 
@@ -714,7 +733,8 @@ class _StatusHandler(BaseHTTPRequestHandler):
 
     def _serve_user(self) -> None:
         from datetime import datetime
-        from .config import STATE_DIR
+        from .config import STATE_DIR, USERS_CONF
+        from .config import load_users_conf
         uid = self.path[len("/api/user/"):].split("?")[0].split("/")[0]
         # 防止路径穿越：sec_user_id 只含字母、数字、下划线、连字符
         import re
@@ -761,11 +781,16 @@ class _StatusHandler(BaseHTTPRequestHandler):
         freq_label, freq_avg, freq_n = _freq_stats(videos_raw)
         freq_hint = f"基于最近 {freq_n} 条非置顶视频，平均 {freq_avg} 天/条" if freq_avg is not None else ""
 
-        status_text = "正常"
-        if data.get("consecutive_fails", 0) > 0:
+        # 和账号列表页保持一致：优先判断是否已经从 users.conf 里移除
+        current_ids = {sec_user_id for sec_user_id, _ in load_users_conf(USERS_CONF)}
+        if uid not in current_ids:
+            status_text = "已从配置移除"
+        elif data.get("consecutive_fails", 0) > 0:
             status_text = f"失败 {data['consecutive_fails']} 次"
         elif hours is not None and hours >= 14 * 24:
             status_text = f"{hours // 24} 天无更新"
+        else:
+            status_text = "正常"
 
         result = {
             "sec_user_id": uid,
