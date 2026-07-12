@@ -88,6 +88,13 @@ class Monitor:
     def _check_stale(self, state: UserState, nickname: str, aweme_list: Optional[list]) -> None:
         legacy_alert_at = state.data.get("last_stale_alert_at")
 
+        # 兼容升级前的状态文件：老版本没有 stale_alerted 这个字段，
+        # 如果当时已经用旧逻辑（基于冷却时间）发过"长期无更新"提醒
+        # （体现在 last_fallback_stale_alert_at 有值），直接标记为已提醒过，
+        # 避免升级后 stale_alerted 被当成 False 而立刻又刷一条重复的
+        if "stale_alerted" not in state.data and state.data.get("last_fallback_stale_alert_at"):
+            state.data["stale_alerted"] = True
+
         # 检测 1：API 响应哈希连续不变
         if aweme_list is not None:
             ids_sorted = sorted(item.get("aweme_id", "") for item in aweme_list)
@@ -401,16 +408,18 @@ class Monitor:
                 last_update = data.get("last_update_at") or data.get("initialized_at")
                 elapsed = seconds_since(last_update)
                 age_hours = int(elapsed // 3600) if elapsed is not None else None
+                videos = data.get("videos", {})
                 entries.append(
                     {
                         "sec_user_id": sec_user_id,
                         "nickname": nickname,
                         "last_update": last_update,
                         "initialized_at": data.get("initialized_at"),
-                        "known_videos": len(data.get("videos", {})),
+                        "known_videos": len(videos),
                         "hours_since_update": age_hours,
                         "consecutive_fails": data.get("consecutive_fails", 0),
                         "in_users_conf": sec_user_id in current_ids,
+                        "update_frequency": _classify_update_frequency(videos),
                     }
                 )
 
@@ -419,3 +428,34 @@ class Monitor:
         tmp = STATUS_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(STATUS_FILE)
+
+
+def _classify_update_frequency(videos: Dict[str, dict]) -> Optional[str]:
+    """根据已知视频（排除置顶，因为置顶视频的发布时间不代表更新节奏）之间
+    的平均发布间隔，粗略估计这个账号的更新频率，用于 Web 面板展示。
+    已知视频不足 2 条时没法算间隔，返回 None（面板上不显示频率标签）。
+    """
+    create_times = sorted(
+        meta.get("create_time", 0)
+        for meta in videos.values()
+        if not meta.get("is_top") and meta.get("create_time")
+    )
+    if len(create_times) < 2:
+        return None
+
+    gaps = [b - a for a, b in zip(create_times, create_times[1:]) if b > a]
+    if not gaps:
+        return None
+    avg_days = (sum(gaps) / len(gaps)) / 86400
+
+    if avg_days <= 1.5:
+        return "日更"
+    if avg_days <= 4:
+        return "隔天更新"
+    if avg_days <= 10:
+        return "周更"
+    if avg_days <= 20:
+        return "半月更"
+    if avg_days <= 45:
+        return "月更"
+    return "更新较少"
