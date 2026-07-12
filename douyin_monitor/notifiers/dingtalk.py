@@ -6,10 +6,30 @@ import logging
 from datetime import datetime
 from typing import List, Optional, Tuple
 
+from dingtalkchatbot import chatbot as _dingtalk_chatbot_module
 from dingtalkchatbot.chatbot import ActionCard, CardItem, DingtalkChatbot
 
+from ..config import HTTP_TIMEOUT
 from ..utils import md_escape, now_str
 from .base import BaseNotifier, format_count, format_duration
+
+# DingtalkChatbot 库内部调用 requests.post 时完全没传 timeout（源码里是
+# `requests.post(self.webhook, headers=self.headers, data=post_data)`），
+# 网络卡住时会无限期挂起，进而把 check_user 的线程池堵死、拖慢所有账号的
+# 检测。这里只 monkeypatch dingtalkchatbot.chatbot 模块自己引用的那个
+# requests.post，用 setdefault 只在调用方没传 timeout 时才补上默认值，
+# 不会覆盖其它地方显式传的 timeout；也不影响 webui.py 的 web server
+# （它用的是标准库 http.server 的裸 socket，跟 requests 库完全无关），
+# 比之前全局 socket.setdefaulttimeout() 的做法精准得多。
+if not getattr(_dingtalk_chatbot_module.requests.post, "_douyin_monitor_patched", False):
+    _original_post = _dingtalk_chatbot_module.requests.post
+
+    def _post_with_default_timeout(*args, **kwargs):
+        kwargs.setdefault("timeout", HTTP_TIMEOUT)
+        return _original_post(*args, **kwargs)
+
+    _post_with_default_timeout._douyin_monitor_patched = True
+    _dingtalk_chatbot_module.requests.post = _post_with_default_timeout
 
 
 class DingTalkNotifier(BaseNotifier):
