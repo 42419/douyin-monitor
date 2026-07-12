@@ -8,14 +8,12 @@ import logging
 import os
 import random
 import signal
-import socket
 import sys
 import threading
 from typing import List, Tuple
 
 from .config import (
     Config,
-    HTTP_TIMEOUT,
     PID_FILE,
     STATUS_FILE,
     USER_REQUEST_INTERVAL_MAX,
@@ -32,9 +30,6 @@ from .webui import start_web_server
 
 # 全局停止事件
 stop_event = threading.Event()
-
-# DingtalkChatbot 内部发请求没有显式设置超时，用全局 socket 超时兜底
-socket.setdefaulttimeout(HTTP_TIMEOUT)
 
 
 # =================== PID 锁 ===================
@@ -127,7 +122,9 @@ def run_loop(once: bool = False) -> None:
     )
     logging.info(
         f"过时检测: API 响应不变 {cfg.stale_threshold // 86400} 天 | 兜底 14 天 "
-        f"| 抓取窗口 {cfg.fetch_count} 条/用户 | 请求间隔 {cfg.poll_interval_min}~{cfg.poll_interval_max}秒/次 "
+        f"| 抓取窗口 {cfg.fetch_count} 条/用户 "
+        f"| 用户间请求间隔 {USER_REQUEST_INTERVAL_MIN}~{USER_REQUEST_INTERVAL_MAX}秒 "
+        f"| 轮询间隔 {cfg.poll_interval_min}~{cfg.poll_interval_max}秒 "
         f"(并发安全阀 {cfg.max_concurrent_users}) "
         f"| 终端日志级别 {cfg.log_level}"
     )
