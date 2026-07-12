@@ -409,6 +409,7 @@ class Monitor:
                 elapsed = seconds_since(last_update)
                 age_hours = int(elapsed // 3600) if elapsed is not None else None
                 videos = data.get("videos", {})
+                freq_label, freq_avg_days, freq_count = _freq_stats(videos)
                 entries.append(
                     {
                         "sec_user_id": sec_user_id,
@@ -419,7 +420,9 @@ class Monitor:
                         "hours_since_update": age_hours,
                         "consecutive_fails": data.get("consecutive_fails", 0),
                         "in_users_conf": sec_user_id in current_ids,
-                        "update_frequency": _classify_update_frequency(videos),
+                        "update_frequency": freq_label,
+                        "freq_avg_days": freq_avg_days,
+                        "freq_sample_count": freq_count,
                     }
                 )
 
@@ -459,3 +462,20 @@ def _classify_update_frequency(videos: Dict[str, dict]) -> Optional[str]:
     if avg_days <= 45:
         return "月更"
     return "更新较少"
+
+
+def _freq_stats(videos: Dict[str, dict]) -> Tuple[Optional[str], Optional[float], int]:
+    """返回 (label, avg_days, sample_count)，供 status snapshot 和 tooltip 使用。"""
+    create_times = sorted(
+        meta.get("create_time", 0)
+        for meta in videos.values()
+        if not meta.get("is_top") and meta.get("create_time")
+    )
+    if len(create_times) < 2:
+        return None, None, len(create_times)
+    gaps = [b - a for a, b in zip(create_times, create_times[1:]) if b > a]
+    if not gaps:
+        return None, None, len(create_times)
+    avg_days = (sum(gaps) / len(gaps)) / 86400
+    label = _classify_update_frequency(videos)
+    return label, round(avg_days, 1), len(create_times)

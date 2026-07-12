@@ -230,10 +230,94 @@ _PAGE = Template(r"""<!DOCTYPE html>
     .row-status { order: -1; }
     .row-count { min-width: auto; text-align: left; font-size: 12px; }
     .row-time { min-width: auto; text-align: left; font-size: 11px; flex-basis: 100%; }
+    /* 移动端：底部抽屉样式 */
+    .detail-overlay { align-items: flex-end; justify-content: stretch; }
+    .detail-panel {
+      width: 100%; max-width: none; border-radius: 16px 16px 0 0;
+      border: none; border-top: 1px solid var(--line);
+      max-height: 80vh; padding: 20px 16px 28px;
+      box-shadow: 0 -4px 16px rgba(0,0,0,.1);
+      opacity: 1; transform: translateY(100%); transition: transform .25s ease-out;
+    }
+    .detail-overlay.open .detail-panel { transform: translateY(0); }
   }
   @media (prefers-reduced-motion: reduce) {
     .eyebrow .dot { animation: none; opacity: 1; }
   }
+
+  /* ---- 可点击名字 ---- */
+  .row-name { cursor: pointer; transition: color .15s; }
+  .row-name:hover { color: var(--blue); }
+  .row-name::after { content: " ›"; color: var(--text3); font-weight: 400; }
+  .row-name:hover::after { color: var(--blue); }
+
+  /* ---- Frequency tooltip ---- */
+  .freq-tag { position: relative; }
+  .freq-tag .tip {
+    display: none; position: absolute; bottom: calc(100% + 6px); left: 50%;
+    transform: translateX(-50%); white-space: nowrap;
+    background: var(--text); color: var(--bg); font-size: 11px; font-weight: 400;
+    padding: 4px 8px; border-radius: 4px; z-index: 10; pointer-events: none;
+    box-shadow: 0 2px 6px rgba(0,0,0,.15);
+  }
+  .freq-tag .tip::after {
+    content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+    border: 4px solid transparent; border-top-color: var(--text);
+  }
+  .freq-tag:hover .tip { display: block; }
+  /* 移动端触摸显示 tooltip */
+  .freq-tag.active .tip { display: block; }
+
+  /* ---- 详情面板（桌面端：居中弹窗） ---- */
+  .detail-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.35);
+    z-index: 100; backdrop-filter: blur(3px);
+    align-items: center; justify-content: center;
+  }
+  .detail-overlay.open { display: flex; }
+  .detail-panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 28px 28px 24px;
+    width: 90%; max-width: 560px; max-height: 80vh; overflow-y: auto;
+    box-shadow: 0 8px 32px rgba(0,0,0,.12);
+    opacity: 0; transform: scale(.95); transition: opacity .2s, transform .2s;
+  }
+  .detail-overlay.open .detail-panel { opacity: 1; transform: scale(1); }
+  .detail-head {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+  }
+  .detail-head h2 { font-size: 18px; font-weight: 700; margin: 0; flex: 1; }
+  .detail-close {
+    width: 32px; height: 32px; border: none; border-radius: 8px;
+    background: var(--off-soft); color: var(--text2); font-size: 18px;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+  }
+  .detail-close:hover { background: var(--red-soft); color: var(--red); }
+  .detail-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px; margin-bottom: 20px;
+  }
+  .detail-item { padding: 10px 0; }
+  .detail-item .dl { font-size: 11px; color: var(--text3); margin-bottom: 2px; }
+  .detail-item .dl::before { content: "[ "; }
+  .detail-item .dl::after { content: " ]"; }
+  .detail-item .dv { font-size: 15px; font-weight: 600; }
+  .detail-section {
+    font-size: 11px; color: var(--text3); font-weight: 600;
+    letter-spacing: .06em; margin: 16px 0 8px;
+  }
+  .detail-section::before { content: "// "; color: var(--line); }
+  .video-list { list-style: none; padding: 0; margin: 0; }
+  .video-list li {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 6px 0; border-bottom: 1px solid var(--line-2);
+    font-size: 13px;
+  }
+  .video-list li:last-child { border-bottom: none; }
+  .video-list .vtitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .video-list .vdate { flex: 0 0 auto; color: var(--text3); font-size: 12px; }
+  .video-list .vtop { flex: 0 0 auto; font-size: 11px; color: var(--amber); font-weight: 600; }
+  .detail-empty { color: var(--text3); text-align: center; padding: 24px; }
 </style>
 </head>
 <body>
@@ -258,6 +342,80 @@ _PAGE = Template(r"""<!DOCTYPE html>
     <span><a href="/api/status">/api/status</a>&nbsp;&nbsp;<a href="/api/health">/api/health</a></span>
   </div>
 </div>
+
+<!-- 详情面板 -->
+<div class="detail-overlay" id="detailOverlay" onclick="closeDetail()">
+  <div class="detail-panel" onclick="event.stopPropagation()">
+    <div class="detail-head">
+      <h2 id="detailName">-</h2>
+      <button class="detail-close" onclick="closeDetail()">&times;</button>
+    </div>
+    <div id="detailContent"><div class="detail-empty">加载中...</div></div>
+  </div>
+</div>
+
+<script>
+function openDetail(uid) {
+  document.getElementById('detailOverlay').classList.add('open');
+  document.getElementById('detailName').textContent = '加载中...';
+  document.getElementById('detailContent').innerHTML = '<div class="detail-empty">加载中...</div>';
+  fetch('/api/user/' + encodeURIComponent(uid))
+    .then(function(r) { return r.json(); })
+    .then(function(d) { renderDetail(d); })
+    .catch(function() {
+      document.getElementById('detailContent').innerHTML = '<div class="detail-empty">加载失败</div>';
+    });
+}
+function closeDetail() {
+  document.getElementById('detailOverlay').classList.remove('open');
+}
+document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeDetail(); });
+
+function renderDetail(d) {
+  document.getElementById('detailName').textContent = d.nickname || d.sec_user_id;
+  var h = '';
+  // 基本信息
+  h += '<div class="detail-grid">';
+  h += di('状态', d.status_text);
+  h += di('已知视频', d.known_videos + ' 条');
+  h += di('连续失败', d.consecutive_fails + ' 次');
+  h += di('距上次更新', d.last_update_ago);
+  h += di('首次记录', d.initialized_at || '-');
+  h += di('频率', d.update_frequency || '-', d.freq_hint || '');
+  h += '</div>';
+  // 视频列表
+  if (d.videos && d.videos.length > 0) {
+    h += '<div class="detail-section">视频列表</div>';
+    h += '<ul class="video-list">';
+    d.videos.forEach(function(v) {
+      h += '<li>';
+      h += '<span class="vtitle">' + esc(v.title) + '</span>';
+      if (v.is_top) h += '<span class="vtop">置顶</span>';
+      h += '<span class="vdate">' + v.date + '</span>';
+      h += '</li>';
+    });
+    h += '</ul>';
+  }
+  document.getElementById('detailContent').innerHTML = h;
+}
+function di(label, value, tip) {
+  var t = tip ? ' title="' + esc(tip) + '"' : '';
+  return '<div class="detail-item"' + t + '><div class="dl">' + esc(label) + '</div><div class="dv">' + esc(value) + '</div></div>';
+}
+function esc(s) { var d = document.createElement('div'); d.textContent = s || '-'; return d.innerHTML; }
+
+// 移动端 freq-tag 触摸切换 tooltip
+document.querySelectorAll('.freq-tag').forEach(function(el) {
+  el.addEventListener('touchstart', function(e) {
+    e.stopPropagation();
+    document.querySelectorAll('.freq-tag.active').forEach(function(x) { if (x !== el) x.classList.remove('active'); });
+    el.classList.toggle('active');
+  });
+});
+document.addEventListener('touchstart', function() {
+  document.querySelectorAll('.freq-tag.active').forEach(function(x) { x.classList.remove('active'); });
+});
+</script>
 </body>
 </html>""")
 
@@ -266,16 +424,16 @@ _STAT_TEMPLATE = Template("""<div class="stat">
   <div class="stat-value $color mono">$value</div>
 </div>""")
 
-_ROW_TEMPLATE = Template("""<div class="row">
+_ROW_TEMPLATE = Template("""<div class="row" data-uid="$uid">
   <span class="row-badge" style="background:$badge_color"></span>
-  <span class="row-name">$nickname</span>
+  <span class="row-name" onclick="openDetail('$uid')">$nickname</span>
   $freq_tag
   <span class="row-status $status_color">$status_text</span>
   <span class="row-count mono">$known_videos 条</span>
   <span class="row-time mono">$last_update_text</span>
 </div>""")
 
-_FREQ_TAG = Template('<span class="freq-tag">$label</span>')
+_FREQ_TAG = Template('<span class="freq-tag">$label<span class="tip">$tip</span></span>')
 
 _LEGEND_ITEM = Template('<span><i style="background:$color"></i>$label $count</span>')
 
@@ -435,14 +593,19 @@ def _render_status_html(channels: str = "-") -> str:
             else:
                 badge_color, status_color, status_text = "var(--green)", "green", "正常"
 
+            freq_avg = u.get("freq_avg_days")
+            freq_n = u.get("freq_sample_count", 0)
+            freq_tip = f"基于最近 {freq_n} 条非置顶视频，平均 {freq_avg} 天/条" if freq_avg is not None else ""
+
             rows.append(
                 _ROW_TEMPLATE.substitute(
+                    uid=_escape_html(u.get("sec_user_id") or ""),
                     badge_color=badge_color,
                     status_color=status_color,
                     status_text=status_text,
                     nickname=_escape_html(u.get("nickname") or "-"),
                     freq_tag=(
-                        _FREQ_TAG.substitute(label=_escape_html(u["update_frequency"]))
+                        _FREQ_TAG.substitute(label=_escape_html(u["update_frequency"]), tip=_escape_html(freq_tip))
                         if u.get("update_frequency")
                         else ""
                     ),
@@ -506,7 +669,9 @@ class _StatusHandler(BaseHTTPRequestHandler):
         logging.debug("[web] " + fmt % args)
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path.startswith("/api/status"):
+        if self.path.startswith("/api/user/"):
+            self._serve_user()
+        elif self.path.startswith("/api/status"):
             self._serve_json()
         elif self.path.startswith("/api/health"):
             self._serve_health()
@@ -541,6 +706,80 @@ class _StatusHandler(BaseHTTPRequestHandler):
 
     def _serve_health(self) -> None:
         payload = _build_health_json().encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _serve_user(self) -> None:
+        from datetime import datetime
+        from .config import STATE_DIR
+        uid = self.path[len("/api/user/"):].split("?")[0].split("/")[0]
+        # 防止路径穿越：sec_user_id 只含字母、数字、下划线、连字符
+        import re
+        if not re.fullmatch(r"[\w-]+", uid):
+            self.send_error(400, "Invalid user ID")
+            return
+        state_path = STATE_DIR / f"{uid}.json"
+        if not state_path.exists():
+            self.send_error(404, "User not found")
+            return
+        try:
+            data = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            self.send_error(500, "State file error")
+            return
+
+        videos_raw = data.get("videos", {})
+        # 按 create_time 倒序排列
+        videos_sorted = sorted(
+            videos_raw.items(), key=lambda kv: kv[1].get("create_time", 0), reverse=True
+        )
+        videos_list = []
+        for vid, meta in videos_sorted:
+            ct = meta.get("create_time", 0)
+            date_str = datetime.fromtimestamp(ct).strftime("%Y-%m-%d %H:%M") if ct else "-"
+            videos_list.append({
+                "video_id": vid,
+                "title": meta.get("title", "-"),
+                "date": date_str,
+                "is_top": meta.get("is_top", False),
+            })
+
+        last_update = data.get("last_update_at") or data.get("initialized_at")
+        elapsed = None
+        if last_update:
+            try:
+                dt = datetime.fromisoformat(last_update)
+                elapsed = (datetime.now() - dt).total_seconds()
+            except (ValueError, TypeError):
+                pass
+        hours = int(elapsed // 3600) if elapsed is not None else None
+
+        from .monitor import _freq_stats
+        freq_label, freq_avg, freq_n = _freq_stats(videos_raw)
+        freq_hint = f"基于最近 {freq_n} 条非置顶视频，平均 {freq_avg} 天/条" if freq_avg is not None else ""
+
+        status_text = "正常"
+        if data.get("consecutive_fails", 0) > 0:
+            status_text = f"失败 {data['consecutive_fails']} 次"
+        elif hours is not None and hours >= 14 * 24:
+            status_text = f"{hours // 24} 天无更新"
+
+        result = {
+            "sec_user_id": uid,
+            "nickname": data.get("nickname", "-"),
+            "status_text": status_text,
+            "known_videos": len(videos_raw),
+            "consecutive_fails": data.get("consecutive_fails", 0),
+            "last_update_ago": _format_last_update(hours),
+            "initialized_at": data.get("initialized_at", "-"),
+            "update_frequency": freq_label,
+            "freq_hint": freq_hint,
+            "videos": videos_list,
+        }
+        payload = json.dumps(result, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
