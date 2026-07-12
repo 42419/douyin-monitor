@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Tuple
+from typing import List
 
 from .base import BaseNotifier
 
@@ -32,23 +32,11 @@ class CompositeNotifier(BaseNotifier):
             any_ok = any_ok or ok
         return any_ok
 
-    def send_text(self, title: str, content: str, at_mobiles: Optional[List[str]] = None) -> bool:
-        return self._broadcast("send_text", title, content, at_mobiles)
+    def send_text(self, *args, **kwargs) -> bool:
+        return self._broadcast("send_text", *args, **kwargs)
 
-    def send_video(
-        self,
-        nickname: str,
-        video_id: str,
-        title: str,
-        create_time: int,
-        cover_url: Optional[str] = None,
-    ) -> bool:
-        return self._broadcast("send_video", nickname, video_id, title, create_time, cover_url)
+    def send_video(self, *args, **kwargs) -> bool:
+        return self._broadcast("send_video", *args, **kwargs)
 
-    def send_deleted(
-        self,
-        nickname: str,
-        deleted_entries: List[Tuple[str, dict]],
-        at_mobiles: Optional[List[str]] = None,
-    ) -> bool:
-        return self._broadcast("send_deleted", nickname, deleted_entries, at_mobiles)
+    def send_deleted(self, *args, **kwargs) -> bool:
+        return self._broadcast("send_deleted", *args, **kwargs)

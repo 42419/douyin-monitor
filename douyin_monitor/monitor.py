@@ -88,6 +88,13 @@ class Monitor:
     def _check_stale(self, state: UserState, nickname: str, aweme_list: Optional[list]) -> None:
         legacy_alert_at = state.data.get("last_stale_alert_at")
 
+        # 兼容升级前的状态文件：老版本没有 stale_alerted 这个字段，
+        # 如果当时已经用旧逻辑（基于冷却时间）发过"长期无更新"提醒
+        # （体现在 last_fallback_stale_alert_at 有值），直接标记为已提醒过，
+        # 避免升级后 stale_alerted 被当成 False 而立刻又刷一条重复的
+        if "stale_alerted" not in state.data and state.data.get("last_fallback_stale_alert_at"):
+            state.data["stale_alerted"] = True
+
         # 检测 1：API 响应哈希连续不变
         if aweme_list is not None:
             ids_sorted = sorted(item.get("aweme_id", "") for item in aweme_list)

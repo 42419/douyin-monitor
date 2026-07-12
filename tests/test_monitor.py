@@ -312,3 +312,89 @@ def test_status_snapshot_includes_update_frequency(state_dir, monkeypatch, tmp_p
 
     data = json.loads(status_file.read_text(encoding="utf-8"))
     assert data["users"][0]["update_frequency"] == "日更"
+
+
+def test_check_user_with_composite_notifier_does_not_crash_on_new_video(state_dir, monkeypatch):
+    """回归测试：真实场景下（NOTIFY_CHANNELS 配置了多个渠道）notifier 是
+    CompositeNotifier。之前它的 send_video 签名和 monitor.py 实际传入的
+    关键字参数不匹配，新视频检测到时会直接抛 TypeError 导致整轮检测中断
+    （Copilot code review 发现）。这里不用 RecordingNotifier 假对象，
+    而是真的构造一个 CompositeNotifier 跑一遍，确保不会再回归。"""
+    from douyin_monitor.notifiers.base import BaseNotifier
+    from douyin_monitor.notifiers.composite import CompositeNotifier
+
+    class _Channel(BaseNotifier):
+        name = "test_channel"
+
+        def __init__(self):
+            self.video_calls = 0
+
+        def send_text(self, title, content, at_mobiles=None):
+            return True
+
+        def send_video(self, *args, **kwargs):
+            self.video_calls += 1
+            return True
+
+    channel_a, channel_b = _Channel(), _Channel()
+    composite = CompositeNotifier([channel_a, channel_b])
+
+    import threading
+
+    monitor = Monitor(FakeConfig(), composite, threading.Event())
+    monkeypatch.setattr(monitor_module, "fetch_user_videos", lambda *a, **k: _resp([_item("A")]))
+    monitor.check_user("sec1", "小明")
+
+    monkeypatch.setattr(
+        monitor_module, "fetch_user_videos", lambda *a, **k: _resp([_item("A"), _item("B")])
+    )
+    result = monitor.check_user("sec1", "小明")  # 之前这里会因 TypeError 变成 status=fail
+
+    assert result["status"] == "ok"
+    assert result["new_count"] == 1
+    assert channel_a.video_calls == 1
+    assert channel_b.video_calls == 1
+
+
+def test_stale_alert_upgrade_compat_does_not_double_notify(state_dir, monkeypatch):
+    """回归测试（Copilot code review 发现）：老版本状态文件里没有 stale_alerted
+    字段，但如果当时已经用旧的（基于冷却时间的）逻辑发过"长期无更新"提醒，
+    体现在 last_fallback_stale_alert_at 有值。升级到一次性提醒逻辑后，
+    如果不做兼容，state.data.get("stale_alerted") 会因为字段缺失被当成
+    False，导致用户升级后立刻又收到一条重复提醒。"""
+    from datetime import timedelta
+
+    from douyin_monitor.state import UserState
+    from douyin_monitor.utils import now
+
+    monitor, notifier = _make_monitor(monkeypatch)
+    state = UserState(monitor_module.STATE_DIR / "sec1.json")
+    state.data["last_update_at"] = (now() - timedelta(days=20)).isoformat()
+    # 模拟老版本状态文件：只有 last_fallback_stale_alert_at，没有 stale_alerted 字段
+    state.data["last_fallback_stale_alert_at"] = (now() - timedelta(hours=2)).isoformat()
+    del state.data["stale_alerted"]
+    assert "stale_alerted" not in state.data
+
+    monitor._check_stale(state, "阿直", aweme_list=None)
+
+    assert notifier.texts == []  # 不应该重复提醒
+    assert state.data.get("stale_alerted") is True  # 兼容逻辑应该把标记补上
+
+
+def test_stale_alert_fresh_state_without_prior_alert_still_fires(state_dir, monkeypatch):
+    """确认兼容逻辑只针对"确实已经提醒过"的老状态生效，不会误伤全新的、
+    从未提醒过的账号（last_fallback_stale_alert_at 为空）。"""
+    from datetime import timedelta
+
+    from douyin_monitor.state import UserState
+    from douyin_monitor.utils import now
+
+    monitor, notifier = _make_monitor(monkeypatch)
+    state = UserState(monitor_module.STATE_DIR / "sec1.json")
+    state.data["last_update_at"] = (now() - timedelta(days=20)).isoformat()
+    del state.data["stale_alerted"]  # 模拟老版本文件完全没有这个字段
+    assert state.data.get("last_fallback_stale_alert_at") is None
+
+    monitor._check_stale(state, "阿直", aweme_list=None)
+
+    assert len(notifier.texts) == 1  # 从未提醒过，应该正常提醒一次
