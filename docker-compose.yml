@@ -22,8 +22,9 @@
 
 services:
   douyin-monitor:
-    # 用当前目录下的 Dockerfile 构建镜像
-    build: .
+    # 从 Docker Hub 拉取预构建镜像（首次使用推荐）
+    # 如果你想用本地源码构建，把下面这行改成 build: .
+    image: yunfeiii/douyin-monitor:latest
 
     # 容器名字，方便用 docker logs douyin-monitor 这样直接查
     container_name: douyin-monitor
