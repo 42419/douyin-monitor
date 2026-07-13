@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY douyin_monitor.py .
 COPY douyin_monitor/ ./douyin_monitor/
-COPY .env.example users.conf.example ./
+COPY env.example users.conf.example ./
 COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 

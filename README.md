@@ -49,11 +49,11 @@
 
 ```bash
 # 1. 下载配置文件
-mkdir ~/douyin-monitor && cd ~/douyin-monitor
-curl -O https://raw.githubusercontent.com/42419/douyin-monitor/main/docker-compose.yml
-curl -O https://raw.githubusercontent.com/42419/douyin-monitor/main/.env.example
-curl -O https://raw.githubusercontent.com/42419/douyin-monitor/main/users.conf.example
-mv .env.example .env && mv users.conf.example users.conf
+mkdir -p ~/douyin-monitor && cd ~/douyin-monitor
+curl -O https://dmonitor.yunov.top/docker-compose.yml
+curl -O https://dmonitor.yunov.top/env.example
+curl -O https://dmonitor.yunov.top/users.conf.example
+mv env.example .env && mv users.conf.example users.conf
 
 # 2. 编辑配置
 vi .env        # 填通知渠道 token（见下文配置说明）
@@ -87,14 +87,11 @@ docker pull yunfeiii/douyin-monitor:latest && docker compose up -d   # 更新版
 
 ### deploy.sh 一键部署
 
-不用 Docker 的话，用这个脚本最方便：
-
 ```bash
-chmod +x deploy.sh
-sudo ./deploy.sh install
+bash <(curl -sS https://dmonitor.yunov.top/deploy.sh) install
 ```
 
-会依次交互式引导你完成：选工作目录 → 复制代码 → 建虚拟环境装依赖 → 配置推送渠道 → 填监控账号 → 跑测试 → 配置 systemd 常驻。
+脚本会自动从 GitHub 下载最新代码，交互式引导你完成：选工作目录 → 下载代码 → 建虚拟环境装依赖 → 配置推送渠道 → 填监控账号 → 跑测试 → 配置 systemd 常驻。
 
 日常运维：
 
@@ -108,11 +105,15 @@ sudo ./deploy.sh install
 更新版本：
 
 ```bash
-git pull
 sudo ./deploy.sh update
 ```
 
-`update` 会自动备份旧代码、更新依赖、追加新配置项（不覆盖已有值）、自动重启服务。
+`update` 会从 GitHub 拉取最新代码、自动备份旧代码、更新依赖、追加新配置项（不覆盖已有值）、自动重启服务。
+
+> 如果 deploy.sh 脚本本身有更新，重新下载即可：
+> ```bash
+> bash <(curl -sS https://dmonitor.yunov.top/deploy.sh) update
+> ```
 
 卸载：
 
@@ -129,7 +130,7 @@ sudo ./deploy.sh uninstall
 sudo mkdir -p /opt/douyin-monitor
 sudo cp douyin_monitor.py requirements.txt /opt/douyin-monitor/
 sudo cp -r douyin_monitor /opt/douyin-monitor/
-sudo cp .env.example /opt/douyin-monitor/.env
+sudo cp env.example /opt/douyin-monitor/.env
 sudo cp users.conf.example /opt/douyin-monitor/users.conf
 
 # 2. 安装依赖
@@ -352,6 +353,6 @@ pytest -q
 ├── tests/                     # 单元测试
 ├── requirements.txt           # 运行依赖
 ├── requirements-dev.txt       # 开发/测试依赖
-├── .env.example               # 环境变量配置模板
+├── env.example                # 环境变量配置模板
 └── users.conf.example         # 监控用户列表模板
 ```

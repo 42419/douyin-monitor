@@ -165,10 +165,85 @@ configure_workdir() {
     fi
 }
 
-# =================== 同步代码文件（install 和 update 共用） ===================
-# 只同步代码和依赖清单，绝不覆盖 .env / users.conf / state / log / venv
+# =================== 从 GitHub 下载最新代码 ===================
+GITHUB_REPO="42419/douyin-monitor"
+
+# 从 GitHub 拉取代码到临时目录，返回临时目录路径
+_fetch_to_tmp() {
+    local tmp_dir="${WORK_DIR}.fetch_tmp_$$"
+    rm -rf "$tmp_dir"
+
+    if command -v git &>/dev/null; then
+        info "使用 git clone --depth 1 ..."
+        if ! git clone --depth 1 "https://github.com/$GITHUB_REPO.git" "$tmp_dir" 2>/tmp/fetch_err.log; then
+            cat /tmp/fetch_err.log >&2
+            error "git clone 失败，请检查网络连接"
+        fi
+        rm -rf "$tmp_dir/.git"
+    else
+        info "未检测到 git，使用 curl 下载 tarball ..."
+        if ! curl -fsSL "https://github.com/$GITHUB_REPO/archive/refs/heads/main.tar.gz" -o /tmp/douyin-monitor.tar.gz 2>/tmp/fetch_err.log; then
+            cat /tmp/fetch_err.log >&2
+            error "下载失败，请检查网络连接或安装 git"
+        fi
+        mkdir -p "$tmp_dir"
+        tar xzf /tmp/douyin-monitor.tar.gz -C "$tmp_dir" --strip-components=1
+        rm -f /tmp/douyin-monitor.tar.gz
+    fi
+    echo "$tmp_dir"
+}
+
+# install 时：全新下载，代码目录不存在或为空
+fetch_code_fresh() {
+    info "从 GitHub 下载最新代码（$GITHUB_REPO）..."
+    local tmp_dir
+    tmp_dir=$(_fetch_to_tmp)
+
+    if [ -d "$WORK_DIR" ]; then
+        local backup="${WORK_DIR}.old_$(date +%s)"
+        mv "$WORK_DIR" "$backup"
+        info "已备份旧目录到 $backup"
+    fi
+    mv "$tmp_dir" "$WORK_DIR"
+    ok "代码下载完成"
+}
+
+# update 时：下载新代码，但保留 .env / users.conf / state / log / venv
+fetch_code_update() {
+    info "从 GitHub 下载最新代码（$GITHUB_REPO）..."
+    local tmp_dir
+    tmp_dir=$(_fetch_to_tmp)
+
+    # 备份用户数据
+    local preserve_dir="${WORK_DIR}.preserve_$$"
+    mkdir -p "$preserve_dir"
+    for item in .env users.conf state log status.json; do
+        [ -e "$WORK_DIR/$item" ] && cp -r "$WORK_DIR/$item" "$preserve_dir/"
+    done
+
+    # 替换代码目录
+    rm -rf "$WORK_DIR"
+    mv "$tmp_dir" "$WORK_DIR"
+
+    # 恢复用户数据
+    for item in .env users.conf state log status.json; do
+        [ -e "$preserve_dir/$item" ] && cp -r "$preserve_dir/$item" "$WORK_DIR/"
+    done
+    rm -rf "$preserve_dir"
+
+    ok "代码更新完成"
+}
+
+# =================== 同步代码文件（从本地 SCRIPT_DIR 复制） ===================
+# 仅在 WORK_DIR 和 SCRIPT_DIR 不同时使用（比如 --dir 指定了其他目录）
 sync_code_files() {
-    info "同步代码文件到 $WORK_DIR ..."
+    # 如果工作目录就是脚本所在目录，不需要复制
+    if [ "$(cd "$SCRIPT_DIR" && pwd)" = "$(cd "$WORK_DIR" && pwd)" ]; then
+        info "工作目录即脚本所在目录，跳过代码复制"
+        return
+    fi
+
+    info "从 $SCRIPT_DIR 同步代码文件到 $WORK_DIR ..."
     mkdir -p "$WORK_DIR"
 
     cp "$SCRIPT_DIR/douyin_monitor.py" "$WORK_DIR/"
@@ -176,17 +251,17 @@ sync_code_files() {
     cp -r "$SCRIPT_DIR/douyin_monitor" "$WORK_DIR/"
     find "$WORK_DIR/douyin_monitor" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
     cp "$SCRIPT_DIR/requirements.txt" "$WORK_DIR/"
-    cp "$SCRIPT_DIR/.env.example" "$WORK_DIR/" 2>/dev/null || true
+    cp "$SCRIPT_DIR/env.example" "$WORK_DIR/" 2>/dev/null || true
     cp "$SCRIPT_DIR/users.conf.example" "$WORK_DIR/" 2>/dev/null || true
 
     ok "代码文件同步完成"
 }
 
-# 把 .env.example 里新增的配置项（当前 .env 里没有的 KEY）追加到 .env 末尾，
+# 把 env.example 里新增的配置项（当前 .env 里没有的 KEY）追加到 .env 末尾，
 # 已有的值绝不修改。用于 update 时让老用户自然获得新功能的配置开关。
 sync_env_defaults() {
     local env_file="$WORK_DIR/.env"
-    local example_file="$WORK_DIR/.env.example"
+    local example_file="$WORK_DIR/env.example"
     [ -f "$env_file" ] || return
     [ -f "$example_file" ] || return
 
@@ -635,7 +710,14 @@ cmd_install() {
 
     require_root_for_install
     configure_workdir
-    sync_code_files
+
+    # 如果脚本所在目录有代码文件，直接用本地的；否则从 GitHub 下载
+    if [ -f "$SCRIPT_DIR/douyin_monitor.py" ]; then
+        sync_code_files
+    else
+        fetch_code_fresh
+    fi
+
     save_workdir_marker
     setup_venv
     configure_env
@@ -677,7 +759,7 @@ cmd_update() {
         cmd_stop
     fi
 
-    # 更新代码前备份一次旧的 douyin_monitor/，防止更新出问题需要回滚
+    # 更新前备份旧代码，防止更新出问题需要回滚
     local backup_dir
     backup_dir="$WORK_DIR/.backup_$(date '+%Y%m%d_%H%M%S')"
     if [ -d "$WORK_DIR/douyin_monitor" ]; then
@@ -687,7 +769,9 @@ cmd_update() {
         info "已备份旧代码到 $backup_dir（确认无误后可自行删除）"
     fi
 
-    sync_code_files
+    # 从 GitHub 拉取最新代码（自动保留 .env/users.conf/state/log）
+    fetch_code_update
+
     setup_venv
     sync_env_defaults
 

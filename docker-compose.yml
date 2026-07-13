@@ -5,9 +5,9 @@
 # 快速开始（三步）：
 #   1. 下载配置文件
 #      curl -O https://raw.githubusercontent.com/42419/douyin-monitor/main/docker-compose.yml
-#      curl -O https://raw.githubusercontent.com/42419/douyin-monitor/main/.env.example
+#      curl -O https://raw.githubusercontent.com/42419/douyin-monitor/main/env.example
 #      curl -O https://raw.githubusercontent.com/42419/douyin-monitor/main/users.conf.example
-#      mv .env.example .env && mv users.conf.example users.conf
+#      mv env.example .env && mv users.conf.example users.conf
 #
 #   2. 编辑 .env（填推送渠道）和 users.conf（填要监控的账号）
 #

@@ -10,7 +10,7 @@ mkdir -p "$DATA_DIR"
 
 if [ ! -f "$DATA_DIR/.env" ]; then
     echo "[entrypoint] 未找到 $DATA_DIR/.env，从模板复制一份"
-    cp /app/.env.example "$DATA_DIR/.env"
+    cp /app/env.example "$DATA_DIR/.env"
     echo "[entrypoint] 请编辑 $DATA_DIR/.env 填好推送渠道等配置，然后重启容器"
 fi
 
