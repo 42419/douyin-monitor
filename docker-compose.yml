@@ -3,69 +3,40 @@
 # =====================================================================
 #
 # 快速开始（三步）：
-#   1. docker compose up -d
-#      第一次启动会自动在 ./data 目录生成 .env 和 users.conf 模板，
-#      因为还没填推送渠道的 token，程序会打印一行错误然后退出，这是
-#      正常现象，不是哪里坏了
-#   2. 编辑 ./data/.env（填推送渠道）和 ./data/users.conf（填要监控的账号）
+#   1. 下载配置文件
+#      curl -O https://raw.githubusercontent.com/42419/douyin-monitor/main/docker-compose.yml
+#      curl -O https://raw.githubusercontent.com/42419/douyin-monitor/main/.env.example
+#      curl -O https://raw.githubusercontent.com/42419/douyin-monitor/main/users.conf.example
+#      mv .env.example .env && mv users.conf.example users.conf
+#
+#   2. 编辑 .env（填推送渠道）和 users.conf（填要监控的账号）
+#
 #   3. docker compose up -d
-#      再启动一次，这次就能正常跑起来了
 #
 # 常用命令：
 #   docker compose logs -f       实时看日志
 #   docker compose ps            看容器是否在跑、健康检查状态
 #   docker compose restart       改完配置后重启，让配置生效
-#   docker compose down          停止并删除容器（./data 里的数据不会丢）
-#   docker compose up -d --build 拉了新代码之后，重新构建镜像并重启
+#   docker compose down          停止并删除容器（数据不会丢）
+#   docker pull yunfeiii/douyin-monitor:latest && docker compose up -d
+#                                更新到最新版本
 #
 # =====================================================================
 
 services:
   douyin-monitor:
-    # 从 Docker Hub 拉取预构建镜像（首次使用推荐）
-    # 如果你想用本地源码构建，把下面这行改成 build: .
     image: yunfeiii/douyin-monitor:latest
-
-    # 容器名字，方便用 docker logs douyin-monitor 这样直接查
     container_name: douyin-monitor
-
-    # 容器意外退出、或者宿主机重启后自动拉起来；
-    # 手动 docker compose down 停止的话不会被自动重启
     restart: unless-stopped
 
-    # 容器直接共享宿主机的网络栈，不走 Docker 自己那套虚拟网桥。
-    #
-    # 这么做是为了让 Web 状态面板的端口完全由 ./data/.env 一个文件说了
-    # 算：容器内监听哪个端口，宿主机上就是哪个端口，不需要像"宿主机
-    # 端口:容器端口"这种映射再对应一遍——不然改了 .env 里的 WEB_PORT
-    # 却忘了同步改这里，端口会对不上，导致明明启动了却怎么都连不上
-    # （之前就踩过这个坑）。用 host 网络之后，想换端口只改 .env 一个
-    # 地方，想开放局域网/公网访问也只改 .env 里的 WEB_HOST，这两个
-    # 设置分别对应"用哪个端口"和"谁能访问"，跟 Docker 这层完全无关了。
-    #
-    # 副作用（通常是好事）：容器里 API_URL 如果配的是
-    # http://localhost/... 这种地址，host 网络下会直接打到宿主机本机
-    # 监听的服务，不需要额外配置容器间网络。
-    #
-    # 注意：network_mode: host 只在 Linux 上有效（这也是这个项目主要
-    # 面向的部署环境：VPS、软路由、NAS 之类）。如果你在 Mac/Windows 上
-    # 用 Docker Desktop 跑，这个设置会被忽略，需要改回用 ports 做端口
-    # 映射（把下面这行删掉，换成 ports: 加 "宿主机端口:容器端口"）。
+    # host 网络模式：容器直接共享宿主机网络，.env 里改 WEB_PORT/Web_HOST
+    # 就能控制端口和访问范围，不需要改 docker-compose.yml。
+    # 注意：仅 Linux 有效，Mac/Windows 需改用 ports 映射。
     network_mode: host
 
     environment:
-      # 程序的配置文件、运行数据统一读写这个目录，跟下面 volumes 挂载的
-      # 容器内路径要保持一致，一般不需要改这一行
       - DOUYIN_MONITOR_HOME=/data
 
     volumes:
-      # ↓↓↓ 最重要的一行 ↓↓↓
-      # 把宿主机当前目录下的 data 文件夹，挂载到容器里的 /data。
-      #
-      # .env（推送渠道配置）、users.conf（监控账号列表）这两个需要你
-      # 手动编辑；state/（每个账号的运行状态）、log/（日志）、
-      # status.json、monitor.pid 是程序自己运行时生成、需要长期保留的
-      # 数据。这些全部都在这一个目录里，跟着宿主机走：
-      #   - 容器删了重建、镜像升级，数据都不会丢
-      #   - 想备份，直接打包这个 data 目录就行
-      - ./data:/data
+      # 当前目录挂载到容器 /data，.env、users.conf、state/、log/ 全在这里
+      - .:/data
