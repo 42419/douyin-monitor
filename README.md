@@ -112,7 +112,7 @@ docker compose restart            # 重启
 docker compose down               # 停止并移除容器（数据还在 ./data，不会丢）
 ```
 
-想开 Web 状态面板的话，`data/.env` 里把 `WEB_ENABLED` 改成 `true`，重启容器后访问 `http://宿主机IP:8787`。`docker-compose.yml` 里默认把端口映射绑定在 `127.0.0.1`，只能本机访问；如果要在局域网访问，把 `docker-compose.yml` 里端口映射的 `127.0.0.1:` 前缀去掉，同时 `.env` 里 `WEB_HOST` 改成 `0.0.0.0`（面板本身不做鉴权，注意访问范围）。
+想开 Web 状态面板的话，`data/.env` 里把 `WEB_ENABLED` 改成 `true`，重启容器后访问 `http://宿主机IP:WEB_PORT`（`WEB_PORT` 默认 `8787`）。容器用的是 `network_mode: host`（直接共享宿主机网络栈），所以端口和访问范围完全由 `.env` 一个文件决定，不需要再去改 `docker-compose.yml`：想换端口改 `WEB_PORT`，想开放局域网/公网访问把 `WEB_HOST` 从默认的 `127.0.0.1` 改成 `0.0.0.0`（面板本身不做登录鉴权，开放前想清楚访问范围）。`network_mode: host` 只在 Linux 上有效，Mac/Windows 上用 Docker Desktop 跑的话需要把这一行换成传统的端口映射方式，`docker-compose.yml` 里有注释说明怎么改。
 
 容器自带一个宽松的健康检查（`status.json` 超过 1 小时没更新就判定不健康），`docker compose ps` 或 `docker inspect` 能看到健康状态，方便配合宿主机的监控/告警。
 
@@ -327,7 +327,7 @@ log/
 
 **Q: Docker 部署下 Web 面板打不开？**
 
-三件事挨个检查：`data/.env` 里 `WEB_ENABLED` 是不是 `true`；`docker-compose.yml` 里的端口映射有没有生效（`docker compose ps` 看一下）；如果是从局域网/其它设备访问，`.env` 里 `WEB_HOST` 得改成 `0.0.0.0`（默认 `127.0.0.1` 只能容器自己或宿主机本机访问），改完都要 `docker compose up -d` 重启容器生效。
+两件事挨个检查：`data/.env` 里 `WEB_ENABLED` 是不是 `true`；如果是从局域网/其它设备访问，`WEB_HOST` 得改成 `0.0.0.0`（默认 `127.0.0.1` 只能容器自己/宿主机本机访问）。改完都要 `docker compose up -d` 重启容器生效。容器用的是 `network_mode: host`，端口就是 `.env` 里 `WEB_PORT` 写的那个，不用另外查端口映射；用 `docker compose logs` 看一眼启动日志，里面会打印出当前能用哪几个地址访问。
 
 **Q: Docker 部署要怎么更新到最新版本？**
 
