@@ -79,42 +79,37 @@
 
 ### 用 Docker 部署（推荐，最省心）
 
-不想折腾虚拟环境、systemd 这些，用 Docker 是最省心的方式：
+三步搞定，不需要 clone 代码：
 
 ```bash
-git clone https://github.com/42419/douyin-monitor.git
-cd douyin-monitor
+# 1. 下载三个文件到任意目录
+mkdir ~/douyin-monitor && cd ~/douyin-monitor
+curl -O https://raw.githubusercontent.com/42419/douyin-monitor/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/42419/douyin-monitor/main/.env.example
+curl -O https://raw.githubusercontent.com/42419/douyin-monitor/main/users.conf.example
+mv .env.example .env && mv users.conf.example users.conf
+
+# 2. 编辑配置
+vi .env        # 填通知渠道 token（钉钉/企业微信/Telegram 等）
+vi users.conf  # 填要监控的抖音账号
+
+# 3. 启动
 docker compose up -d
 ```
 
-第一次启动时，容器会自动在 `./data` 目录下生成 `.env` 和 `users.conf` 模板（因为还没配置，容器会打印错误提示然后退出，这是正常的，不是 bug）：
-
-```bash
-docker compose logs        # 看到 "未配置 DINGTALK_TOKEN" 之类的提示
-vi data/.env                # 参照下文「配置说明」填好推送渠道
-vi data/users.conf           # 添加要监控的抖音账号
-docker compose up -d         # 配置好之后重新启动
-```
-
-`.env`、`users.conf`、`state/`（每个账号的运行状态）、`log/`、`status.json` 全部落在宿主机的 `./data` 目录里，跟着这一个目录走，容器可以随时删掉重建，数据不会丢；升级也只需要拉最新代码重新 build：
-
-```bash
-git pull
-docker compose up -d --build
-```
+`.env`、`users.conf`、`state/`（运行状态）、`log/`（日志）都在当前目录下，容器删掉重建数据不会丢。
 
 日常运维：
 
 ```bash
 docker compose logs -f            # 实时看日志
-docker compose ps                 # 看容器状态（含健康检查结果）
-docker compose restart            # 重启
-docker compose down               # 停止并移除容器（数据还在 ./data，不会丢）
+docker compose ps                 # 看容器状态
+docker compose restart            # 改完配置后重启
+docker compose down               # 停止容器（数据不丢）
+docker pull yunfeiii/douyin-monitor:latest && docker compose up -d   # 更新版本
 ```
 
-想开 Web 状态面板的话，`data/.env` 里把 `WEB_ENABLED` 改成 `true`，重启容器后访问 `http://宿主机IP:WEB_PORT`（`WEB_PORT` 默认 `8787`）。容器用的是 `network_mode: host`（直接共享宿主机网络栈），所以端口和访问范围完全由 `.env` 一个文件决定，不需要再去改 `docker-compose.yml`：想换端口改 `WEB_PORT`，想开放局域网/公网访问把 `WEB_HOST` 从默认的 `127.0.0.1` 改成 `0.0.0.0`（面板本身不做登录鉴权，开放前想清楚访问范围）。`network_mode: host` 只在 Linux 上有效，Mac/Windows 上用 Docker Desktop 跑的话需要把这一行换成传统的端口映射方式，`docker-compose.yml` 里有注释说明怎么改。
-
-容器自带一个宽松的健康检查（`status.json` 超过 1 小时没更新就判定不健康），`docker compose ps` 或 `docker inspect` 能看到健康状态，方便配合宿主机的监控/告警。
+Web 状态面板：`.env` 里设 `WEB_ENABLED=true`，重启后访问 `http://宿主机IP:8787`。局域网/公网访问需把 `WEB_HOST` 改成 `0.0.0.0`（面板无鉴权，注意安全）。`network_mode: host` 仅 Linux 有效，Mac/Windows 需改用 ports 映射，`docker-compose.yml` 里有说明。
 
 ### 用 deploy.sh 一键部署
 
