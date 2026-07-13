@@ -32,12 +32,15 @@
 
 | 文件/目录 | 作用 |
 |---|---|
-| `deploy.sh` | 一键部署/运维脚本：安装、更新、卸载、启停、查看状态和日志、重新配置（推荐入口） |
+| `docker-compose.yml` | Docker 部署编排文件，`docker compose up -d` 一键启动（推荐） |
+| `Dockerfile` | Docker 镜像构建文件 |
+| `docker/entrypoint.sh` | 容器启动脚本：首次启动时把 `.env`/`users.conf` 模板复制到挂载卷 |
+| `deploy.sh` | 不用 Docker 的话，用这个一键部署/运维脚本：安装、更新、卸载、启停、查看状态和日志、重新配置 |
 | `douyin_monitor.py` | 主入口脚本（兼容 `python3 douyin_monitor.py` 直接运行） |
 | `douyin_monitor/` | 核心逻辑包（模块拆分后的代码） |
 | `requirements.txt` | 运行依赖列表，`pip install -r requirements.txt` 安装 |
 | `requirements-dev.txt` | 额外的开发/测试依赖（pytest），`pip install -r requirements-dev.txt` 安装 |
-| `.env.example` | 环境变量配置示例，部署时复制为 `.env` 并填写（用 `deploy.sh install` 会自动生成，不需要手动复制） |
+| `.env.example` | 环境变量配置示例，部署时复制为 `.env` 并填写（用 Docker 或 `deploy.sh install` 都会自动生成，不需要手动复制） |
 | `users.conf.example` | 监控用户列表示例，部署时复制为 `users.conf` |
 | `tests/` | 单元测试，`pytest -q` 运行 |
 
@@ -74,7 +77,46 @@
 
 ## 部署步骤
 
-### 用 deploy.sh 一键部署（推荐）
+### 用 Docker 部署（推荐，最省心）
+
+不想折腾虚拟环境、systemd 这些，用 Docker 是最省心的方式：
+
+```bash
+git clone https://github.com/42419/douyin-monitor.git
+cd douyin-monitor
+docker compose up -d
+```
+
+第一次启动时，容器会自动在 `./data` 目录下生成 `.env` 和 `users.conf` 模板（因为还没配置，容器会打印错误提示然后退出，这是正常的，不是 bug）：
+
+```bash
+docker compose logs        # 看到 "未配置 DINGTALK_TOKEN" 之类的提示
+vi data/.env                # 参照下文「配置说明」填好推送渠道
+vi data/users.conf           # 添加要监控的抖音账号
+docker compose up -d         # 配置好之后重新启动
+```
+
+`.env`、`users.conf`、`state/`（每个账号的运行状态）、`log/`、`status.json` 全部落在宿主机的 `./data` 目录里，跟着这一个目录走，容器可以随时删掉重建，数据不会丢；升级也只需要拉最新代码重新 build：
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+日常运维：
+
+```bash
+docker compose logs -f            # 实时看日志
+docker compose ps                 # 看容器状态（含健康检查结果）
+docker compose restart            # 重启
+docker compose down               # 停止并移除容器（数据还在 ./data，不会丢）
+```
+
+想开 Web 状态面板的话，`data/.env` 里把 `WEB_ENABLED` 改成 `true`，重启容器后访问 `http://宿主机IP:8787`。`docker-compose.yml` 里默认把端口映射绑定在 `127.0.0.1`，只能本机访问；如果要在局域网访问，把 `docker-compose.yml` 里端口映射的 `127.0.0.1:` 前缀去掉，同时 `.env` 里 `WEB_HOST` 改成 `0.0.0.0`（面板本身不做鉴权，注意访问范围）。
+
+容器自带一个宽松的健康检查（`status.json` 超过 1 小时没更新就判定不健康），`docker compose ps` 或 `docker inspect` 能看到健康状态，方便配合宿主机的监控/告警。
+
+### 用 deploy.sh 一键部署
 
 ```bash
 chmod +x deploy.sh
@@ -279,9 +321,21 @@ log/
 
 ## 常见问题
 
+**Q: `docker compose up -d` 之后容器一直重启/退出？**
+
+先 `docker compose logs` 看一眼，第一次启动大概率是因为 `.env` 还没配（容器会自动生成模板但里面推送渠道的 token 是空的，`Config.load()` 会正确地快速失败而不是带着错误配置硬跑）。按日志提示编辑 `data/.env` 和 `data/users.conf`，再 `docker compose up -d` 一次。如果编辑过后还在重启，用 `docker compose logs -f` 看具体报错，八成是配置项填错了格式。
+
+**Q: Docker 部署下 Web 面板打不开？**
+
+三件事挨个检查：`data/.env` 里 `WEB_ENABLED` 是不是 `true`；`docker-compose.yml` 里的端口映射有没有生效（`docker compose ps` 看一下）；如果是从局域网/其它设备访问，`.env` 里 `WEB_HOST` 得改成 `0.0.0.0`（默认 `127.0.0.1` 只能容器自己或宿主机本机访问），改完都要 `docker compose up -d` 重启容器生效。
+
+**Q: Docker 部署要怎么更新到最新版本？**
+
+`git pull` 拉最新代码，然后 `docker compose up -d --build` 重新构建镜像并重启容器。`data/` 目录不会被 build 过程动到，配置和运行数据都还在。
+
 **Q: 脚本提示"监控脚本已在运行，请勿重复启动"，但我确认没有别的进程在跑？**
 
-检查工作目录下的 `monitor.pid` 文件锁是否被异常进程占用，或者上次进程是否被强行杀死后系统还没释放文件锁。可以用 `lsof monitor.pid` 或 `fuser monitor.pid` 看看是否真的有进程持有锁；确认无进程占用后可以直接删除该文件再重启，或者直接 `./deploy.sh restart`。
+检查工作目录下的 `monitor.pid` 文件锁是否被异常进程占用，或者上次进程是否被强行杀死后系统还没释放文件锁。可以用 `lsof monitor.pid` 或 `fuser monitor.pid` 看看是否真的有进程持有锁；确认无进程占用后可以直接删除该文件再重启，或者直接 `./deploy.sh restart`（Docker 部署的话 `docker compose restart` 就行，容器重建会自然清掉旧的 PID 文件）。
 
 **Q: 一直收不到任何通知，是不是配置错了？**
 

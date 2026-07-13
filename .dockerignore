@@ -1,0 +1,40 @@
+# 版本控制
+.git
+.gitignore
+
+# 运行时配置和数据（这些应该挂载进容器，不应该打进镜像）
+.env
+users.conf
+state/
+log/
+status.json
+monitor.pid
+nohup.log
+.backup_*/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+venv/
+.venv/
+env/
+ENV/
+
+# 测试
+tests/
+
+# 部署脚本相关（Docker 是独立的部署方式，不需要 deploy.sh 及其产物）
+deploy.sh
+*.bak_*
+
+# 文档
+README.md
+requirements-dev.txt
+
+# 编辑器/系统
+.vscode/
+.idea/
+.DS_Store
+*.swp
