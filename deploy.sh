@@ -174,14 +174,14 @@ _fetch_to_tmp() {
     rm -rf "$tmp_dir"
 
     if command -v git &>/dev/null; then
-        info "使用 git clone --depth 1 ..."
+        info "使用 git clone --depth 1 ..." >&2
         if ! git clone --depth 1 "https://github.com/$GITHUB_REPO.git" "$tmp_dir" 2>/tmp/fetch_err.log; then
             cat /tmp/fetch_err.log >&2
             error "git clone 失败，请检查网络连接"
         fi
         rm -rf "$tmp_dir/.git"
     else
-        info "未检测到 git，使用 curl 下载 tarball ..."
+        info "未检测到 git，使用 curl 下载 tarball ..." >&2
         if ! curl -fsSL "https://github.com/$GITHUB_REPO/archive/refs/heads/main.tar.gz" -o /tmp/douyin-monitor.tar.gz 2>/tmp/fetch_err.log; then
             cat /tmp/fetch_err.log >&2
             error "下载失败，请检查网络连接或安装 git"
@@ -208,29 +208,29 @@ fetch_code_fresh() {
     ok "代码下载完成"
 }
 
-# update 时：下载新代码，但保留 .env / users.conf / state / log / venv
+# update 时：下载新代码，只覆盖代码文件本身，不碰其它任何东西。
+# 之前的实现是 rm -rf 整个 WORK_DIR 再搬回去，坏处是：
+#   1. cmd_update 在调用这里之前刚创建的 .backup_* 回滚备份，会被一起删掉，
+#      等于"备份"从来没真正存在过；
+#   2. venv/ 不在保留名单里，每次 update 都会被删掉，setup_venv 只能整个重建，
+#      比按需 pip install 慢很多。
+# 改成跟 sync_code_files 一样，只精确覆盖代码相关的几个文件/目录，
+# .env / users.conf / state / log / venv / .backup_* 等全部原地不动，
+# 不需要再手动备份-恢复。
 fetch_code_update() {
     info "从 GitHub 下载最新代码（$GITHUB_REPO）..."
     local tmp_dir
     tmp_dir=$(_fetch_to_tmp)
 
-    # 备份用户数据
-    local preserve_dir="${WORK_DIR}.preserve_$$"
-    mkdir -p "$preserve_dir"
-    for item in .env users.conf state log status.json; do
-        [ -e "$WORK_DIR/$item" ] && cp -r "$WORK_DIR/$item" "$preserve_dir/"
-    done
+    cp "$tmp_dir/douyin_monitor.py" "$WORK_DIR/"
+    rm -rf "$WORK_DIR/douyin_monitor"
+    cp -r "$tmp_dir/douyin_monitor" "$WORK_DIR/"
+    find "$WORK_DIR/douyin_monitor" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+    cp "$tmp_dir/requirements.txt" "$WORK_DIR/"
+    cp "$tmp_dir/env.example" "$WORK_DIR/" 2>/dev/null || true
+    cp "$tmp_dir/users.conf.example" "$WORK_DIR/" 2>/dev/null || true
 
-    # 替换代码目录
-    rm -rf "$WORK_DIR"
-    mv "$tmp_dir" "$WORK_DIR"
-
-    # 恢复用户数据
-    for item in .env users.conf state log status.json; do
-        [ -e "$preserve_dir/$item" ] && cp -r "$preserve_dir/$item" "$WORK_DIR/"
-    done
-    rm -rf "$preserve_dir"
-
+    rm -rf "$tmp_dir"
     ok "代码更新完成"
 }
 
@@ -769,8 +769,17 @@ cmd_update() {
         info "已备份旧代码到 $backup_dir（确认无误后可自行删除）"
     fi
 
-    # 从 GitHub 拉取最新代码（自动保留 .env/users.conf/state/log）
-    fetch_code_update
+    # 代码来源优先级：如果是从一个真实存在代码、且和 WORK_DIR 不是同一个目录的
+    # 本地目录运行的（比如在开发中的仓库里执行 ./deploy.sh update --dir /opt/xxx），
+    # 就用本地代码，方便本地改完直接测、也不会把 fork 出来的自定义代码覆盖掉；
+    # 否则（比如 curl 一键部署、或者就在 WORK_DIR 自己里面装的 deploy.sh 自我更新）
+    # 才从 GitHub 拉取最新代码。
+    if [ -f "$SCRIPT_DIR/douyin_monitor.py" ] && [ "$(cd "$SCRIPT_DIR" && pwd)" != "$(cd "$WORK_DIR" && pwd)" ]; then
+        sync_code_files
+    else
+        # 从 GitHub 拉取最新代码（只覆盖代码文件，.env/users.conf/state/log/venv 都不动）
+        fetch_code_update
+    fi
 
     setup_venv
     sync_env_defaults

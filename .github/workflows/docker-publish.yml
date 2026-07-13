@@ -63,8 +63,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Sync README to Docker Hub
-        uses: peter-evans/dockerhub-description@v4
+        uses: peter-evans/dockerhub-description@v5
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          # 用跟登录一样的 access token，不用账号密码：
+          # 1. Docker Hub 官方文档明确 password 字段可以是
+          #    "password or Personal Access Token (read/write/delete scope)"
+          # 2. 如果账号开了 2FA，密码登录会被 Docker Hub 直接拒绝返回
+          #    401，这也是最常见的 401 原因；token 不受此影响
+          # 注意：这个 token 需要有 read/write 权限，跟 docker push 用的一致即可
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ env.IMAGE_NAME }}
