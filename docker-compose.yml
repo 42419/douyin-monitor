@@ -40,3 +40,5 @@ services:
     volumes:
       # 当前目录挂载到容器 /data，.env、users.conf、state/、log/ 全在这里
       - .:/data
+      # 跟随宿主机时区（容器内时间显示与宿主机一致）
+      - /etc/localtime:/etc/localtime:ro
