@@ -139,24 +139,38 @@ configure_workdir() {
     echo "=========================================="
     echo ""
     echo "工作目录用于存放脚本、配置文件、状态数据和日志。"
-    echo "默认路径: $DEFAULT_WORK_DIR"
+
+    # 如果当前脚本所在目录本身就是一份代码（比如 git clone 下来直接跑），
+    # 默认建议就地部署，不再额外建议 /opt/douyin-monitor，
+    # 避免出现"clone 一份 + 复制一份"两份高度重复的代码。
+    # 仍然可以在下面手动输入别的路径，回到"复制出一份独立运行目录"的老用法。
+    local suggested_dir="$DEFAULT_WORK_DIR"
+    if [ -f "$SCRIPT_DIR/douyin_monitor.py" ]; then
+        suggested_dir="$SCRIPT_DIR"
+        echo "检测到当前目录（$SCRIPT_DIR）已经包含源码，默认直接原地部署，"
+        echo "不会再复制一份到 $DEFAULT_WORK_DIR。如果想装到别的目录，下面手动输入路径即可。"
+    fi
+    echo "默认路径: $suggested_dir"
     echo ""
     if [ -n "$OPT_DIR" ]; then
         WORK_DIR="$OPT_DIR"
         ok "使用 --dir 指定的工作目录: $WORK_DIR"
         return
     fi
-    read -r -p "请指定工作目录路径（直接回车使用默认）: " custom_dir
+    read -r -p "请指定工作目录路径（直接回车使用默认 $suggested_dir）: " custom_dir
     custom_dir="$(echo "$custom_dir" | xargs)"
     if [ -n "$custom_dir" ]; then
         validate_input "$custom_dir" "工作目录路径"
         WORK_DIR="$custom_dir"
     else
-        WORK_DIR="$DEFAULT_WORK_DIR"
+        WORK_DIR="$suggested_dir"
     fi
     ok "工作目录: $WORK_DIR"
 
-    if [ -f "$WORK_DIR/douyin_monitor.py" ]; then
+    # WORK_DIR 就是 SCRIPT_DIR 时，douyin_monitor.py 只是刚 clone 下来的源码，
+    # 不代表之前装过，不用弹"重新安装"确认；只有复制到别的目录、
+    # 且那个目录已经有 douyin_monitor.py 时，才是真的"之前装过一次"。
+    if [ "$WORK_DIR" != "$SCRIPT_DIR" ] && [ -f "$WORK_DIR/douyin_monitor.py" ]; then
         warn "该目录看起来已经装过一次了（存在 douyin_monitor.py）"
         read -r -p "确定要在这个目录上重新安装吗？已有的 .env/users.conf/state/log 不会被覆盖 (y/n): " CONFIRM
         if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
