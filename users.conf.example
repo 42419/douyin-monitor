@@ -1,0 +1,13 @@
+# 监控列表：一行一个账号
+#
+# 格式：  <sec_user_id>|<昵称>
+#
+# sec_user_id 是抖音账号的稳定 ID（以 MS4wLjABAAAA 开头）。
+#   不知道怎么写？直接用主页链接即可 —— dywatch 会调用 DTK 的
+#   /api/v1/tools/parse-url 把它转成 sec_user_id（零成本、不消耗身份）：
+#       dywatch add "https://www.douyin.com/user/MS4wLjABAAAA..."
+#
+# 昵称只用于通知展示，可以随便写，也可以与别的账号重复。
+# # 开头为注释，空行忽略。运行中修改本文件**无需重启**（按 mtime 自动热加载）。
+
+MS4wLjABAAAA4MjTvxSsNOjHfi9kfyRdu0KMKRHA1dPNv1WQQwW0OKY|示例账号

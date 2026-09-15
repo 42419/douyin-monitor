@@ -1,0 +1,45 @@
+[Unit]
+Description=dywatch —— 抖音账号视频监控（基于 Douyin_TikTok_Download_API v5）
+Documentation=file:@HOME_DIR@/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# 运行身份由 install.sh 按执行安装的账号填入（本工具不再创建专用系统用户）。
+Type=simple
+User=@RUN_USER@
+Group=@RUN_GROUP@
+WorkingDirectory=@HOME_DIR@
+Environment=MONITOR_HOME=@HOME_DIR@
+ExecStart=@HOME_DIR@/.venv/bin/python -m dywatch run
+
+# 优雅停止：收到 SIGTERM 后等在飞的请求收尾（见 runtime/loop 的实现），
+# 超时才强杀。30 秒足够让一轮里最慢的那个账号写完状态。
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=always
+RestartSec=10
+
+# --- 加固。这个进程只需要读自己的目录、写状态库与日志、访问 DTK ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# 若 MONITOR_HOME 在 /home 下，install.sh 会把这一项改成 false，否则工作目录写不进去
+ProtectHome=@PROTECT_HOME@
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+# 只有工作目录可写（状态库、日志、users.conf 都在这里）
+ReadWritePaths=@HOME_DIR@
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# 日志走 journald 与应用自己的文件。轮转由 logrotate 管，见 deploy/logrotate.conf
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

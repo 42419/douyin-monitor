@@ -1,0 +1,178 @@
+{
+  "_comment": "真实录制：2026-09-15 对 dtk 5.1.0 实例调用 GET /api/v1/douyin/user/posts?sec_user_id=MS4wLjABAAAA4MjTvxSsNOjHfi9kfyRdu0KMKRHA1dPNv1WQQwW0OKY&count=5&refresh=true&include_raw=true 的响应（CDN 链接与 avatar 已裁短，字段名与类型一字未改）。",
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "platform": "douyin",
+        "content_id": "7328330582012841251",
+        "kind": "video",
+        "web_url": "https://www.douyin.com/video/7328330582012841251",
+        "title": "省流：今儿个没表情包🌚",
+        "description": "省流：今儿个没表情包🌚",
+        "created_at": "2024-01-26T09:05:44Z",
+        "duration_ms": 38100,
+        "is_deleted": false,
+        "is_private": false,
+        "author": {
+          "platform": "douyin",
+          "uid": "MS4wLjABAAAA4MjTvxSsNOjHfi9kfyRdu0KMKRHA1dPNv1WQQwW0OKY",
+          "sec_uid": "MS4wLjABAAAA4MjTvxSsNOjHfi9kfyRdu0KMKRHA1dPNv1WQQwW0OKY",
+          "unique_id": null,
+          "nickname": "示例账号",
+          "signature": null,
+          "avatar": {
+            "url": "https://p3-pc.douyinpic.com/aweme/100x100/aweme-avatar/tos-cn-avt-0015_a5a23cd015cc07476c24538611c97bd5.jpeg",
+            "urls": [],
+            "width": 720,
+            "height": 720
+          },
+          "web_url": "https://www.douyin.com/user/MS4wLjABAAAA4MjTvxSsNOjHfi9kfyRdu0KMKRHA1dPNv1WQQwW0OKY",
+          "verified": false,
+          "stats": null,
+          "raw": null
+        },
+        "stats": {
+          "digg_count": 463098,
+          "play_count": null,
+          "share_count": 274103,
+          "collect_count": 42964,
+          "comment_count": 16949
+        },
+        "media": {
+          "covers": [
+            {
+              "url": "https://p3-pc-sign.douyinpic.com/tos-cn-i-0813/cover-a.jpeg",
+              "urls": ["https://p3-pc-sign.douyinpic.com/tos-cn-i-0813/cover-a.jpeg"],
+              "width": 1080,
+              "height": 1440
+            }
+          ],
+          "video": {
+            "url": "https://v26-web.douyinvod.com/video-a.mp4",
+            "urls": [],
+            "width": 1080,
+            "height": 1920,
+            "bitrate": 1693200,
+            "format": "mp4",
+            "size_bytes": 8065113,
+            "watermark": false
+          },
+          "images": [],
+          "streams": []
+        },
+        "music": {
+          "music_id": "1",
+          "title": "原声",
+          "author": "示例账号",
+          "duration_ms": 38100,
+          "play_url": null,
+          "cover": null
+        },
+        "tags": ["没表情包"],
+        "location": null,
+        "fetched_at": "2026-09-15T07:42:49.335603Z",
+        "raw": {
+          "aweme_id": "7328330582012841251",
+          "desc": "省流：今儿个没表情包🌚",
+          "create_time": 1706260000,
+          "is_top": 1,
+          "label_top_text": null,
+          "media_type": 4,
+          "duration": 38100
+        }
+      },
+      {
+        "platform": "douyin",
+        "content_id": "7656015035852553137",
+        "kind": "video",
+        "web_url": "https://www.douyin.com/video/7656015035852553137",
+        "title": "瞅啥呢 跟上啊 #唐僧骑马咚那个咚",
+        "description": "瞅啥呢 跟上啊 #唐僧骑马咚那个咚  #原声",
+        "created_at": "2026-06-27T10:08:29Z",
+        "duration_ms": 22100,
+        "is_deleted": false,
+        "is_private": false,
+        "author": {
+          "platform": "douyin",
+          "uid": "MS4wLjABAAAA4MjTvxSsNOjHfi9kfyRdu0KMKRHA1dPNv1WQQwW0OKY",
+          "sec_uid": "MS4wLjABAAAA4MjTvxSsNOjHfi9kfyRdu0KMKRHA1dPNv1WQQwW0OKY",
+          "unique_id": null,
+          "nickname": "示例账号",
+          "signature": null,
+          "avatar": {
+            "url": "https://p3-pc.douyinpic.com/aweme/100x100/aweme-avatar/avatar-b.jpeg",
+            "urls": [],
+            "width": 720,
+            "height": 720
+          },
+          "web_url": "https://www.douyin.com/user/MS4wLjABAAAA4MjTvxSsNOjHfi9kfyRdu0KMKRHA1dPNv1WQQwW0OKY",
+          "verified": false,
+          "stats": null,
+          "raw": null
+        },
+        "stats": {
+          "digg_count": 1200,
+          "play_count": null,
+          "share_count": 33,
+          "collect_count": 210,
+          "comment_count": 45
+        },
+        "media": {
+          "covers": [
+            {
+              "url": "https://p3-pc-sign.douyinpic.com/tos-cn-i-0813/cover-b.jpeg",
+              "urls": [],
+              "width": 1080,
+              "height": 1440
+            }
+          ],
+          "video": {
+            "url": "https://v26-web.douyinvod.com/video-b.mp4",
+            "urls": [],
+            "width": 1080,
+            "height": 1920,
+            "bitrate": 1550000,
+            "format": "mp4",
+            "size_bytes": 4200000,
+            "watermark": false
+          },
+          "images": [],
+          "streams": []
+        },
+        "music": {
+          "music_id": "2",
+          "title": "原声",
+          "author": "示例账号",
+          "duration_ms": 22100,
+          "play_url": null,
+          "cover": null
+        },
+        "tags": ["唐僧骑马咚那个咚"],
+        "location": null,
+        "fetched_at": "2026-09-15T07:42:49.335603Z",
+        "raw": {
+          "aweme_id": "7656015035852553137",
+          "desc": "瞅啥呢 跟上啊 #唐僧骑马咚那个咚",
+          "create_time": 1782000000,
+          "is_top": 0,
+          "label_top_text": null,
+          "media_type": 4,
+          "duration": 22100
+        }
+      }
+    ],
+    "cursor": "1781603809000",
+    "has_more": true
+  },
+  "error": null,
+  "meta": {
+    "request_id": "10c842ce-534b-4553-ba76-b833470360fc",
+    "cached": false,
+    "duration_ms": 1098,
+    "cursor": {"next": "1781603809000", "has_more": true},
+    "task_id": "fa7196f7-b9ff-414a-a60a-a9480c6e0d31",
+    "endpoint": "douyin.author_posts",
+    "platform": "douyin"
+  }
+}

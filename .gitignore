@@ -1,0 +1,24 @@
+# 临时/调试产物
+.tmp/
+*.tmp
+
+# 运行时状态与凭据
+data/
+log/
+*.db
+*.db-wal
+*.db-shm
+.env
+monitor.pid
+
+# 用户配置（含被监控账号，不入库）
+users.conf
+status.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
