@@ -43,7 +43,7 @@ Telegram / 通用 webhook 推送通知。
 ```bash
 sudo apt update && sudo apt install -y python3 python3-venv
 git clone <本仓库> && cd douyin-monitor
-sudo bash deploy/install.sh      # 建 .venv、装 systemd 单元与 logrotate、生成配置模板
+sudo bash deploy/install.sh      # 建 .venv、装 systemd 单元与日志轮转 cron、生成配置模板
 
 vi /opt/douyin-monitor/.env          # 填 DTK_API_KEY（要用通知就一并填渠道）
 vi /opt/douyin-monitor/users.conf    # 填要监控的账号
@@ -60,10 +60,12 @@ journalctl -u dywatch -f
 两条路径做的事不一样：
 
 - **首次安装**：建 `.venv` 装依赖 → 生成 `.env` / `users.conf` 模板 → 装 systemd 单元与
-  logrotate 配置 → 交接目录属主。它**不**替你填 API Key：凭据不该由脚本猜。
+  日志轮转 cron → 交接目录属主。它**不**替你填 API Key：凭据不该由脚本猜。
 - **升级**（`git pull` 后重跑同一条命令）：用 `rsync --delete` 同步代码（`.env` /
   `users.conf` / `data/` / `log/` / `.venv/` 一律不碰，旧版本删掉的源码文件会被清理）
-  → 重装依赖 → 刷新 systemd/logrotate 配置 → 如果服务正在跑，问你要不要立即重启
+  → 重装依赖 → 刷新 systemd 单元与日志轮转 cron（**并删掉老版本留在
+  `/etc/logrotate.d/dywatch` 的那份配置**，见下面的日志轮转说明）→ 如果服务正在跑，
+  问你要不要立即重启
   （`--yes` 直接重启，不问）。**不加 `--yes` 又不重启的话，新代码不会生效**，脚本会在
   最后提醒你手动 `systemctl restart dywatch`。
 
@@ -291,6 +293,8 @@ DTK 的归一化结果不暴露置顶，只有 `include_raw=true` 时 `raw.is_to
 | 通知里没有"播放"数            | 正常。抖音的 `play_count` 实测恒为 null，本工具不显示平台没说过的数字                  |
 | 面板打不开                    | `WEB_ENABLED=true`；局域网访问需 `WEB_HOST=0.0.0.0`（面板无鉴权，请自行加反代）        |
 | 想确认配置有没有生效          | `config-check` 会打印每一项的**来源**（默认值 / `.env` / 环境变量）                    |
+| 日志每 15 分钟被切一次        | Armbian 的 `armbian-truncate-logs` 用 `logrotate --force` 强制轮转。确认 `/etc/logrotate.d/dywatch` 已删（重跑一遍 `install.sh` 就会删） |
+| 日志一直不轮转                | `ls /etc/cron.d/dywatch` 在不在、cron 服务活着没（`systemctl status cron`）；手动跑一次 `logrotate --state /var/lib/dywatch/logrotate.status /etc/dywatch/logrotate.conf` 看报错 |
 
 日志：
 
@@ -299,7 +303,35 @@ log/info/monitor.log     关键事件 + 每轮汇总（日常看这个）
 log/debug/monitor.log    完整细节（排障）
 ```
 
-轮转与压缩交给 logrotate（`deploy/logrotate.conf`），应用自己不轮转。
+### 日志轮转
+
+轮转与压缩交给 logrotate，应用自己不轮转。但**配置不装进 `/etc/logrotate.d`**，而是：
+
+| 东西 | 位置 | 说明 |
+| ---- | ---- | ---- |
+| 轮转配置 | `/etc/dywatch/logrotate.conf` | 由 `deploy/logrotate.conf` 生成，改"留多久"改这里 |
+| 触发者 | `/etc/cron.d/dywatch` | 每小时第 17 分钟跑一次 `logrotate` |
+| 状态文件 | `/var/lib/dywatch/logrotate.status` | 与系统 logrotate 完全隔离 |
+
+节奏：`daily` + `maxsize 10M` → 跨天后第一次运行切一次（= 每天一次），单文件涨过 10M
+最多延迟 1 小时切；`rotate 14` + `compress` 保留 14 份。
+
+**为什么不放 `/etc/logrotate.d`**：Armbian 的 `/etc/cron.d/armbian-truncate-logs` 每 15 分钟
+跑一次 `/usr/lib/armbian/armbian-truncate-logs`，当 `/var/log` 用量 ≥75% 时执行
+`logrotate --force /etc/logrotate.conf`。`--force` 会**跳过"今天是否已轮转过"的判断**，
+把 `/etc/logrotate.d` 下所有配置强制轮转一遍——包括本工具的。表现就是 `monitor.log`
+每 15 分钟被切一次、14 份归档不到 4 小时就被挤掉，日志几乎没法回看。
+自带 cron + 独立 state 之后，别人的 `--force` 再也波及不到这里。
+
+排障用的几条命令：
+
+```bash
+ls -la --time-style=full-iso /opt/douyin-monitor/log/info/   # 归档时间戳应是按天，不是 15 分钟
+cat /etc/cron.d/dywatch                                      # 看触发节奏
+logrotate --debug /etc/dywatch/logrotate.conf                # 干跑一遍，验证配置
+sudo logrotate --state /var/lib/dywatch/logrotate.status /etc/dywatch/logrotate.conf  # 手动轮转一次
+journalctl -t dywatch-logrotate                              # cron 执行失败时会写这里
+```
 
 ---
 

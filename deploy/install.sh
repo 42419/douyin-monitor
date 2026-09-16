@@ -10,12 +10,21 @@
 # 是否已存在），两条路径做的事不同：
 #
 #   首次安装：建 .venv 装依赖 → 生成 .env / users.conf 模板 → 装 systemd 单元与
-#             logrotate 配置 → 交接目录属主
+#             日志轮转（独立 cron）→ 交接目录属主
 #   升级    ：用 rsync --delete 同步代码（不碰 .env / users.conf / data / log /
-#             .venv）→ 重装依赖 → 刷新 systemd 单元与 logrotate 配置 → 如果服务
+#             .venv）→ 重装依赖 → 刷新 systemd 单元与日志轮转配置 → 如果服务
 #             正在跑，询问（或 --yes 直接）重启，否则新代码不会生效
 #
 # 每一步都幂等：反复跑不会破坏已有配置，也不会重复做无意义的事。
+#
+# **日志轮转不装进 /etc/logrotate.d**：Armbian 的 /etc/cron.d/armbian-truncate-logs
+# 每 15 分钟跑一次 /usr/lib/armbian/armbian-truncate-logs，只要 /var/log 用量 ≥75%
+# 就执行 `logrotate --force /etc/logrotate.conf`。--force 会跳过"今天是否已轮转过"的
+# 日期判断，把 /etc/logrotate.d 下的配置（含本工具旧版本装进去的那份）全部强制轮转，
+# 表现就是 monitor.log 每 15 分钟被切一次、14 份归档不到 4 小时就被挤掉。
+# 改成由自己的 cron（/etc/cron.d/dywatch）调用只属于本工具的配置
+# （/etc/dywatch/logrotate.conf + 独立 state 文件）之后，别人的 --force 再也波及不到。
+# 升级路径会把老版本留下的 /etc/logrotate.d/dywatch 一并删掉。
 #
 # **不创建专用系统用户**：服务以"执行安装的那个账号"身份运行（sudo 时取 SUDO_USER），
 # 所以你 vi / .venv/bin/python 都是自己的账号，不用 sudo -u 到处切换。
@@ -70,7 +79,7 @@ ask_restart_now() {
 }
 
 # ------------------------------------------------------------- 前置检查 --
-[[ $EUID -eq 0 ]] || die "请用 sudo 运行（要写 /etc/systemd/system 与 /etc/logrotate.d）"
+[[ $EUID -eq 0 ]] || die "请用 sudo 运行（要写 /etc/systemd/system、/etc/cron.d 与 /etc/dywatch）"
 command -v python3 >/dev/null 2>&1 || die "没有 python3：apt install python3 python3-venv"
 python3 -c 'import venv' 2>/dev/null || die "缺少 venv 模块：apt install python3-venv"
 
@@ -112,10 +121,11 @@ info "模式：$([ "$IS_UPGRADE" = 1 ] && echo 升级 || echo 首次安装)"
 if [[ "$CHECK_ONLY" = 1 ]]; then
     say "仅检测（--check），未做任何改动"
     if [[ "$IS_UPGRADE" = 1 ]]; then
-        info "会：同步代码、重装依赖、刷新 systemd/logrotate 配置"
+        info "会：同步代码、重装依赖、刷新 systemd 单元与日志轮转 cron"
+        info "会：清掉老版本遗留的 /etc/logrotate.d/dywatch（它会被 Armbian 每 15 分钟强制轮转）"
         [[ "$SERVICE_WAS_ACTIVE" = 1 ]] && info "会：询问是否重启正在运行的服务（--yes 则直接重启）"
     else
-        info "会：创建 .venv、安装依赖、生成 .env/users.conf 模板、安装 systemd 单元与 logrotate 配置"
+        info "会：创建 .venv、安装依赖、生成 .env/users.conf 模板、安装 systemd 单元与日志轮转 cron"
     fi
     exit 0
 fi
@@ -198,11 +208,64 @@ sed -e "s|@HOME_DIR@|$HOME_DIR|g" \
     deploy/dywatch.service > "$UNIT_PATH"
 systemctl daemon-reload
 
-say "安装 logrotate 配置"
+say "安装日志轮转（独立 cron，不装 /etc/logrotate.d）"
+
+# 老版本把配置装进了 /etc/logrotate.d，于是被 Armbian 的
+# `logrotate --force /etc/logrotate.conf` 每 15 分钟强制轮转一次。升级时必须拆掉，
+# 否则新装的那份 cron 配置再正确也没用——旧文件仍然会被别人的 --force 命中。
+if [[ -e /etc/logrotate.d/dywatch ]]; then
+    rm -f /etc/logrotate.d/dywatch
+    ok "已移除老版本的 /etc/logrotate.d/dywatch（它会被 armbian-truncate-logs 强制轮转）"
+fi
+
+mkdir -p /etc/dywatch /var/lib/dywatch
 sed -e "s|@HOME_DIR@|$HOME_DIR|g" \
     -e "s|@RUN_USER@|$RUN_USER|g" \
     -e "s|@RUN_GROUP@|$RUN_GROUP|g" \
-    deploy/logrotate.conf > /etc/logrotate.d/dywatch
+    deploy/logrotate.conf > /etc/dywatch/logrotate.conf
+chmod 0644 /etc/dywatch/logrotate.conf
+
+# /etc/cron.d 的文件名不能带点号（会被 run-parts 那套规则跳过），
+# 也不能让非 root 可写（cron 会拒绝执行整个文件），所以这里显式 chmod。
+cat > /etc/cron.d/dywatch <<'EOF'
+# dywatch 日志轮转 —— 只由本 cron 触发，刻意不放进 /etc/logrotate.d
+#
+# 为什么不放进 /etc/logrotate.d：Armbian 的 /etc/cron.d/armbian-truncate-logs 每 15 分钟
+# 运行 /usr/lib/armbian/armbian-truncate-logs，当 /var/log 用量 ≥75% 时执行
+# `logrotate --force /etc/logrotate.conf`。--force 会跳过"今天是否已轮转过"的判断，
+# 把 /etc/logrotate.d 下所有配置强制轮转一遍——包括本工具的，于是日志每 15 分钟被切一次、
+# 14 份归档不到 4 小时就被挤掉。放在这里 + 独立 state 文件，别人的 --force 就波及不到。
+#
+# 本文件由 deploy/install.sh 生成，手工改动会在下次升级时被覆盖。
+
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# 每小时第 17 分钟跑一次。配置里是 daily + maxsize 10M，于是：
+#   跨天后的第一次运行切一次（= 每天最多一次）；单文件涨过 10M 时最多延迟 1 小时切。
+# state 文件放在 /var/lib/dywatch 下，与系统 logrotate 的 /var/lib/logrotate/status 无关。
+17 * * * * root /usr/sbin/logrotate --state /var/lib/dywatch/logrotate.status /etc/dywatch/logrotate.conf >/dev/null 2>&1 || logger -t dywatch-logrotate 'logrotate 执行失败，见 /etc/dywatch/logrotate.conf'
+EOF
+chmod 0644 /etc/cron.d/dywatch
+
+# 轮转靠 cron 触发，所以这两样缺了日志就只涨不切——宁可现在吵一句，也别等磁盘满了才发现
+command -v logrotate >/dev/null 2>&1 \
+    || warn "没有找到 logrotate：apt install logrotate（否则日志只涨不切）"
+if command -v logrotate >/dev/null 2>&1; then
+    if logrotate --debug /etc/dywatch/logrotate.conf >/dev/null 2>&1; then
+        ok "logrotate 配置语法检查通过"
+    else
+        warn "logrotate 配置语法检查未通过：logrotate --debug /etc/dywatch/logrotate.conf"
+    fi
+fi
+if command -v systemctl >/dev/null 2>&1; then
+    cron_active=0
+    for unit in cron cronie crond; do
+        if systemctl is-active --quiet "$unit" 2>/dev/null; then cron_active=1; fi
+    done
+    [[ "$cron_active" = 1 ]] || warn "没检测到运行中的 cron 服务，日志不会自动轮转：systemctl status cron"
+fi
+ok "已装 /etc/dywatch/logrotate.conf + /etc/cron.d/dywatch（每小时检查一次）"
 
 # --------------------------------------------------------- 升级：按需重启 --
 RESTARTED=0
@@ -235,6 +298,11 @@ $(say 升级完成)
 $restart_note
 
   看日志：journalctl -u dywatch -f
+
+  日志轮转已改为独立 cron（/etc/cron.d/dywatch + /etc/dywatch/logrotate.conf），
+  老版本的 /etc/logrotate.d/dywatch 已移除——它在 Armbian 上会被每 15 分钟强制轮转一次。
+  确认一下现在的归档时间戳是不是按天走：
+      ls -la --time-style=full-iso $HOME_DIR/log/info/
 EOF
 else
     cat <<EOF

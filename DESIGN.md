@@ -38,7 +38,7 @@
 | 常驻 | **systemd**（`Type=simple`、`Restart=always`、`RestartSec=10`），这是唯一的部署形态 |
 | 信号 | 正确处理 `SIGTERM`（systemd 停止）/ `SIGINT`，等在飞请求收尾后退出 |
 | 路径 | 工作目录默认 `/opt/douyin-monitor`，`MONITOR_HOME` 可覆盖 |
-| 日志 | 应用只负责分级写入；**轮转压缩交给 logrotate**（Linux 标准分工） |
+| 日志 | 应用只负责分级写入；**轮转压缩交给 logrotate，但由本工具自己的 cron 触发**（不进 `/etc/logrotate.d`，见 D16） |
 | 时区 | 跟随宿主机（systemd 下自然继承）——通知里的时间必须是本地时间 |
 | 权限 | systemd 单元用运行账号（安装者的账号，**不另建专用用户**，见 D15）+ `NoNewPrivileges` + `ProtectSystem=strict` + `ReadWritePaths=` |
 | 文件权限 | 状态库 `0600`、日志目录 `0700`、`.env`（含 API Key）`0600` |
@@ -563,7 +563,8 @@ v5 的代码质量主要来自一批**成文且被强制执行的规矩**。本�
 - **单实例锁**：`fcntl.flock(MONITOR_HOME/monitor.pid, LOCK_EX|LOCK_NB)`；拿不到就打印
   "已在运行"并退出。**不实现 Windows 分支**（见 1.1）。
 - **日志**：应用只分级写入（`log/info` 与 `log/debug`），**轮转压缩交给 logrotate**
-  （`deploy/logrotate.conf` 随包提供）。
+  （`deploy/logrotate.conf` 随包提供，装到 `/etc/dywatch/logrotate.conf`，
+  由 `/etc/cron.d/dywatch` 每小时触发）。**不装 `/etc/logrotate.d`**，见 D16。
 
 一轮的形状（对齐旧项目 `run_loop`）：
 
@@ -926,8 +927,8 @@ douyin-monitor/
 ├── .tmp/                     # ★ 所有临时/探针/调试产物都放这里，**不落到 projects 根目录**
 ├── deploy/                   # 部署形态只有 systemd 一种，不做容器镜像
 │   ├── dywatch.service            # systemd 单元（硬化选项齐全）
-│   ├── logrotate.conf             # 日志轮转（应用不自己轮转）
-│   └── install.sh                 # Ubuntu 一键：建用户/目录/venv/systemd/logrotate
+│   ├── logrotate.conf             # 日志轮转（应用不自己轮转；装到 /etc/dywatch/，见 D16）
+│   └── install.sh                 # Ubuntu 一键：目录/venv/systemd/日志轮转 cron
 ├── src/dywatch/
 │   ├── __init__.py  __main__.py
 │   ├── cli.py                 # 参数、信号、PID 锁、--once/--status/--doctor/--config-check
@@ -1074,7 +1075,7 @@ douyin-monitor/
 | **S2** 循环与节奏 | ✅ | `loop.py` + `pacer.py` + `scheduler.py` + `pipeline.py`；`once` 从空库跑两轮：第一轮 `新增初始化 1 个`，第二轮 `均无变化`，无重复推送 |
 | **S3** 通知层 | ✅ | 六个渠道 + 静默空通知器 + `alerts.py` 抑制窗口；钉钉/企微/Bark/Server 酱/Telegram/webhook 的 payload 形状均有单测 |
 | **S4** 面板与探针 | ✅ | 只读面板 + `/healthz` `/readyz` `/metrics`；`status` 命令输出账号表 |
-| **S5** 交付 | ✅ | systemd 单元（加固齐全）+ logrotate + `install.sh` + README。**不做容器镜像**（D14） |
+| **S5** 交付 | ✅ | systemd 单元（加固齐全）+ 日志轮转（独立 cron，D16）+ `install.sh` + README。**不做容器镜像**（D14） |
 
 代码规模：`src/dywatch` **16 个模块**，测试 **112 项**（unit + replay）。
 
