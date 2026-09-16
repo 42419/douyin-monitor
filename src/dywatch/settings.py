@@ -176,6 +176,12 @@ class Settings:
         v = self.values
         errors: list[str] = []
 
+        if not v["DTK_API_KEY"]:
+            errors.append(
+                "DTK_API_KEY 未配置 —— 这是唯一必填项，留空时每个账号都会 401，"
+                "且不会让进程退出，只会一直安静地失败。先跑 `dywatch doctor` 确认。"
+            )
+
         if not v["DTK_BASE_URL"].startswith(("http://", "https://")):
             errors.append("DTK_BASE_URL 必须以 http:// 或 https:// 开头")
         if v["DTK_WAIT"] < 0:
@@ -247,9 +253,8 @@ class Settings:
         """Non-fatal remarks worth printing at startup."""
         v = self.values
         out: list[str] = []
-        if not v["DTK_API_KEY"]:
-            out.append("DTK_API_KEY 未配置 —— 任何真实请求都会 401")
-        elif not v["DTK_API_KEY"].startswith("dtk_"):
+        # DTK_API_KEY 为空已经是 validate() 里的硬错误，这里只补充"配了但形态像是错的"
+        if v["DTK_API_KEY"] and not v["DTK_API_KEY"].startswith("dtk_"):
             out.append(
                 "DTK_API_KEY 不以 dtk_ 开头，形态可能不对"
                 "（DTK 的 Key 是 dtk_<12位十六进制>_<32位base64url>，共 49 字符）"

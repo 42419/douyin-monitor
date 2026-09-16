@@ -56,15 +56,30 @@ sudo systemctl enable --now dywatch
 journalctl -u dywatch -f
 ```
 
-`install.sh` 做四件事，每件都幂等：建 `.venv` 装依赖 → 生成 `.env` / `users.conf` 模板 →
-装 systemd 单元与 logrotate 配置 → 交接目录属主。
-它**不**替你填 API Key：凭据不该由脚本猜。
+`install.sh` 会自动判断这是首次安装还是升级（看 `.venv` 和 systemd 单元是否已存在），
+两条路径做的事不一样：
+
+- **首次安装**：建 `.venv` 装依赖 → 生成 `.env` / `users.conf` 模板 → 装 systemd 单元与
+  logrotate 配置 → 交接目录属主。它**不**替你填 API Key：凭据不该由脚本猜。
+- **升级**（`git pull` 后重跑同一条命令）：用 `rsync --delete` 同步代码（`.env` /
+  `users.conf` / `data/` / `log/` / `.venv/` 一律不碰，旧版本删掉的源码文件会被清理）
+  → 重装依赖 → 刷新 systemd/logrotate 配置 → 如果服务正在跑，问你要不要立即重启
+  （`--yes` 直接重启，不问）。**不加 `--yes` 又不重启的话，新代码不会生效**，脚本会在
+  最后提醒你手动 `systemctl restart dywatch`。
+
+其他参数：`--check` 只检测当前是首次安装还是升级、缺什么依赖，不做任何改动；
+`sudo bash deploy/install.sh --yes` 可以做到全自动（升级 + 服务在跑就自动重启），
+适合写进你自己的升级脚本。
 
 **不创建专用系统用户。** 服务以"执行安装的那个账号"身份运行（`sudo` 时取 `SUDO_USER`，
 直接用 root 跑则服务也以 root 跑，脚本会提醒你）。所以后面的 `vi`、`doctor`、`once`
 都是你自己的账号，不需要 `sudo -u` 到处切换；隔离靠 systemd 单元里的
 `ProtectSystem=strict` + `ReadWritePaths`，不靠换用户。
 装到别的目录用 `sudo MONITOR_HOME=/srv/dywatch bash deploy/install.sh`。
+
+`DTK_API_KEY` 留空时 `dywatch run` 会在启动时直接拒绝（退出码 2），systemd 单元配了
+`RestartPreventExitStatus=2`，不会因此陷入"每 10 秒重启一次、日志刷屏"的死循环——
+会停在 `failed` 状态等你去 `vi .env` 填上，然后 `systemctl restart dywatch`。
 
 常用运维：
 

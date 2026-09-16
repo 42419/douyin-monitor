@@ -371,7 +371,7 @@ def main(argv: list[str] | None = None) -> int:
         }[command]
         return asyncio.run(runner())
 
-    # run / once：需要单实例锁
+    # run：需要单实例锁，拿不到就拒绝启动，避免两个常驻进程互相抢速率预算
     if command == "run":
         with single_instance_lock(settings.pid_path) as locked:
             if not locked:
@@ -382,6 +382,19 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 1
             return asyncio.run(cmd_run(settings, once=False))
+
+    # once：不需要锁（本来就是给已经常驻运行时的人工抽查用的），但拿不到锁时提示一声——
+    # 状态库是 WAL 模式（busy_timeout=15s），两边同时读写不会损坏数据，顶多互相等一下。
+    if command == "once":
+        with single_instance_lock(settings.pid_path) as locked:
+            if not locked:
+                print(
+                    f"提示：{settings.pid_path} 显示已有常驻实例在跑，这次 once 会跟它"
+                    "共用同一个状态库（WAL 模式，安全但可能互相等待）。",
+                    file=sys.stderr,
+                )
+        return asyncio.run(cmd_run(settings, once=True))
+
     return asyncio.run(cmd_run(settings, once=True))
 
 

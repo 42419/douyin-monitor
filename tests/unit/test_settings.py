@@ -74,7 +74,10 @@ def test_low_poll_interval_is_refused_not_silently_raised():
 
 
 def test_silent_mode_does_not_require_a_channel():
-    settings = load_settings(None, environ={"SILENT_MODE": "true", "NOTIFY_CHANNELS": ""})
+    settings = load_settings(
+        None,
+        environ={"DTK_API_KEY": "dtk_x", "SILENT_MODE": "true", "NOTIFY_CHANNELS": ""},
+    )
     assert settings.validate() == []
 
 
@@ -113,6 +116,23 @@ def test_secrets_are_masked_in_describe():
 def test_warnings_flag_a_key_that_is_not_a_dtk_key():
     settings = load_settings(None, environ={"DTK_API_KEY": "aX_7KvH7nhDWJKscKt"})
     assert any("dtk_" in note for note in settings.warnings())
+
+
+def test_empty_api_key_is_a_hard_validate_error_not_just_a_warning():
+    """`doctor` 一直硬拒绝空 Key；`validate()`（`dywatch run` 实际走的路径）以前不拒绝，
+    这条断言就是守住"两者行为一致"这件事的回归测试。"""
+    settings = load_settings(
+        None, environ={"DINGTALK_TOKEN": "t", "DINGTALK_SECRET": "SECxxx"}
+    )
+    errors = settings.validate()
+    assert any("DTK_API_KEY" in error for error in errors)
+
+
+def test_configured_api_key_does_not_repeat_the_missing_key_warning():
+    settings = load_settings(
+        None, environ={"DTK_API_KEY": "dtk_38c817704d0f_A5CMPbL1a7TowGb9LAfXYNAvYK6bjIwn"}
+    )
+    assert not any("DTK_API_KEY" in note for note in settings.warnings())
 
 
 def test_rate_warning_appears_when_the_pace_is_too_fast():

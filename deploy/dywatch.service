@@ -19,6 +19,10 @@ KillSignal=SIGTERM
 TimeoutStopSec=30
 Restart=always
 RestartSec=10
+# 退出码 2 = 配置校验没过（比如 DTK_API_KEY 没填）。这种情况自动重启没有意义——
+# 10 秒后用同一份配置再跑一次，结果不会变，只会在 journal 里刷屏。
+# 让它保持 failed 状态更容易被发现，改完 .env 后 `systemctl restart dywatch` 即可。
+RestartPreventExitStatus=2
 
 # --- 加固。这个进程只需要读自己的目录、写状态库与日志、访问 DTK ---
 NoNewPrivileges=true
