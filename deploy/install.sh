@@ -173,11 +173,22 @@ fi
 say "交接目录属主给 $RUN_USER"
 chown -R "$RUN_USER:$RUN_GROUP" "$HOME_DIR"
 
-# MONITOR_HOME 在 /home 或 /root 下时，单元里的 ProtectHome 必须放开，否则工作目录写不进去
+# MONITOR_HOME 在 /home 或 /root 下时，单元里的 ProtectHome 必须放开，否则工作目录写不进去。
+# 只看 HOME_DIR 还不够：.venv/bin/python 经常是指向别处解释器的符号链接
+# （比如用 pyenv 装在 /root/.pyenv 下的高版本 Python），ProtectHome=true 会把
+# /root 整个从服务的挂载命名空间里隐藏掉——即使 HOME_DIR 本身在 /opt 下，
+# systemd 在 exec 那一步也会因为看不见真正的解释器而报
+# "Failed to locate executable ...: No such file or directory"。
+# 这个坑是真实踩过的，所以除了 HOME_DIR，也把 .venv/bin/python 实际指向哪里查一遍。
 protect_home="true"
 case "$HOME_DIR" in
     /home/*|/root/*) protect_home="false" ;;
 esac
+real_python="$(readlink -f "$HOME_DIR/.venv/bin/python" 2>/dev/null || true)"
+case "$real_python" in
+    /home/*|/root/*) protect_home="false" ;;
+esac
+[[ "$protect_home" = "false" ]] && info "ProtectHome 将设为 false（HOME_DIR 或 venv 解释器落在 /home、/root 下）"
 
 say "安装 systemd 单元"
 sed -e "s|@HOME_DIR@|$HOME_DIR|g" \

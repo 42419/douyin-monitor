@@ -16,20 +16,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
-
-try:
-    from enum import StrEnum  # 标准库版本，3.11+ 才有
-except ImportError:  # Python 3.10：手工补一个行为一致的版本
-    from enum import Enum
-
-    class StrEnum(str, Enum):  # type: ignore[no-redef]
-        """`str(member)` 返回纯值而不是 `'ClassName.MEMBER'`，跟 3.11 的
-        `enum.StrEnum` 行为对齐——这份代码不少地方用 f-string 拼 kind，
-        少了这个 `__str__` 覆盖会拼出类名。"""
-
-        def __str__(self) -> str:
-            return str.__str__(self)
 
 
 class Kind(StrEnum):
