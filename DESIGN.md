@@ -534,9 +534,9 @@ v5 的代码质量主要来自一批**成文且被强制执行的规矩**。本�
 | `diff.py` | ★纯函数 `(prev_state, page, now, cfg) -> (events, next_state)` | 无时间副作用（`now` 外部传入） |
 | `state.py` | SQLite：schema 迁移、读写、事件审计；**唯一持久化出口** | 不做网络、不做判定 |
 | `render.py` | 事件 → 三类文案（markdown / 纯文本 / 短标题） | 不发送 |
-| `messages.py` | 全部文案常量与格式化（时间、时长、数字缩写、更新频率分级） | 不含逻辑分支 |
+| `messages.py` | 全部文案常量与格式化（时间、时长、数字缩写、**更新频率分级**、事件与 tombstone 原因的中文） | 不含逻辑分支 |
 | `notifiers/*` | 渠道 payload 构造 + 投递 + 单渠道失败隔离 | 不跨渠道重试、不改写文案 |
-| `webui.py` | 只读面板、`/healthz`、`/readyz`、`/api/state`、`/metrics` | 不做鉴权写入、不触发抓取 |
+| `webui.py` | 只读面板（状态页 + 单账号详情）、`/healthz`、`/readyz`、`/api/state`、`/api/health`、`/api/user/{id}`、`/metrics` | 不做鉴权、**不发上游请求**、不写状态库 |
 
 ### 4.3 并发与运行时模型
 
@@ -893,14 +893,31 @@ payload 形状直接参考 v5 `ops/channels.py`（已验证可用的形状，不
 
 ### 4.9 可观测性与降级
 
-- `/healthz`：进程活着（不碰依赖）
-- `/readyz`：能连 DTK（一次 `GET /api/v1/auth/me`）+ 能写状态库
-- `/api/state`：每账号状态、失败次数、已知作品数、最后更新时间、**更新频率分级
-  （日更 / 隔天更新 / 周更 / 半月更 / 月更 / 更新较少，沿用旧项目算法：排除置顶后按相邻发布时间间隔均值分类）**
-- `/metrics`：Prometheus 文本：`monitor_rounds_total`、`monitor_polls_total{result}`、
-  `monitor_new_posts_total{author}`、`monitor_removed_total`、`monitor_upstream_errors_total{code}`、
-  `monitor_account_fails{author}`、`monitor_last_success_timestamp`、`monitor_gate_open`
-- **上游健康卡片（可选）**：`GET /api/v1/system/status` 的版本 / 组件 / 身份池计数 / 存储
+**面板**（`webui.py`，`WEB_ENABLED=true` 时随主循环起一个后台线程）：
+
+| 路由 | 内容 | 备注 |
+|---|---|---|
+| `GET /` | 状态页：**LED 状态阵列**（24 格，按状态计数用最大余数法量化，小类别保底 1 格）+ 数据条 + 账号列表（含频率气泡）+ 详情弹窗 | 服务端渲染，`<meta refresh>` 30 秒自刷，只有弹窗用 JS |
+| `GET /api/user/{sec_user_id}` | 单账号详情：作者行、作品、**已消失作品（tombstone）**、**最近事件** | 读 SQLite（只 `SELECT`）；`400` 非法 ID / `404` 查无此人 / `503` 库读不出来，三者分开 |
+| `GET /api/state` | `status.json` 原文 | 给脚本用 |
+| `GET /api/health` | 精简小结（账号数 / 失败数 / 快照时间 / 闸门） | 机器可读 |
+| `/healthz` `/readyz` | 进程活着 / 依赖探针（状态库可读 + DTK 可达） | 见下 |
+
+- **面板不发任何上游请求、不消耗身份**：列表读每轮写一次的 `status.json`，详情读状态库。
+  打开它不会被风控，也不会因为上游抖动而变慢。这也是为什么"上游健康卡片"仍然是**可选未做**：
+  那需要面板去调 `GET /api/v1/system/status`，与上面这条性质冲突（见第 10 章）。
+- 视觉与交互（LED 阵列 / 数据条 / 列表 / 弹窗）来自旧项目 `douyin-monitor-enhance` 的面板；
+  数据源换成 SQLite 之后多出"已消失作品"与"最近事件"，`never_seen`（抖音对**形态合法但不存在**
+  的 `sec_user_id` 返回 `200 + items:[]`）单独一色标注——旧面板没有这个概念，
+  只有这里能让人一眼看出"加错 ID 了"。
+- `/healthz` 不碰任何依赖；`/readyz` 才探依赖（DTK 的 `/healthz`，无需鉴权），
+  "凭据对不对"是启动自检该回答的问题，不在每次探针里重答。
+- `/api/state` 每账号状态、失败次数、已知作品数、最后更新时间、**更新频率分级
+  （日更 / 隔天更新 / 周更 / 半月更 / 月更 / 更新较少：排除置顶后按相邻发布时间间隔均值分类，
+  与 `messages.frequency_stats()` 同一个实现）**
+- `/metrics`：Prometheus 文本：`dywatch_users`、`dywatch_rounds_total`、`dywatch_gate_open`、
+  `dywatch_known_posts{author}`、`dywatch_account_failures{author}`、`dywatch_never_seen_accounts`
+  （设计稿早期写的 `monitor_*` 前缀未落地，见第 10 章"尚未做"）
 - **启动横幅**（沿用旧项目：分组对齐打印关键信息，一眼确认生效配置）：
   PID、推送渠道、面板地址、抓取窗口、**请求节奏（账号间 3~8s / 轮询间隔 15~40s / 并发 5）**、
   确认轮数、日志级别
@@ -949,7 +966,7 @@ douyin-monitor/
 │   ├── notifiers/
 │   │   ├── base.py  composite.py  null.py
 │   │   └── dingtalk.py wecom.py bark.py serverchan.py telegram.py webhook.py
-│   └── webui.py               # 只读面板 + 探针 + metrics
+│   └── webui.py               # 只读面板（状态页 + 账号详情）+ 探针 + metrics
 └── tests/
     ├── unit/test_diff.py      # 新/删/分级确认/回归/挤出预算/全部消失/漏检/裁剪（重点）
     ├── unit/test_pacer.py     # 节奏与并发无关性
@@ -1076,10 +1093,10 @@ douyin-monitor/
 | **S1** 判定与状态 | ✅ | `diff.py` 纯函数 + `state.py` SQLite；**112 个测试通过** |
 | **S2** 循环与节奏 | ✅ | `loop.py` + `pacer.py` + `scheduler.py` + `pipeline.py`；`once` 从空库跑两轮：第一轮 `新增初始化 1 个`，第二轮 `均无变化`，无重复推送 |
 | **S3** 通知层 | ✅ | 六个渠道 + 静默空通知器 + `alerts.py` 抑制窗口；钉钉/企微/Bark/Server 酱/Telegram/webhook 的 payload 形状均有单测 |
-| **S4** 面板与探针 | ✅ | 只读面板 + `/healthz` `/readyz` `/metrics`；`status` 命令输出账号表 |
+| **S4** 面板与探针 | ✅ | 只读面板 + `/healthz` `/readyz` `/metrics`；`status` 命令输出账号表。**面板后从旧项目整体移植过一次**（LED 阵列 / 数据条 / 详情弹窗，见修正 #9） |
 | **S5** 交付 | ✅ | systemd 单元（加固齐全）+ 日志轮转（独立 cron，D16）+ `install.sh` + README。**不做容器镜像**（D14） |
 
-代码规模：`src/dywatch` **16 个模块**，测试 **112 项**（unit + replay）。
+代码规模：`src/dywatch` **18 个模块**，测试 **149 项**（unit + replay）。
 
 ### 实现过程中对设计的修正（都记在这里，免得以后当成 bug）
 
@@ -1093,9 +1110,18 @@ douyin-monitor/
 | 6 | 轮次汇总只报新/删/标题变更/失败 | 增加 **"新增初始化 N 个"** | 上线新账号时第一轮必然是初始化，不报出来会让人以为"什么都没发生" |
 | 7 | 轮转配置装进 `/etc/logrotate.d/`（由系统 logrotate 管） | 改由 `/etc/cron.d/dywatch` 调 `/etc/dywatch/logrotate.conf`，state 文件独立（见 D16） | 在 Armbian 上 `/etc/logrotate.d` 里的配置会被 `armbian-truncate-logs` 的 `logrotate --force` 每 15 分钟强制轮转一次（归档时间戳 `19:30 / 19:15 / 19:00…` 就是这么来的），`daily` 形同虚设、归档被迅速挤掉 |
 | 8 | `install.sh` 直接 `python3 -m venv` | 先在 `python3.14 → 3.11` 与 `python3` 中挑版本最高的（`PYTHON=` 可覆盖），已有 `.venv` 低于 3.11 时重建 | 项目要求 ≥3.11，但 Ubuntu 22.04 自带的 `python3` 是 3.10，要装到 `pip install .` 那一步才失败、报错还看不出是版本问题；实际部署时是在服务器上手工把脚本里三处 `python3` 改成 `python3.14` 才过去的——"每台机器打一次补丁"该由脚本自己解决 |
+| 9 | 面板"每个账号现在怎么样"（一张表 + 5 个数字） | **移植旧项目的面板**：LED 状态阵列 + 数据条 + 账号列表 + 详情弹窗；详情读 SQLite 后多出"已消失作品"与"最近事件"，`never_seen` 单独一色，闸门关闭时页面顶部出红色警示条 | 一屏的表格说不清"它是变了还是没变"：账号数一多就看不出谁在失败；旧面板那套读数式布局是跑过数月的成品。适配点是数据源——旧项目每账号一个 JSON 文件，这里换成 `authors`/`posts`/`tombstones`/`events` 四张表，于是"已消失"和"最近事件"本来就有落库，只是旧面板没有地方显示 |
+| 10 | 面板详情直接读每账号状态文件 | 改读状态库，并且**读不出来 ≠ 查无此人**：`400` 非法 ID、`404` 库里没这个账号、`503` 库打不开，前端分别显示 | 旧项目里两者都是"查不到"，**看的人会以为是配置问题去翻 users.conf**，而实际是库的问题 |
 
 ### 尚未做（明确不在第一版范围）
 
 - `known_ids_max` 之外的**历史回溯**（DTK 的 `/archive/backfill` 能做，但那会大量消耗身份）
 - 评论监控、粉丝曲线、多平台（TikTok）
 - 通知语言切换（文案已集中在 `messages.py`，加英文只改那一个文件）
+- **面板的上游健康卡片**（4.9 的"可选"）：要显示 DTK 版本 / 组件 / 身份池计数，就得让面板去调
+  `GET /api/v1/system/status`，这与"打开面板不产生任何上游请求"冲突。要做的话应当是**主循环**
+  定期取一次写进 `status.json`，面板继续只读快照——而不是让面板自己发请求
+- **`/metrics` 的指标名**：设计稿写的是 `monitor_*` 前缀（含 `monitor_polls_total{result}`、
+  `monitor_new_posts_total{author}`、`monitor_removed_total`、`monitor_upstream_errors_total{code}`、
+  `monitor_last_success_timestamp`），实现里用的是 `dywatch_*` 且少了几个。补齐需要从
+  `rounds` / `events` 两张审计表汇总，留给专门做监控接入的时候一次改掉（改名前先想清楚谁在抓它）

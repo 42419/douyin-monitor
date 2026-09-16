@@ -320,6 +320,17 @@ async def cmd_run(settings: Settings, *, once: bool) -> int:
             panel.start()
             for url in panel.urls(settings):
                 logger.info("panel.listening", url=url)
+            logger.info(
+                "panel.readonly",
+                hint="只读且无鉴权；列表读 status.json、详情读状态库，不发上游请求、不消耗身份",
+            )
+            if str(settings["WEB_HOST"]) not in ("127.0.0.1", "::1", "localhost"):
+                logger.warning(
+                    "panel.exposed",
+                    host=str(settings["WEB_HOST"]),
+                    hint="按这个地址监听等于把面板摊在网络上，而它没有鉴权；"
+                         "云服务器还要记得放通端口时自己评估",
+                )
         except OSError as exc:
             logger.error("panel.failed", error=str(exc))
     logger.info("=" * 60)

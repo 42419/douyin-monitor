@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .alerts import Deduplicator
+from .messages import freq_hint, frequency_stats, hours_since
 from .models import AuthorState, DiffConfig, RoundResult
 from .pacer import RequestPacer, RoundWaiter
 from .pipeline import run_author
@@ -218,6 +219,7 @@ class MonitorLoop:
 
         for sec_user_id, state in states.items():
             result = by_id.get(sec_user_id)
+            freq = frequency_stats(state.posts)
             entries.append(
                 {
                     "sec_user_id": sec_user_id,
@@ -232,8 +234,12 @@ class MonitorLoop:
                     "last_seen_at": _iso(state.last_seen_at),
                     "last_update_at": _iso(state.last_update_at),
                     "last_new_video_at": _iso(state.last_new_video_at),
-                    "hours_since_update": _hours_since(state.last_update_at or state.initialized_at),
-                    "update_frequency": _frequency_label(state.posts),
+                    "hours_since_update": hours_since(state.last_update_at or state.initialized_at),
+                    "update_frequency": freq[0] if freq else None,
+                    # 面板的频率气泡要用到这两个数：只有分级文案说不清"这个分级是怎么来的"
+                    "freq_avg_days": round(freq[1], 2) if freq else None,
+                    "freq_sample_count": freq[2] if freq else None,
+                    "freq_hint": freq_hint(freq),
                     "runs": state.runs,
                     "round_status": result.status if result else None,
                     "round_new": result.new_count if result else 0,
@@ -264,39 +270,6 @@ class MonitorLoop:
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
-
-
-def _hours_since(value: datetime | None) -> int | None:
-    if value is None:
-        return None
-    delta = datetime.now(timezone.utc) - value
-    return max(0, int(delta.total_seconds() // 3600))
-
-
-def _frequency_label(posts: Any, *, exclude_top: bool = True) -> str | None:
-    """更新频率分级，算法与旧项目一致：排除置顶后按相邻发布时间间隔取均值。"""
-    times = sorted(
-        post.created_at
-        for post in posts
-        if post.created_at is not None and (not exclude_top or not post.is_top)
-    )
-    if len(times) < 2:
-        return None
-    gaps = [(b - a).total_seconds() for a, b in zip(times, times[1:]) if b > a]
-    if not gaps:
-        return None
-    avg_days = (sum(gaps) / len(gaps)) / 86400
-    if avg_days <= 1.5:
-        return "日更"
-    if avg_days <= 4:
-        return "隔天更新"
-    if avg_days <= 10:
-        return "周更"
-    if avg_days <= 20:
-        return "半月更"
-    if avg_days <= 45:
-        return "月更"
-    return "更新较少"
 
 
 __all__ = ["MonitorLoop"]

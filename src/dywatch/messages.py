@@ -6,9 +6,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from typing import Iterable
 
-from .models import Content, Kind
+from .models import Content, EventKind, Kind, PostState
 
 # --- 标题 -------------------------------------------------------------------
 T_NEW_POST = "【新作品】{nickname} 发布了新{kind_label}"
@@ -145,6 +146,102 @@ def fmt_tags(tags: tuple[str, ...], limit: int = 8) -> str | None:
     if len(tags) > limit:
         shown.append(f"…(+{len(tags) - limit})")
     return " ".join(shown)
+
+
+# --- 更新频率 ---------------------------------------------------------------
+# 分级沿用旧项目：排除置顶后按相邻发布时间的间隔均值分类。阈值是实测调出来的，
+# 不跟着感觉改——面板上"周更"这三个字要和通知里的口径一致。
+FREQ_LEVELS: tuple[tuple[float, str], ...] = (
+    (1.5, "日更"),
+    (4.0, "隔天更新"),
+    (10.0, "周更"),
+    (20.0, "半月更"),
+    (45.0, "月更"),
+)
+FREQ_LEVEL_LAST = "更新较少"
+
+
+def hours_since(value: datetime | None, now: datetime | None = None) -> int | None:
+    """距今多少小时（向下取整）。`None` 原样返回 `None`——"不知道"不是 0。"""
+    if value is None:
+        return None
+    reference = now or datetime.now(timezone.utc)
+    return max(0, int((reference - value).total_seconds() // 3600))
+
+
+def frequency_stats(
+    posts: Iterable[PostState], *, exclude_top: bool = True
+) -> tuple[str, float, int] | None:
+    """更新频率 → `(分级文案, 平均间隔天数, 用到的间隔数)`；样本不足时 `None`。
+
+    置顶作品的发布时间是任意的（实测一个账号的三条置顶分别发布于 2025-04 与 2024-01），
+    混进来算间隔毫无意义，所以默认排除。快照与面板详情共用这一个实现。
+    """
+    times = sorted(
+        post.created_at
+        for post in posts
+        if post.created_at is not None and (not exclude_top or not post.is_top)
+    )
+    if len(times) < 2:
+        return None
+    gaps = [
+        (later - earlier).total_seconds()
+        for earlier, later in zip(times, times[1:])
+        if later > earlier
+    ]
+    if not gaps:
+        return None
+    avg_days = (sum(gaps) / len(gaps)) / 86400
+    for limit, label in FREQ_LEVELS:
+        if avg_days <= limit:
+            return label, avg_days, len(gaps)
+    return FREQ_LEVEL_LAST, avg_days, len(gaps)
+
+
+def freq_hint(stats: tuple[str, float, int] | None) -> str:
+    """频率的悬停提示（面板列表与详情弹窗共用）。"""
+    if stats is None:
+        return ""
+    _, avg_days, gaps = stats
+    return f"基于最近 {gaps + 1} 条非置顶作品，平均 {avg_days:.1f} 天/条"
+
+
+# --- 事件与消失原因（面板与事后审计读同一份文案） -----------------------------
+EVENT_LABELS: dict[EventKind, str] = {
+    EventKind.NEW_POST: "新作品",
+    EventKind.POST_REMOVED: "作品消失",
+    EventKind.REVIVED: "作品回归",
+    EventKind.TITLE_CHANGED: "标题变更",
+    EventKind.SCROLLED_OUT: "挤出窗口",
+    EventKind.TRIMMED: "超限裁剪",
+    EventKind.GAP_DETECTED: "疑似漏检",
+    EventKind.NEVER_SEEN: "账号始终无作品",
+    EventKind.ALL_GONE: "作品全部消失",
+    EventKind.ACCOUNT_FAILED: "抓取失败",
+    EventKind.ACCOUNT_RECOVERED: "已恢复",
+    EventKind.STALE_NO_UPDATE: "长期无更新",
+    EventKind.UPSTREAM_DEGRADED: "上游异常",
+    EventKind.INITIALIZED: "首次初始化",
+    EventKind.SELF_DEGRADED: "自身降级",
+}
+
+#: tombstone 的 reason → 中文。三个取值来自 `diff.py` 的判定分支。
+TOMBSTONE_REASONS: dict[str, str] = {
+    "confirmed": "已确认消失",
+    "scrolled_out": "被新作品挤出窗口",
+    "trimmed": "超出跟踪上限被裁剪",
+}
+
+
+def event_label(kind: EventKind | str) -> str:
+    try:
+        return EVENT_LABELS[EventKind(str(kind))]
+    except ValueError:
+        return str(kind)
+
+
+def tombstone_reason(reason: str) -> str:
+    return TOMBSTONE_REASONS.get(reason, reason)
 
 
 __all__ = [name for name in dir() if not name.startswith("_")]

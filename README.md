@@ -143,6 +143,33 @@ dywatch 0.1.0 —— 自检
 
 ---
 
+## 2.1 面板（`WEB_ENABLED=true`）
+
+```bash
+WEB_ENABLED=true          # .env
+WEB_HOST=127.0.0.1        # 默认只听回环；要局域网访问改 0.0.0.0
+WEB_PORT=8787
+```
+
+打开 `http://127.0.0.1:8787/`：一屏看完"每个账号现在怎么样"。
+
+- **LED 状态阵列**：24 格按状态计数分配（正常 / 失败 / 长期无更新 / 从未有作品 / 已移除），
+  小类别保底 1 格——100 个账号里那 1 个在失败的，不会被舍成 0 格而看不见
+- **数据条**：账号总数、正常、请求失败、长期无更新、从未有作品
+- **账号列表**：状态徽章、更新频率（悬停看"基于最近 N 条非置顶作品，平均 X 天/条"）、
+  已知作品数、距上次更新几天；**点账号名开详情**
+- **详情弹窗**：已知作品（含置顶标记、类型、缺席轮数）、**已消失作品**（含消失原因）、
+  **最近事件**、以及首次记录 / 累计轮次 / 最近一次错误码
+- 上游闸门关闭时，页面顶部出现红色警示条（与通知里的"本轮整体跳过"是同一件事）
+
+面板**只读、无鉴权、不发任何上游请求**：列表读 `data/status.json`，详情读状态库，
+所以打开它不消耗身份、不会被风控。要对外暴露请自己加反代鉴权。
+
+顺带提供的机器接口：`/api/state`（快照原文）、`/api/health`（小结）、
+`/api/user/<sec_user_id>`（单账号详情）、`/metrics`（Prometheus）、`/healthz` `/readyz`（探针）。
+
+---
+
 ## 3. 监控列表 `users.conf`
 
 ```
@@ -230,7 +257,7 @@ python -m dywatch add "https://www.douyin.com/user/MS4wLjABAAAA..."
 
 | 键                                      | 默认                           | 说明                                         |
 | --------------------------------------- | ------------------------------ | -------------------------------------------- |
-| `WEB_ENABLED` / `WEB_HOST` / `WEB_PORT` | `false` / `127.0.0.1` / `8787` | 只读面板，**无鉴权**，默认只听回环           |
+| `WEB_ENABLED` / `WEB_HOST` / `WEB_PORT` | `false` / `127.0.0.1` / `8787` | 只读面板（状态页 + 账号详情），**无鉴权**，默认只听回环 |
 | `LOG_LEVEL`                             | `INFO`                         | 只影响终端；日志文件始终是 info + debug 两份 |
 | `MONITOR_HOME`                          | 当前目录                       | 状态库、日志、users.conf 都在这里            |
 | `EVENTS_KEEP_DAYS` / `ROUNDS_KEEP_DAYS` | `90` / `30`                    | 事件审计与轮次汇总的保留期                   |
@@ -310,6 +337,9 @@ DTK 的归一化结果不暴露置顶，只有 `include_raw=true` 时 `raw.is_to
 | 某个账号一直"无作品"          | 大概率 ID 写错了：`users.conf` 里换成主页链接重新 `add` 一遍                           |
 | 通知里没有"播放"数            | 正常。抖音的 `play_count` 实测恒为 null，本工具不显示平台没说过的数字                  |
 | 面板打不开                    | `WEB_ENABLED=true`；局域网访问需 `WEB_HOST=0.0.0.0`（面板无鉴权，请自行加反代）        |
+| 面板列表是空的/一直"加载中"    | 列表读 `data/status.json`，它每轮写一次；没跑完一轮就没有快照。先 `dywatch once`        |
+| 点账号名详情报"状态库里没有这个账号" | 账号还没写进状态库（第一次抓取还没成功），跑完一轮再看；报"状态库暂不可读"则是库/权限问题 |
+| 面板上的数字和 `dywatch status` 不一致 | 面板读的是**快照**（每轮写一次），`status` 读的是同一个文件；差异通常来自另一进程刚跑完一轮 |
 | 想确认配置有没有生效          | `config-check` 会打印每一项的**来源**（默认值 / `.env` / 环境变量）                    |
 | 日志每 15 分钟被切一次        | Armbian 的 `armbian-truncate-logs` 用 `logrotate --force` 强制轮转。确认 `/etc/logrotate.d/dywatch` 已删（重跑一遍 `install.sh` 就会删） |
 | 日志一直不轮转                | `ls /etc/cron.d/dywatch` 在不在、cron 服务活着没（`systemctl status cron`）；手动跑一次 `logrotate --state /var/lib/dywatch/logrotate.status /etc/dywatch/logrotate.conf` 看报错 |
@@ -373,7 +403,7 @@ src/dywatch/
 ├── render.py       事件 → Markdown / 纯文本 / 短标题
 ├── alerts.py       运维告警的抑制窗口
 ├── notifiers/      六个渠道 + 静默空通知器
-└── webui.py        只读面板 + /healthz /readyz /metrics
+└── webui.py        只读面板（状态页 + 账号详情）+ /healthz /readyz /metrics
 ```
 
 **依赖方向单向、无环**：`dtk.py` 是唯一知道 HTTP 的地方，`diff.py` 是唯一知道判定规则的
