@@ -39,6 +39,7 @@
 | 信号 | 正确处理 `SIGTERM`（systemd 停止）/ `SIGINT`，等在飞请求收尾后退出 |
 | 路径 | 工作目录默认 `/opt/douyin-monitor`，`MONITOR_HOME` 可覆盖 |
 | 日志 | 应用只负责分级写入；**轮转压缩交给 logrotate，但由本工具自己的 cron 触发**（不进 `/etc/logrotate.d`，见 D16） |
+| 解释器 | 要求 **≥ 3.11**（`requires-python`）。`install.sh` 不盲信 `python3`，而是在 `python3.14 → 3.11` 与 `python3` 里挑版本最高的一个，`PYTHON=/usr/bin/pythonX.Y` 可显式指定；已有 `.venv` 低于 3.11 时直接重建（见第 10 章修正 #8） |
 | 时区 | 跟随宿主机（systemd 下自然继承）——通知里的时间必须是本地时间 |
 | 权限 | systemd 单元用运行账号（安装者的账号，**不另建专用用户**，见 D15）+ `NoNewPrivileges` + `ProtectSystem=strict` + `ReadWritePaths=` |
 | 文件权限 | 状态库 `0600`、日志目录 `0700`、`.env`（含 API Key）`0600` |
@@ -1061,6 +1062,7 @@ douyin-monitor/
 | D13 | "作者 ID 写错"怎么发现（**新增，由实测暴露**） | 新增 `never_seen` 状态：从未成功见到过作品 + 连续 3 轮空 → 告警"该账号始终无作品，请核实 sec_user_id"，与"作品被删光"（`all_gone`）严格区分 | **实测：形态合法但不存在的 sec_user_id 返回 200 + `items:[]`**，上游永远不会报错；这是唯一的防线 |
 | D14 | 部署形态 | **只做 systemd，不做容器镜像** | 一个进程 + 一个 SQLite 文件 + 一份配置；systemd 已经管完开机自启、崩溃重启、日志归集与权限隔离，再包一层编排只会多一处要长期维护的东西 |
 | D15 | 是否创建专用系统用户 | **不创建**。服务以执行安装的账号身份运行（`sudo` 时取 `SUDO_USER`），单元里的 `User=` 由 `install.sh` 填入 | 这是给自己用的单机工具，专用账号带来的只有 `sudo -u` 的摩擦；真正的权限边界由单元的 `ProtectSystem=strict` + `ReadWritePaths=工作目录` 给出。代价是账号本身是登录账号，所以单元的其余加固项全部保留 |
+| D16 | 日志轮转配置放在哪里（**上线后由实测暴露**） | **不装 `/etc/logrotate.d`**。配置装到 `/etc/dywatch/logrotate.conf`，由 `/etc/cron.d/dywatch` 每小时触发，state 文件独立放 `/var/lib/dywatch/logrotate.status`；`install.sh` 升级时删掉老版本留下的 `/etc/logrotate.d/dywatch` | 实测：Armbian 的 `/etc/cron.d/armbian-truncate-logs` 每 15 分钟跑 `armbian-truncate-logs`，`/var/log` 用量 ≥75% 时执行 `logrotate --force /etc/logrotate.conf`——`--force` **跳过日期判断**，把 `/etc/logrotate.d` 下所有配置强制轮转，`monitor.log` 于是每 15 分钟被切一次、`rotate 14` 的归档不到 4 小时就被挤掉。自己的 cron + 独立 state 让轮转节奏只由本项目决定，别人的 `--force` 不再波及 |
 
 ---
 
@@ -1089,6 +1091,8 @@ douyin-monitor/
 | 4 | `fmt_count` 有 `k` 一级（9999 → "10k"） | 去掉 `k`，只用**万/亿** | 中文阅读习惯里没有 k；而且 9999 显示成 "10k" 是把四位数说成五位数 |
 | 5 | 认证头挂在 `httpx.AsyncClient` 的默认头上 | **每次请求显式带上** | 注入一个 client（测试、将来复用连接池）时默认头不会跟着来，而"少一个头"的表现是 401——读起来像凭据错了，不像少写了一行 |
 | 6 | 轮次汇总只报新/删/标题变更/失败 | 增加 **"新增初始化 N 个"** | 上线新账号时第一轮必然是初始化，不报出来会让人以为"什么都没发生" |
+| 7 | 轮转配置装进 `/etc/logrotate.d/`（由系统 logrotate 管） | 改由 `/etc/cron.d/dywatch` 调 `/etc/dywatch/logrotate.conf`，state 文件独立（见 D16） | 在 Armbian 上 `/etc/logrotate.d` 里的配置会被 `armbian-truncate-logs` 的 `logrotate --force` 每 15 分钟强制轮转一次（归档时间戳 `19:30 / 19:15 / 19:00…` 就是这么来的），`daily` 形同虚设、归档被迅速挤掉 |
+| 8 | `install.sh` 直接 `python3 -m venv` | 先在 `python3.14 → 3.11` 与 `python3` 中挑版本最高的（`PYTHON=` 可覆盖），已有 `.venv` 低于 3.11 时重建 | 项目要求 ≥3.11，但 Ubuntu 22.04 自带的 `python3` 是 3.10，要装到 `pip install .` 那一步才失败、报错还看不出是版本问题；实际部署时是在服务器上手工把脚本里三处 `python3` 改成 `python3.14` 才过去的——"每台机器打一次补丁"该由脚本自己解决 |
 
 ### 尚未做（明确不在第一版范围）
 

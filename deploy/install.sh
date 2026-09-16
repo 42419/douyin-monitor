@@ -80,8 +80,31 @@ ask_restart_now() {
 
 # ------------------------------------------------------------- 前置检查 --
 [[ $EUID -eq 0 ]] || die "请用 sudo 运行（要写 /etc/systemd/system、/etc/cron.d 与 /etc/dywatch）"
-command -v python3 >/dev/null 2>&1 || die "没有 python3：apt install python3 python3-venv"
-python3 -c 'import venv' 2>/dev/null || die "缺少 venv 模块：apt install python3-venv"
+# 解释器选择。项目要求 Python >= 3.11（pyproject 的 requires-python），但发行版自带的
+# `python3` 常常更旧（Ubuntu 22.04 是 3.10），盲用 `python3` 会在 `pip install .` 那一步
+# 才失败，报错还看不出是版本问题。所以这里先挑：显式 PYTHON=... 优先，否则在
+# python3.14 → python3.11 与 python3 之间取版本最高的那个。
+_ok_python() {
+    command -v "$1" >/dev/null 2>&1 \
+        && "$1" -c 'import sys, venv; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null
+}
+PY_BIN=""
+if [[ -n "${PYTHON:-}" ]]; then
+    _ok_python "$PYTHON" \
+        || die "PYTHON=$PYTHON 不能用：找不到，或版本低于 3.11，或没装 venv 模块"
+    PY_BIN="$PYTHON"
+else
+    _py_best=""
+    for _cand in python3.14 python3.13 python3.12 python3.11 python3; do
+        _ok_python "$_cand" || continue
+        # 版本比较用整数（major*1000+minor），免得踩上字符串比较的 locale 坑
+        _ver="$("$_cand" -c 'import sys; v = sys.version_info; print(v[0] * 1000 + v[1])')"
+        if [[ -z "$_py_best" || "$_ver" -gt "$_py_best" ]]; then _py_best="$_ver"; PY_BIN="$_cand"; fi
+    done
+    [[ -n "$PY_BIN" ]] || die "找不到 3.11+ 的 Python（且要带 venv 模块）
+    发行版自带的 python3 若低于 3.11（Ubuntu 22.04 = 3.10），先装一个 3.11+，再：
+        PYTHON=/usr/bin/python3.12 sudo bash deploy/install.sh"
+fi
 
 HAVE_RSYNC=1
 command -v rsync >/dev/null 2>&1 || HAVE_RSYNC=0
@@ -114,6 +137,7 @@ fi
 say "检测结果"
 info "安装目录：$HOME_DIR"
 info "运行身份：$RUN_USER ($RUN_GROUP)"
+info "Python  ：$PY_BIN（$("$PY_BIN" -V 2>&1 | cut -d' ' -f2)）"
 info "模式：$([ "$IS_UPGRADE" = 1 ] && echo 升级 || echo 首次安装)"
 [ "$IS_UPGRADE" = 1 ] && info "服务当前状态：$([ "$SERVICE_WAS_ACTIVE" = 1 ] && echo 运行中 || echo 未运行)"
 [ "$HAVE_RSYNC" = 0 ] && warn "没有 rsync，升级时会退化成 cp -r（不清理已删除的旧文件，参见 README 的升级说明）"
@@ -163,9 +187,16 @@ fi
 
 # --------------------------------------------------------------------- 依赖 --
 cd "$HOME_DIR"
+# 已有的 .venv 若是用低于 3.11 的解释器建的（比如早先在 Ubuntu 22.04 上装过一次），
+# 继续用它跑 `pip install .` 只会失败得莫名其妙——venv 是纯派生产物，直接重建。
+if [[ -x .venv/bin/python ]] \
+    && ! .venv/bin/python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+    warn "已有 .venv 的解释器是 $(.venv/bin/python -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo 未知)（低于 3.11），删掉重建"
+    rm -rf .venv
+fi
 if [[ ! -x .venv/bin/python ]]; then
     say "创建虚拟环境 .venv"
-    python3 -m venv .venv
+    "$PY_BIN" -m venv .venv
 fi
 say "$([ "$IS_UPGRADE" = 1 ] && echo 重新安装依赖 || echo 安装依赖)"
 .venv/bin/pip install --quiet --upgrade pip

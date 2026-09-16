@@ -40,10 +40,15 @@ Telegram / 通用 webhook 推送通知。
 
 ### 安装
 
+**Python 必须 ≥ 3.11**（`pyproject.toml` 的 `requires-python`；Ubuntu 24.04 自带 3.12 够用，
+22.04 自带的 3.10 不够）。`install.sh` 会自己在 `python3.14 / 3.13 / 3.12 / 3.11 / python3`
+里挑版本最高的一个，也可以用 `PYTHON=/usr/bin/python3.12` 显式指定——它不会再盲信 `python3`。
+
 ```bash
-sudo apt update && sudo apt install -y python3 python3-venv
+sudo apt update && sudo apt install -y python3 python3-venv   # 版本不够时先装一个 3.11+
 git clone <本仓库> && cd douyin-monitor
 sudo bash deploy/install.sh      # 建 .venv、装 systemd 单元与日志轮转 cron、生成配置模板
+# 解释器不在默认位置时：sudo PYTHON=/usr/bin/python3.12 bash deploy/install.sh
 
 vi /opt/douyin-monitor/.env          # 填 DTK_API_KEY（要用通知就一并填渠道）
 vi /opt/douyin-monitor/users.conf    # 填要监控的账号
@@ -72,6 +77,19 @@ journalctl -u dywatch -f
 其他参数：`--check` 只检测当前是首次安装还是升级、缺什么依赖，不做任何改动；
 `sudo bash deploy/install.sh --yes` 可以做到全自动（升级 + 服务在跑就自动重启），
 适合写进你自己的升级脚本。
+
+**服务器侧的更新用 `git fetch && git reset --hard origin/main`，不要用 `git pull`。**
+安装在 `/opt/douyin-monitor` 的这份是纯部署副本，永远不会在上面产生提交；
+而本仓库的历史被 amend / force-push 改写过，`pull` 会因为 "divergent branches"
+直接拒绝（`git pull --ff-only` 同样失败）。安全前提是"服务器上没有独有提交"，
+这条一直成立：
+
+```bash
+cd /opt/douyin-monitor
+git fetch origin
+git reset --hard origin/main      # 本地若有过手工改动，会一并丢掉，先 git diff 看一眼
+sudo bash deploy/install.sh --yes
+```
 
 **不创建专用系统用户。** 服务以"执行安装的那个账号"身份运行（`sudo` 时取 `SUDO_USER`，
 直接用 root 跑则服务也以 root 跑，脚本会提醒你）。所以后面的 `vi`、`doctor`、`once`
