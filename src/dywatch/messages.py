@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Iterable
 
@@ -56,6 +57,32 @@ NOTE_GAP = (
 )
 NOTE_CONFIG = "\n> 这是配置问题而不是网络问题：{code} —— 修好之前每个账号都会一直失败。"
 NOTE_GATE = "\n> 上游整体不可用，本轮已整体跳过，这与某个账号无关。"
+
+
+#: 控制字符（C0 + DEL）：换行、回车、制表、ESC 都属于"会让一行文本变成两行或改变终端状态"
+#: 的那一类。外部字符串（昵称、标题）在写进日志这类"一行一条"的地方之前先过 `one_line`。
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def strip_controls(text: str, replacement: str = " ") -> str:
+    """把 C0 控制字符（含 ESC）换成 `replacement`。
+
+    换行与回车由调用方自己决定怎么处理：日志要压成一行，Prometheus 的 label 要按规范转义
+    成 `\\n`（转义比改写更保真）。
+    """
+    return _CONTROL_RE.sub(replacement, str(text))
+
+
+def one_line(text: str, limit: int | None = None) -> str:
+    """把外部字符串压成**一行**：控制字符换成空格，可选截断。
+
+    这不是洁癖：昵称里塞一个 `\\r` 或 ANSI 转义（`\\x1b[31m`），在终端里能把日志行覆盖掉或
+    改成看起来像别人的日志——日志一旦可以被输入伪造，排障时就不能信它了。
+    """
+    cleaned = strip_controls(str(text).replace("\n", " ").replace("\r", " "))
+    if limit is not None and len(cleaned) > limit:
+        cleaned = cleaned[: max(0, limit - 1)] + "…"
+    return cleaned
 
 
 def md_escape(text: str | None) -> str:

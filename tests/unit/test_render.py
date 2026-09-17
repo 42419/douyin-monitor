@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from dywatch.messages import fmt_count, fmt_duration, fmt_gap, md_escape, newest_post_at, newest_post_at
-from dywatch.models import Content, Event, EventKind, Kind, PostState, PostState
+from dywatch.messages import (
+    fmt_count,
+    fmt_duration,
+    fmt_gap,
+    md_escape,
+    newest_post_at,
+    one_line,
+    strip_controls,
+)
+from dywatch.models import Content, Event, EventKind, Kind, PostState
 from dywatch.render import render_event
 
 NOW = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
@@ -198,3 +206,16 @@ def test_newest_post_at_takes_the_latest_and_ignores_missing_dates():
     assert newest_post_at(posts) == NOW - timedelta(days=1)
     assert newest_post_at((PostState(content_id="c"),)) is None
     assert newest_post_at(()) is None
+
+
+def test_one_line_strips_control_characters_and_truncates():
+    """昵称/标题来自上游，进日志这类"一行一条"的出口前必须压平。
+
+    回车与 ANSI 转义不会让程序崩，但能让终端里的日志显示成另一副样子——
+    日志一旦可以被输入伪造，排障时就不能信它。
+    """
+    assert one_line("阿\r直\u001b[31m红\u001b[0m") == "阿 直 [31m红 [0m"
+    assert one_line("第一行\n第二行") == "第一行 第二行"
+    assert one_line("长" * 10, limit=5) == "长长长长…"
+    assert one_line("普通昵称") == "普通昵称"
+    assert strip_controls("x\x07y") == "x y"

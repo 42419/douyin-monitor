@@ -264,6 +264,23 @@ def test_row_shows_how_long_since_the_newest_post(tmp_path):
     assert "距上次更新" not in html
 
 
+def test_metrics_stay_parseable_with_hostile_nicknames(tmp_path):
+    """昵称里带换行/引号/反斜杠时，/metrics 那一行仍必须是**一行**。
+
+    少一个转义，这一个账号的昵称就能把整个 /metrics 抓取判坏——波及面远大于它自己。
+    """
+    settings = make_settings(tmp_path)
+    write_status(settings, users=[user_entry(nickname='nl\nq"\\x')])
+
+    with panel(settings) as base:
+        status, body = get(base + "/metrics")
+
+    assert status == 200
+    lines = [line for line in body.splitlines() if line.startswith("dywatch_known_posts{")]
+    assert len(lines) == 1, "换行没被转义，样本被拆成了多行"
+    assert 'author="nl\\nq\\"\\\\x"' in lines[0]
+
+
 def test_gate_closed_renders_warning_strip(tmp_path):
     settings = make_settings(tmp_path)
     write_status(settings, gate={"open": False, "reason": "IDENTITY_POOL_EXHAUSTED",

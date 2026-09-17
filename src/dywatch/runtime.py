@@ -23,6 +23,7 @@ from typing import Any, Iterator
 from .alerts import Deduplicator
 from .dtk import DtkClient
 from .loop import MonitorLoop
+from .messages import one_line
 from .notifiers import build_notifier
 from .pacer import RequestPacer, RoundWaiter
 from .pipeline import ArchiveTrigger
@@ -71,10 +72,12 @@ class StructuredLogger:
 
 
 def _short(value: Any, limit: int = 120) -> str:
-    text = str(value)
-    if len(text) > limit:
-        text = text[: limit - 1] + "…"
-    return text.replace("\n", " ")
+    """日志字段统一压成一行（控制字符换空格、超长截断）。
+
+    昵称与标题来自上游，可能带换行、回车或 ANSI 转义——那些东西进了终端能把日志行覆盖成
+    另一副样子，日志一旦可以被输入伪造就不值得信任了。
+    """
+    return one_line(value, limit)
 
 
 def setup_logging(settings: Settings) -> tuple[StructuredLogger, logging.Logger]:

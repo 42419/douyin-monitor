@@ -57,6 +57,7 @@ from .messages import (
     hours_since,
     kind_label,
     newest_post_at,
+    strip_controls,
     tombstone_reason,
 )
 from .models import Kind, PostState
@@ -1035,7 +1036,15 @@ def _dtk_ok(base_url: str, timeout: float = 3.0) -> dict[str, Any]:
 
 
 def _label(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')[:64]
+    """Prometheus 的 label 值：`\\` `"` 换行回车按规范转义，其余控制字符换空格。
+
+    少一个换行转义，昵称里带 `\\n` 的那一行就会把整个样本拆成两条、抓取端直接判坏——
+    而这只是某个账号的昵称，不该波及整个 `/metrics`。
+    """
+    text = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    for raw, escaped in (("\n", "\\n"), ("\r", "\\r"), ("\t", "\\t")):
+        text = text.replace(raw, escaped)
+    return strip_controls(text)[:64]
 
 
 # =================== HTTP ===================
