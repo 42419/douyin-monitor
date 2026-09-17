@@ -16,11 +16,14 @@ import pytest
 from dywatch.alerts import Deduplicator, NOTIFY_PRIORITY, priority_of, should_send
 from dywatch.models import (
     NOTIFY_KINDS,
+    SILENT_KINDS,
     AuthorState,
     Content,
     DiffConfig,
     Event,
     EventKind,
+
+
     Page,
     PostState,
 )
@@ -80,7 +83,7 @@ class Client:
         )
 
 
-async def _run_round(tmp_path) -> tuple[Any, RecordingNotifier, StateStore]:
+async def _run_round(tmp_path, notifier: RecordingNotifier | None = None):
     store = StateStore(tmp_path / "db.sqlite")
     store.migrate()
     author = AuthorState(
@@ -88,7 +91,7 @@ async def _run_round(tmp_path) -> tuple[Any, RecordingNotifier, StateStore]:
         ever_had_posts=True, runs=5, last_seen_at=NOW - timedelta(minutes=1),
         posts=(PostState(content_id="p-old", title="旧标题", created_at=NOW - timedelta(days=2)),),
     )
-    notifier = RecordingNotifier()
+    notifier = notifier or RecordingNotifier()
     result = await run_author(
         author=author, nickname="阿直", client=Client(), store=store, notifier=notifier,
         dedup=Deduplicator(),
@@ -139,3 +142,79 @@ def test_new_post_sorts_first(kind):
 
 def test_priority_table_covers_every_notify_kind():
     assert set(NOTIFY_PRIORITY) == set(NOTIFY_KINDS), "通知类事件必须都在优先级表里"
+
+
+def test_notify_and_silent_kinds_partition_every_event():
+    """每一种事件要么会推送、要么明确静默，不能两边都不在（那就等于悄悄丢事件）。"""
+    from dywatch.models import EventKind as Kind
+
+    assert not (NOTIFY_KINDS & SILENT_KINDS)
+    assert NOTIFY_KINDS | SILENT_KINDS == set(Kind)
+
+
+def test_notify_and_silent_kinds_partition_every_event():
+    """每一种事件要么会推送、要么明确静默，不能两边都不在（那就等于悄悄丢事件）。"""
+    from dywatch.models import EventKind as Kind
+
+    assert not (NOTIFY_KINDS & SILENT_KINDS)
+    assert NOTIFY_KINDS | SILENT_KINDS == set(Kind)
+
+
+class ExplodingNotifier(RecordingNotifier):
+    """在指定事件上炸一次（模拟渠道客户端 bug 或渲染意外）。"""
+
+    def __init__(self, explode_on: EventKind) -> None:
+        super().__init__()
+        self._explode_on = explode_on
+        self.crashed = 0
+
+    async def send(self, message: Any) -> Delivery:
+        if message.event is self._explode_on:
+            self.crashed += 1
+            raise RuntimeError("渠道客户端炸了")
+        self.sent.append(message)
+        return Delivery()
+
+
+async def test_one_notification_crashing_does_not_hold_back_the_rest(tmp_path):
+    """单条通知出意外不能连坐后面的——这是"给 new_post 让路"的最后一道保险。
+
+    通知循环是唯一不能因单条失败而中断的地方：中断意味着排在后面的（尤其 new_post）
+    连尝试的机会都没有。这里让"标题变更"炸掉，验证新作品照发、这一轮也不被拖成失败。
+    """
+    notifier = ExplodingNotifier(EventKind.TITLE_CHANGED)
+    result, _notifier, _store = await _run_round(tmp_path, notifier=notifier)
+
+    assert notifier.crashed == 1
+    assert [message.event for message in notifier.sent] == [EventKind.NEW_POST]
+    assert result.status == "ok", "通知里的意外不该把这一轮判成失败"
+
+
+class ExplodingNotifier(RecordingNotifier):
+    """在指定事件上炸一次（模拟渠道客户端 bug 或渲染意外）。"""
+
+    def __init__(self, explode_on: EventKind) -> None:
+        super().__init__()
+        self._explode_on = explode_on
+        self.crashed = 0
+
+    async def send(self, message: Any) -> Delivery:
+        if message.event is self._explode_on:
+            self.crashed += 1
+            raise RuntimeError("渠道客户端炸了")
+        self.sent.append(message)
+        return Delivery()
+
+
+async def test_one_notification_crashing_does_not_hold_back_the_rest(tmp_path):
+    """单条通知出意外不能连坐后面的——这是"给 new_post 让路"的最后一道保险。
+
+    通知循环是唯一不能因单条失败而中断的地方：中断意味着排在后面的（尤其 new_post）
+    连尝试的机会都没有。这里让"标题变更"炸掉，验证新作品照发、这一轮也不被拖成失败。
+    """
+    notifier = ExplodingNotifier(EventKind.TITLE_CHANGED)
+    result, _notifier, _store = await _run_round(tmp_path, notifier=notifier)
+
+    assert notifier.crashed == 1
+    assert [message.event for message in notifier.sent] == [EventKind.NEW_POST]
+    assert result.status == "ok", "通知里的意外不该把这一轮判成失败"

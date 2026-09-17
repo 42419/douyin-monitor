@@ -287,3 +287,43 @@ def test_revived_without_context_still_renders():
     )
     assert "作品回归" in message.subject
     assert "(无标题)" in message.markdown
+
+
+def test_removed_payload_of_the_wrong_shape_still_renders():
+    """`removed` 不是列表或夹着非字典条目时也不能抛——渲染路径抛异常等于通知发不出去。"""
+    for payload in ({"removed": None}, {"removed": "不是列表"}, {"removed": [None, 1, "x"]},
+                    {"removed": [{"title": "正常一条"}]}):
+        for kind in (EventKind.POST_REMOVED, EventKind.ALL_GONE):
+            message = render_event(
+                Event(kind, sec_user_id="u1", nickname="阿直", content_id="1", payload=payload)
+            )
+            assert message.subject and message.markdown
+    # 正常条目照旧显示，畸形条目被跳过（计数也不含它们）
+    message = render_event(
+        Event(
+            EventKind.POST_REMOVED, sec_user_id="u1", nickname="阿直", content_id="1",
+            payload={"removed": [None, {"title": "正常一条"}]},
+        )
+    )
+    assert "有 1 条作品已确认消失" in message.subject
+    assert "正常一条" in message.markdown
+
+
+def test_removed_payload_of_the_wrong_shape_still_renders():
+    """`removed` 不是列表或夹着非字典条目时也不能抛——渲染路径抛异常等于通知发不出去。"""
+    for payload in ({"removed": None}, {"removed": "不是列表"}, {"removed": [None, 1, "x"]},
+                    {"removed": [{"title": "正常一条"}]}):
+        for kind in (EventKind.POST_REMOVED, EventKind.ALL_GONE):
+            message = render_event(
+                Event(kind, sec_user_id="u1", nickname="阿直", content_id="1", payload=payload)
+            )
+            assert message.subject and message.markdown
+    # 正常条目照旧显示，畸形条目被跳过（计数也不含它们）
+    message = render_event(
+        Event(
+            EventKind.POST_REMOVED, sec_user_id="u1", nickname="阿直", content_id="1",
+            payload={"removed": [None, {"title": "正常一条"}]},
+        )
+    )
+    assert "有 1 条作品已确认消失" in message.subject
+    assert "正常一条" in message.markdown

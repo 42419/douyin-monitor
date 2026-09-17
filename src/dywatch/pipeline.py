@@ -131,7 +131,17 @@ async def run_author(
         if not allowed:
             _log(logger, "debug", "notify.suppressed", kind=event.kind.value, key=key)
             continue
-        result = await _deliver(notifier, event)
+        try:
+            result = await _deliver(notifier, event)
+        except Exception as exc:  # noqa: BLE001 - 见下：一条消息炸了不能连坐后面的
+            # 渲染或投递里出了意料之外的错（畸形载荷、渠道客户端 bug）：记一条，
+            # 放下这条继续发下一条。**通知循环是唯一不能因单条失败而中断的地方**——
+            # 中断意味着排在后面的（尤其 new_post）连尝试的机会都没有。
+            # 也把抑制窗口还回去，下轮还能再试。
+            _log(logger, "warning", "notify.crashed", kind=event.kind.value,
+                 error=f"{type(exc).__name__}: {exc}"[:160])
+            dedup.release(key)
+            continue
         deliveries[row_id] = result
         if result.get("failed") and not result.get("sent"):
             # 一条谁都没收到的消息不该占用抑制窗口

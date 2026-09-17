@@ -66,6 +66,11 @@ def _join(*lines: str | None) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def _as_list(value: Any) -> list[Any]:
+    """载荷里的"列表"字段：不是列表就当空——渲染路径绝不允许因为载荷畸形而抛异常。"""
+    return list(value) if isinstance(value, (list, tuple)) else []
+
+
 def _title(value: Any) -> str:
     return msg.md_escape(str(value or "")) or "(无标题)"
 
@@ -139,7 +144,9 @@ def _build(
         return subject, _join(f"### {subject}", "", *rows)
 
     if kind in (EventKind.POST_REMOVED, EventKind.ALL_GONE):
-        removed = payload.get("removed") or []
+        # 只认字典条目：这条路径上抛异常等于"这条通知永远发不出去"，而畸形条目本身
+        # 不是需要报告的事情（`diff` 只会给字典，这里是纵深防御）
+        removed = [item for item in _as_list(payload.get("removed")) if isinstance(item, Mapping)]
         all_gone = bool(payload.get("all_gone")) or kind is EventKind.ALL_GONE
         template = msg.T_ALL_GONE if all_gone else msg.T_POST_REMOVED
         subject = template.format(nickname=safe_name, count=len(removed))
