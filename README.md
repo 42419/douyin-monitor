@@ -9,18 +9,55 @@ Telegram / 通用 webhook 推送通知。
 ```
       抖音  ←—— 签名 / 身份池 / 调度器 / 熔断 / 归档 ——  DTK v5
                                                           ↑
-                                        HTTP /api/v1（只读，一个 API Key）
+                                        HTTP /api/v1（默认只读，一个 API Key）
                                                           ↓
                                    dywatch  ←—— 判定 → 通知 → 面板
 ```
 
 **本工具不自带签名、不碰 Cookie、不碰身份池、不直接访问抖音。** 抓取、风控绕行、
-身份轮换全部由 DTK v5 负责；dywatch 对 DTK 是**纯只读**的（不提交任务、不改设置、
-不注册 watchlist）。这条边界让它可以只依赖两个 scope、也不会把 DTK 实例搞坏。
+身份轮换全部由 DTK v5 负责；dywatch 对 DTK **默认是纯只读的**（不提交任务、不改设置、
+不注册 watchlist），所以只需要两个 scope、也不会把 DTK 实例搞坏。唯一的例外是一个
+**默认关闭**的开关：打开 `ARCHIVE_DOWNLOAD_ENABLED` 后会请求 DTK 把新作品的媒体存一份
+（见 §8），那需要额外授一个 `media:write`。
 
 **部署形态只有一种：Ubuntu / Linux 服务器上的 systemd 服务。** 不提供容器镜像——
 这个工具就是一个进程 + 一个 SQLite 文件 + 一份配置，systemd 已经把它该管的事
 （开机自启、崩溃重启、日志归集、权限隔离）都管完了，再加一层编排只会多一处要维护的东西。
+
+---
+
+## 目录
+
+- [1. 快速开始（Ubuntu）](#1-快速开始ubuntu)
+  - [前置：DTK v5 实例 + 一把 API Key](#前置dtk-v5-实例--一把-api-key)
+  - [安装](#安装)
+- [2. 命令](#2-命令)
+- [3. 面板（`WEB_ENABLED=true`）](#3-面板web_enabledtrue)
+- [4. 监控列表 `users.conf`](#4-监控列表-usersconf)
+- [5. 配置参考](#5-配置参考)
+  - [上游](#上游)
+  - [请求节奏 ⚙️（沿用旧项目已跑数月的实测值）](#请求节奏-沿用旧项目已跑数月的实测值)
+  - [判定](#判定)
+  - [失败与退避](#失败与退避)
+  - [归档](#归档)
+  - [通知](#通知)
+  - [面板与其他](#面板与其他)
+- [6. 容量估算](#6-容量估算)
+- [7. 判定规则](#7-判定规则)
+  - [新作品](#新作品)
+  - [作品消失（分级确认）](#作品消失分级确认)
+  - [漏检](#漏检)
+  - ["作者 ID 写错了"怎么发现](#作者-id-写错了怎么发现)
+  - [置顶标志从哪来](#置顶标志从哪来)
+  - [事件类型（`events.kind`）](#事件类型eventskind)
+- [8. 归档下载（`ARCHIVE_DOWNLOAD_ENABLED`，默认关闭）](#8-归档下载archive_download_enabled默认关闭)
+  - [权限：需要额外申请 `media:write`](#权限需要额外申请-mediawrite)
+  - [不等下载完成，也不该等](#不等下载完成也不该等)
+  - [节奏、预算与退避](#节奏预算与退避)
+  - [会不会被自动清掉：取决于 `ARCHIVE_DOWNLOAD_PIN`](#会不会被自动清掉取决于-archive_download_pin)
+- [9. 排障](#9-排障)
+  - [日志轮转](#日志轮转)
+- [10. 架构](#10-架构)
 
 ---
 
@@ -38,7 +75,7 @@ Telegram / 通用 webhook 推送通知。
 角色 `viewer` 即可——这些端点只按 scope 鉴权。**Key 的形态是
 `dtk_<12位十六进制>_<32位base64url>`（共 49 字符），完整值只在创建时显示一次。**
 
-如果打算开 §7 的「归档下载」，额外申请 `media:write`（写权限，见该节说明，默认不建议
+如果打算开 §8 的「归档下载」，额外申请 `media:write`（写权限，见该节说明，默认不建议
 在第一次部署时就开）。
 
 ### 安装
@@ -69,13 +106,16 @@ journalctl -u dywatch -f
 
 - **首次安装**：建 `.venv` 装依赖 → 生成 `.env` / `users.conf` 模板 → 装 systemd 单元与
   日志轮转 cron → 交接目录属主。它**不**替你填 API Key：凭据不该由脚本猜。
-- **升级**（`git pull` 后重跑同一条命令）：用 `rsync --delete` 同步代码（`.env` /
-  `users.conf` / `data/` / `log/` / `.venv/` 一律不碰，旧版本删掉的源码文件会被清理）
-  → 重装依赖 → 刷新 systemd 单元与日志轮转 cron（**并删掉老版本留在
-  `/etc/logrotate.d/dywatch` 的那份配置**，见下面的日志轮转说明）→ 如果服务正在跑，
-  问你要不要立即重启
-  （`--yes` 直接重启，不问）。**不加 `--yes` 又不重启的话，新代码不会生效**，脚本会在
-  最后提醒你手动 `systemctl restart dywatch`。
+- **升级**（`git reset --hard` 后重跑同一条命令）：**重装依赖** → 刷新 systemd 单元与
+  日志轮转 cron（**并删掉老版本留在 `/etc/logrotate.d/dywatch` 的那份配置**，见下面的
+  日志轮转说明）→ 如果服务正在跑，问你要不要立即重启（`--yes` 直接重启，不问）。
+  如果安装目录**不是**要安装的那个目录（`SRC_DIR != MONITOR_HOME`），它还会先用
+  `rsync --delete` 同步代码过去（`.env` / `users.conf` / `data/` / `log/` / `.venv/`
+  一律不碰）；按本 README 的 `/opt/douyin-monitor` 布局时两者是同一个目录，这一步跳过，
+  代码由 `git` 就地更新。
+  **"重装依赖"这一步不能省**：`.venv` 里装的是**复制**进去的一份代码（非可编辑安装），
+  只 `git reset --hard` + `systemctl restart` 不会让新代码生效——重新跑 `install.sh`
+  （或手动 `pip install .`）才会把 `src/` 的内容刷进 `.venv`。
 
 其他参数：`--check` 只检测当前是首次安装还是升级、缺什么依赖，不做任何改动；
 `sudo bash deploy/install.sh --yes` 可以做到全自动（升级 + 服务在跑就自动重启），
@@ -121,14 +161,22 @@ tail -f /opt/douyin-monitor/log/info/monitor.log   # 实时日志（应用侧）
 ## 2. 命令
 
 ```bash
-python -m dywatch                # 常驻监控（systemd 用这个）
-python -m dywatch once           # 只跑一轮后退出：上线前确认配置是否正确
-python -m dywatch doctor         # 自检：实例可达 / Key 有效 / scope 够用 / 账号读得出来
-python -m dywatch status         # 打印最近一轮的状态快照
-python -m dywatch config-check   # 打印全部生效配置与每一项的来源
-python -m dywatch add "<主页链接或 sec_user_id>" [昵称]
-python -m dywatch test-notify    # 给每个渠道发一条测试消息
+./.venv/bin/python -m dywatch                # 常驻监控（systemd 用这个）
+./.venv/bin/python -m dywatch once           # 只跑一轮后退出：上线前确认配置是否正确
+./.venv/bin/python -m dywatch doctor         # 自检：实例可达 / Key 有效 / scope 够用 / 账号读得出来
+./.venv/bin/python -m dywatch status         # 打印最近一轮的状态快照
+./.venv/bin/python -m dywatch config-check   # 打印全部生效配置与每一项的来源
+./.venv/bin/python -m dywatch add "<主页链接或 sec_user_id>" [昵称]
+./.venv/bin/python -m dywatch test-notify    # 给每个渠道发一条测试消息
 ```
+
+前缀写成 `./.venv/bin/python -m` 是为了"在安装目录里、不进虚拟环境也能直接抄着跑"
+（systemd 用的也是这一条）。`source .venv/bin/activate` 之后可以直接写 `dywatch doctor`
+——`install.sh` 装出来的 `.venv/bin/dywatch` 与 `python -m dywatch` 是同一个入口，
+**本文其余部分一律用 `dywatch <子命令>` 这种简写**。
+
+命令都接受 `--env /path/to/.env` 指定配置文件（默认 `$MONITOR_HOME/.env`，其次 `./.env`）；
+`--version` 打印版本。
 
 **先跑 `doctor`**：它把"配错了"和"上游坏了"分开——这两类的处理方式完全不同。
 
@@ -136,8 +184,9 @@ python -m dywatch test-notify    # 给每个渠道发一条测试消息
 dywatch 0.1.0 —— 自检
 上游实例: http://192.168.20.4:8000
 ✓ 凭据有效：username=yunfei role=admin via=api_key
-  scopes: archive:read, douyin:read, media:read, tiktok:read
+  scopes: archive:read, douyin:read, media:read, media:write
 ✓ 必需的 scope 齐备
+✓ 归档下载可用：已用 6.9MB / 上限 2048MB（0%），已 pin 0 条，下载器 在线   ← 开了归档下载才有这行
 ✓ 实例 5.1.0：身份池 douyin active=3 cooling=0 degraded=0
 检查 1 个账号（每个消耗 1 个身份）…
   ✓ 示例账号: 18 条（非置顶 15 / 置顶 3，count=15） 2640ms has_more=True
@@ -146,7 +195,7 @@ dywatch 0.1.0 —— 自检
 
 ---
 
-## 2.1 面板（`WEB_ENABLED=true`）
+## 3. 面板（`WEB_ENABLED=true`）
 
 ```bash
 WEB_ENABLED=true          # .env
@@ -158,7 +207,8 @@ WEB_PORT=8787
 
 - **LED 状态阵列**：24 格按状态计数分配（正常 / 失败 / 长期无更新 / 从未有作品 / 已移除），
   小类别保底 1 格——100 个账号里那 1 个在失败的，不会被舍成 0 格而看不见
-- **数据条**：账号总数、正常、请求失败、长期无更新、从未有作品
+- **数据条**：账号总数、正常、请求失败、长期无新作品、从未有作品、已移除
+  （最后一项只在真有账号被移出 `users.conf` 时出现）
 - **账号列表**：状态徽章、更新频率（悬停看"基于最近 N 条非置顶作品，平均 X 天/条"）、
   已知作品数、**距最新作品发布多久**（"3 天前发布"——看的是作品的发布时间，不是"上次检测到
   变化"的时间，后者会被一次删除/改名刷新）；整行都可以点，手机上按起来不费劲
@@ -177,7 +227,7 @@ WEB_PORT=8787
 
 ---
 
-## 3. 监控列表 `users.conf`
+## 4. 监控列表 `users.conf`
 
 ```
 # <sec_user_id>|<昵称>
@@ -187,7 +237,7 @@ MS4wLjABAAAA4MjTvxSsNOjHfi9kfyRdu0KMKRHA1dPNv1WQQwW0OKY|示例账号
 `sec_user_id` 以 `MS4wLjABAAAA` 开头，是抖音账号的稳定 ID。**不知道怎么写就直接粘主页链接**：
 
 ```bash
-python -m dywatch add "https://www.douyin.com/user/MS4wLjABAAAA..."
+./.venv/bin/python -m dywatch add "https://www.douyin.com/user/MS4wLjABAAAA..."
 ```
 
 它会调用 DTK 的 `/api/v1/tools/parse-url` 把链接转成 ID（零成本、不消耗身份）。
@@ -198,7 +248,7 @@ python -m dywatch add "https://www.douyin.com/user/MS4wLjABAAAA..."
 
 ---
 
-## 4. 配置参考
+## 5. 配置参考
 
 全部配置放在 `.env`（权限 `0600`）。这张表由 `src/dywatch/settings.py` 的 `SETTINGS`
 注册表生成，所以代码与文档不会各说各的。带 ⚙️ 的是**不建议改**的实测值。
@@ -251,12 +301,12 @@ python -m dywatch add "https://www.douyin.com/user/MS4wLjABAAAA..."
 
 ### 归档
 
-| 键                         | 默认    | 说明                                                           |
-| -------------------------- | ------- | -------------------------------------------------------------- |
-| `ARCHIVE_ENABLED`          | `true`  | 是否用 DTK 归档做删除交叉确认（零身份成本）                    |
-| `ARCHIVE_DOWNLOAD_ENABLED` | `false` | 新作品是否顺手触发 DTK 下载媒体存档，见 §7，需要 `media:write` |
-| `ARCHIVE_DOWNLOAD_PIN`     | `false` | 存下来的媒体是否永久保留：关=只留最近 2G（旧的自动删），开=都锁定不删（占满后新下载会失败），见 §7 |
-| `ARCHIVE_DOWNLOAD_MAX_PER_ROUND` | `10` | 每轮最多触发几条归档下载（请求过全局节奏器，所以这个数决定旁路最多把一轮拖多久）；超出的排队等下一轮，不丢 |
+| 键                               | 默认    | 说明                                                                                         |
+| -------------------------------- | ------- | -------------------------------------------------------------------------------------------- |
+| `ARCHIVE_ENABLED`                | `true`  | 是否用 DTK 归档做删除交叉确认（零身份成本）                                                   |
+| `ARCHIVE_DOWNLOAD_ENABLED`       | `false` | 新作品是否顺手触发 DTK 下载媒体存档，见 §8，需要 `media:write`                                |
+| `ARCHIVE_DOWNLOAD_PIN`           | `false` | 存下来的媒体是否永久保留：false=只留最近 2G（旧的自动删），true=都锁定不删（占满后新下载会失败），见 §8 |
+| `ARCHIVE_DOWNLOAD_MAX_PER_ROUND` | `10`    | 每轮最多触发几条归档下载（请求过全局节奏器，所以这个数决定旁路最多把一轮拖多久）；超出的排队等下一轮，不丢 |
 
 ### 通知
 
@@ -284,7 +334,7 @@ python -m dywatch add "https://www.douyin.com/user/MS4wLjABAAAA..."
 
 ---
 
-## 5. 容量估算
+## 6. 容量估算
 
 节奏由 pacer 决定，**与账号数无关**：
 
@@ -306,7 +356,7 @@ python -m dywatch add "https://www.douyin.com/user/MS4wLjABAAAA..."
 
 ---
 
-## 6. 判定规则
+## 7. 判定规则
 
 ### 新作品
 
@@ -342,8 +392,6 @@ DTK 对**形态合法但不存在**的 `sec_user_id` 返回 `200 + items: []`，
 DTK 的归一化结果不暴露置顶，只有 `include_raw=true` 时 `raw.is_top` 才有值——
 **而且只有作品列表接口有效，详情接口的 `is_top` 恒为 0**。
 带 raw 会让响应体积约 ×3，所以默认只在"发现新作品 / 标题变化 / 每 20 轮"时带一次。
-
----
 
 ### 事件类型（`events.kind`）
 
@@ -388,7 +436,7 @@ for kind, n in sqlite3.connect('data/dywatch.db').execute(
 
 ---
 
-## 7. 归档下载（`ARCHIVE_DOWNLOAD_ENABLED`，默认关闭）
+## 8. 归档下载（`ARCHIVE_DOWNLOAD_ENABLED`，默认关闭）
 
 监控只负责"看见/没看见"，不碰媒体本身。开了这个开关后，每次检测到**新作品**，
 会额外请求 DTK 把这条作品的媒体存一份到它自己的磁盘上——目的是在作品被下架/删除之前，
@@ -452,7 +500,7 @@ DTK 那边给媒体目录设了 **2GB** 的上限（`media.max_bytes`，在 DTK 
 
 ---
 
-## 8. 排障
+## 9. 排障
 
 | 现象                                   | 原因与处理                                                                                                                                                                       |
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -510,7 +558,7 @@ journalctl -t dywatch-logrotate                              # cron 执行失败
 
 ---
 
-## 9. 架构
+## 10. 架构
 
 ```
 src/dywatch/
