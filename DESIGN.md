@@ -743,6 +743,9 @@ events(                                   -- 通知审计：能回答"当时到�
   delivery_json TEXT);                    -- 每渠道成功/失败
 ```
 
+`kind` 的取值与"哪一种会推送"以 `models.EventKind` / `NOTIFY_KINDS` 为准，清单与抑制窗口
+抄在 README §6；**`self_degraded` 目前没有任何产生点**（见第 10 章"尚未做"）。
+
 维护任务（每轮顺带，不单独起线程）：tombstone 按上限与 TTL 回收、
 `events` 保留 `EVENTS_KEEP_DAYS`（默认 90）、`rounds` 保留 30 天、
 `posts` 清理已不在窗口且已 tombstone 的行。
@@ -1154,6 +1157,9 @@ douyin-monitor/
 - `known_ids_max` 之外的**历史回溯**（DTK 的 `/archive/backfill` 能做，但那会大量消耗身份）
 - 评论监控、粉丝曲线、多平台（TikTok）
 - 通知语言切换（文案已集中在 `messages.py`，加英文只改那一个文件）
+- **自身降级护栏**：`EventKind.SELF_DEGRADED` 已经声明、4.9 的降级矩阵与第 3 章原则 #8 也都写了
+  "自身状态库/磁盘超限 → 停推送、面板标红、不崩不丢状态"，但**一处都没实现**：没有地方产生这个
+  事件，也没有对自身磁盘余量的检查。当前的实际行为是"该推的照推，磁盘满了由 SQLite/systemd 去报错"
 - **面板的上游健康卡片**（4.9 的"可选"）：要显示 DTK 版本 / 组件 / 身份池计数，就得让面板去调
   `GET /api/v1/system/status`，这与"打开面板不产生任何上游请求"冲突。要做的话应当是**主循环**
   定期取一次写进 `status.json`，面板继续只读快照——而不是让面板自己发请求
