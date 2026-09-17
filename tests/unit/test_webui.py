@@ -281,6 +281,34 @@ def test_metrics_stay_parseable_with_hostile_nicknames(tmp_path):
     assert 'author="nl\\nq\\"\\\\x"' in lines[0]
 
 
+def test_metrics_label_never_ends_with_a_half_escape():
+    """截断点落在转义反斜杠上时，label 不能以落单的 `\\` 结尾（那等于换行那个 bug 的翻版）。
+
+    `_label` 因此先截断再转义：只断言"结尾反斜杠成对"，因为落单的那一个会让
+    Prometheus 认为转义没结束。
+    """
+    from dywatch.webui import _label
+
+    for raw in ("a" * 63 + '"' + "b", "a" * 62 + '"' + "b", "长" * 63 + '"', "\\" * 40, '"' * 40):
+        label = _label(raw)
+        trailing = len(label) - len(label.rstrip("\\"))
+        assert trailing % 2 == 0, f"{raw[-3:]!r} 截出了半个转义：{label[-4:]!r}"
+
+
+def test_metrics_label_never_ends_with_a_half_escape():
+    """截断点落在转义反斜杠上时，label 不能以落单的转义符结尾（那等于换行那个 bug 的翻版）。
+
+    `_label` 因此先截断再转义：只断言"结尾反斜杠成对"，因为落单的那一个会让
+    Prometheus 认为转义没结束。
+    """
+    from dywatch.webui import _label
+
+    for raw in ("a" * 63 + '"' + "b", "a" * 62 + '"' + "b", "长" * 63 + '"', "\\" * 40, '"' * 40):
+        label = _label(raw)
+        trailing = len(label) - len(label.rstrip("\\"))
+        assert trailing % 2 == 0, f"{raw[-3:]!r} 截出了半个转义：{label[-4:]!r}"
+
+
 def test_gate_closed_renders_warning_strip(tmp_path):
     settings = make_settings(tmp_path)
     write_status(settings, gate={"open": False, "reason": "IDENTITY_POOL_EXHAUSTED",

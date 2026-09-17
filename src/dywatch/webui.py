@@ -1040,11 +1040,16 @@ def _label(value: str) -> str:
 
     少一个换行转义，昵称里带 `\\n` 的那一行就会把整个样本拆成两条、抓取端直接判坏——
     而这只是某个账号的昵称，不该波及整个 `/metrics`。
+
+    **截断必须在转义之前**：先转义再截断，第 64 个字符正好可能落在 `\\"` 的反斜杠上，
+    于是 label 以一个落单的转义符结尾，样本照样是坏的（等于没修）。截断原始值就没有这个问题——
+    代价是转义后的长度可能超过 64，而 64 本来就只是我们自己定的显示长度，不是协议要求。
     """
-    text = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    text = str(value)[:64]
+    text = text.replace("\\", "\\\\").replace('"', '\\"')
     for raw, escaped in (("\n", "\\n"), ("\r", "\\r"), ("\t", "\\t")):
         text = text.replace(raw, escaped)
-    return strip_controls(text)[:64]
+    return strip_controls(text)
 
 
 # =================== HTTP ===================
