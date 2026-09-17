@@ -166,6 +166,31 @@ async def cmd_doctor(settings: Settings) -> int:
         else:
             print("✓ 必需的 scope 齐备")
 
+        if settings["ARCHIVE_DOWNLOAD_ENABLED"]:
+            if "media:write" not in scopes:
+                print("✗ ARCHIVE_DOWNLOAD_ENABLED=true，但 Key 缺少 media:write scope")
+                problems.append("缺少 media:write（归档下载需要）")
+            else:
+                try:
+                    storage = await client.download_storage()
+                    used = int(storage.get("bytes_total") or 0)
+                    ceiling = int(storage.get("max_bytes") or 0)
+                    pct = (used / ceiling * 100) if ceiling else 0.0
+                    downloader = storage.get("downloader") or {}
+                    print(
+                        f"✓ 归档下载可用：已用 {used / 1024 / 1024:.1f}MB"
+                        f" / 上限 {ceiling / 1024 / 1024:.0f}MB（{pct:.0f}%）"
+                        f"，已 pin {storage.get('pinned', 0)} 条，下载器 "
+                        f"{'在线' if downloader.get('available') else '离线'}"
+                    )
+                    if pct >= 90:
+                        print("  ! 存储已接近上限，未 pin 的旧下载很快会被自动淘汰")
+                    if not downloader.get("available"):
+                        print("  ! 下载器当前离线：新的归档下载会一直排队，不会报错也不会成功")
+                        problems.append("下载器离线")
+                except MonitorError as exc:
+                    print(f"! 读取存储用量失败：{exc.code}")
+
         rate = me.get("rate_limit_per_min")
         print(f"  速率上限: {rate if rate is not None else '未单独设置（用实例默认 120/分钟）'}")
 

@@ -84,6 +84,21 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
     SettingSpec("BACKOFF_MAX_SECONDS", 600, "int", "全局闸门退避上限（秒）"),
     # ---------------------------------------------------------------- 归档
     SettingSpec("ARCHIVE_ENABLED", True, "bool", "是否用 DTK 归档做删除交叉确认"),
+    SettingSpec(
+        "ARCHIVE_DOWNLOAD_ENABLED", False, "bool",
+        "检测到新作品时是否让 DTK 顺手下载媒体存档（需要 API Key 带 media:write，默认关闭）",
+    ),
+    SettingSpec(
+        "ARCHIVE_DOWNLOAD_PIN", False, "bool",
+        "存下来的媒体是否永久保留。false（默认）：DTK 媒体目录默认上限 2G，装满会自动删最旧的，"
+        "等于只留最近一批；true：每份都锁定、不自动删，但占满 2G 之后新下载会一直失败，"
+        "需要人工去 DTK 删一些腾地方",
+    ),
+    SettingSpec(
+        "ARCHIVE_DOWNLOAD_MAX_PER_ROUND", 10, "int",
+        "每轮最多触发几条归档下载。请求会过全局节奏器（3~8 秒一次），所以这个数直接"
+        "决定旁路最多把一轮拖长多久；超出预算的条目排队等下一轮，不会丢",
+    ),
     # ---------------------------------------------------------------- 通知
     SettingSpec("NOTIFY_CHANNELS", ["dingtalk"], "csv", "启用的渠道，逗号分隔"),
     SettingSpec("SILENT_MODE", False, "bool", "跳过全部推送，监控与面板照常"),

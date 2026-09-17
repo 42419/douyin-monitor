@@ -24,8 +24,12 @@
 （a_bogus + SM3 纯 Python 复刻）、自带 browserless 取 Cookie、自带 403 自动换 Cookie、
 还要兼容外部 v4 接口 —— 这些东西 v5 都做得更好，再实现一遍就是第二个需要跟进的签名算法。
 
-**非目标**：不下载媒体（DTK downloader profile 的活）；不做评论、粉丝曲线、搜索监控；
-不实现抖音签名；不 import `dtk` 包；不直连 DTK 的 Postgres / Redis。
+**非目标**：不做评论、粉丝曲线、搜索监控；不实现抖音签名；不 import `dtk` 包；
+不直连 DTK 的 Postgres / Redis。
+
+**默认不碰媒体**：下载与存储是 DTK 自己的事。唯一的例外是一个**默认关闭**的可选开关
+——`ARCHIVE_DOWNLOAD_ENABLED=true` 时，检测到新作品会顺手请 DTK 存一份媒体（见 D17），
+它需要额外申请 `media:write`，属于"使用方显式选择的能力升级"，不是本工具的默认行为。
 
 ### 1.1 目标运行环境：Ubuntu / Linux 服务器（首要约束）
 
@@ -65,7 +69,7 @@
 | `/api/v1/system/status` | 版本、组件健康、身份池普查、存储 | ✅ 用到（面板展示上游健康） |
 | `/healthz`、`/readyz` | 存活 / 就绪探针 | ✅ 用作服务探针的参照 |
 | `/api/v1/ios` | iOS 快捷指令配套 | ❌ 不用 |
-| `/api/v1/downloads` | 媒体下载索引与文件 | ❌ 不用（不碰媒体） |
+| `/api/v1/downloads` | 媒体下载索引与文件 | ⚠️ 默认不用；`ARCHIVE_DOWNLOAD_ENABLED=true` 时用到 3 个（见 2.2 ⑨ 与 D17） |
 | `/api/v1/admin/*` | identities / proxies / users / api-keys / settings / watchlist / health / logs / maintenance / demo | ❌ 不用（见 2.3） |
 | `/api/setup/*` | 首次初始化 | ❌ 不用（一次性运维动作） |
 
@@ -199,7 +203,7 @@ GET /api/v1/archive/douyin/<content_id>
   只查 7 天没查过的），**只能当辅助证据，不能替代 feed 窗口的确认轮数**。
 - **权限**：API Key 必须带 `archive:read`。启动自检（`--doctor`）发现缺失时**明确报错**并给出申请指引，
   而不是静默降级——因为这是已确认要用的能力（见第 9 章 D8）。
-  确实想关掉时用 `ARCHIVE_ENABLED=off`，此时只走 feed 窗口判定。
+  确实想关掉时用 `ARCHIVE_ENABLED=false`，此时只走 feed 窗口判定。
 
 #### ⑥ 可选：实例与身份池状态（面板展示上游健康）
 
@@ -230,6 +234,28 @@ GET /api/v1/archive?platform=douyin&author_uid=<sec_user_id>&availability=delete
 `q`（子串搜索，**参数名是 `q` 而不是 `query`**）、`collection`、`stored`、`cursor`、`limit`。
 交叉确认实际只用 `author_uid`（+ 可选 `availability`）。
 
+#### ⑨ 可选（唯一的写操作）：新作品的媒体归档下载
+
+```
+POST /api/v1/downloads            {"platform":"douyin","content_id":"<id>","skip_existing":true}
+POST /api/v1/downloads/<id>/pin   {"pinned":true}
+GET  /api/v1/downloads/storage
+```
+
+- **用途**：`ARCHIVE_DOWNLOAD_ENABLED=true` 时，检测到新作品请 DTK 把它的媒体存一份到
+  DTK 自己的磁盘上（决定见 D17）。`storage` 只被 `doctor` 用来显示用量/上限/下载器是否在线。
+- **scope**：前两个要 `media:write`，`storage` 要 `media:read`——比监控用的两个读 scope 高一级。
+- **受理即返回**：`202` + `download_id`/`task_id`/`state`/`archived`。真正的下载在 DTK 侧异步跑，
+  本工具不轮询、不等它。同一条作品"已在飞 / 已存过"时 DTK 返回 **`200 + reused`**，不是错误。
+- **失败语义**（读源码确认）：容量过硬线 → `QUEUE_FULL`（自带 `retry_after`）；
+  没配下载器或 `media.enabled=false` → `NOT_CONFIGURED`（501）；
+  这条作品没有可下载的媒体 → `INVALID_PARAM`（终局，重试无意义）。
+  调用方 `ArchiveTrigger` 按这三类分别处置：退避、退避、丢弃。
+- **成本**：`media:write` 之所以独立成 scope，是因为"启动下载会花身份、会占磁盘"。
+  实际路径上我们刚看到的新作品通常已被 DTK 归档（读取时就写了 archive），此时直接按存档里的
+  镜像计划下载，**不花身份**；只有镜像过期、worker 需要重新解析那条帖子时才花 1 个。
+  **磁盘才是硬约束**：`media.max_bytes` 默认 2 GiB，满了按时间顺序淘汰未 pin 的下载。
+
 ### 2.3 明确不用的接口及原因
 
 | 接口 | 为什么不用 |
@@ -242,13 +268,17 @@ GET /api/v1/archive?platform=douyin&author_uid=<sec_user_id>&availability=delete
 | `/{platform}/user/followers\|following` | TikTok only，抖音不支持 |
 | `/api/v1/archive/recheck`、`/backfill` | 会大量消耗身份池，应由 DTK 侧按自己策略运行；本工具**不主动触发**，只读结果 |
 | `/api/v1/archive/delete`、`/collections*` | 写操作，本工具对 DTK **纯只读** |
-| `/api/v1/downloads*` | 不碰媒体 |
+| `/api/v1/downloads/{id}`、`DELETE /downloads/{id}`、`/downloads/retry`、`/downloads/deduplicate` | 查单条、取消、重试、去重都是**人去 DTK 控制台做的决定**；本工具只发起新下载与 pin（`/downloads/storage` 只被 `doctor` 读一眼） |
+| `/api/v1/downloads/{id}/files/{name}` | 本工具不取回媒体字节（取回就该由人来下） |
 | `/api/v1/admin/watchlist/*` | 需 `identity:manage` + operator（权限过重），且间隔下限 900 秒；见 D2 |
 | `/api/v1/admin/*` 其余 | 身份池/代理/用户/密钥/设置/日志/维护，都是 DTK 控制台自己的职责 |
 
-**关键取舍：本工具对 DTK 纯只读。** 不提交任务、不改设置、不触发 recheck。
-因此 API Key 只需 `douyin:read` 与 `archive:read` 两个 scope，
-且任何本工具的行为都不可能损害 DTK 实例的状态。
+**关键取舍：本工具对 DTK 默认纯只读。** 不提交任务、不改设置、不触发 recheck；
+API Key 只需 `douyin:read` 与 `archive:read` 两个 scope，不会改变 DTK 实例的状态。
+
+**唯一的例外**是那个默认关闭的媒体归档开关（D17）：打开它需要额外授予 `media:write`，
+于是"写"这件事从"永远不做"变成"你明确点头才做，且只做一件事——让 DTK 存一份新作品的媒体"。
+即便如此，本工具仍然不取消、不重试、不去重、不读回字节，也不删除任何东西。
 
 ### 2.4 必须写进代码的契约细节
 
@@ -526,10 +556,10 @@ v5 的代码质量主要来自一批**成文且被强制执行的规矩**。本�
 | `cli.py` | 参数解析、信号、PID 锁、`--once`/`--status`/`--doctor`/`--config-check` | 不含业务逻辑 |
 | `runtime.py` | 组装依赖、生命周期（启动迁移、优雅关闭、通知器 aclose） | 不做判定、不做调度决策 |
 | `loop.py` | **轮次**循环：加载 users.conf（按 mtime 热加载）→ 并发检查全部账号 → 轮末随机等待 → 输出本轮汇总 | 不发通知、不碰 HTTP |
-| `pacer.py` | 全局请求节奏器：相邻两次"请求报到"间隔随机 3~8 秒，与并发数无关 | 不执行请求、不做重试 |
+| `pacer.py` | 全局请求节奏器：相邻两次"请求报到"间隔随机 3~8 秒，与并发数无关。**凡是发往 DTK 的请求都要来报到**——抓取、归档交叉确认、归档下载都不例外 | 不执行请求、不做重试 |
 | `scheduler.py` | 全局闸门（上游故障退避）与每账号失败计数/告警冷却决策 | 不执行、不持久化 |
-| `pipeline.py` | 单账号一轮：fetch → diff → 单事务持久化 → 发通知 → 回写运行结果 | 不决定"什么时候跑"、不决定"文案长什么样" |
-| `dtk.py` | HTTP 客户端：认证头、信封解包、`wait`→202→任务轮询、错误码归一化、超时与重试 | **不解析业务语义**，不认识"新作品" |
+| `pipeline.py` | 单账号一轮：fetch → diff → 单事务持久化 → 发通知 → （可选）归档下载 → 回写运行结果。归档下载由 `ArchiveTrigger` 承担：节奏、每轮预算、内存队列、退避都在它内部 | 不决定"什么时候跑"、不决定"文案长什么样"；`ArchiveTrigger` 的所有失败在这里终结，绝不外抛 |
+| `dtk.py` | HTTP 客户端：认证头、信封解包、`wait`→202→任务轮询、错误码归一化、超时与重试；`start_download`/`pin_download`/`download_storage` 不走 `wait`/202 封装（受理即返回），写操作用 `WRITE_TIMEOUT`（10 秒）而不是 `DTK_TIMEOUT` | **不解析业务语义**，不认识"新作品"；不自己决定要不要重试、要不要 pin |
 | `models.py` | `Content` 子集、`AuthorState`、`PostState`、`Event` 等 frozen dataclass | 无方法、无 I/O |
 | `diff.py` | ★纯函数 `(prev_state, page, now, cfg) -> (events, next_state)` | 无时间副作用（`now` 外部传入） |
 | `state.py` | SQLite：schema 迁移、读写、事件审计；**唯一持久化出口** | 不做网络、不做判定 |
@@ -1080,6 +1110,7 @@ douyin-monitor/
 | D14 | 部署形态 | **只做 systemd，不做容器镜像** | 一个进程 + 一个 SQLite 文件 + 一份配置；systemd 已经管完开机自启、崩溃重启、日志归集与权限隔离，再包一层编排只会多一处要长期维护的东西 |
 | D15 | 是否创建专用系统用户 | **不创建**。服务以执行安装的账号身份运行（`sudo` 时取 `SUDO_USER`），单元里的 `User=` 由 `install.sh` 填入 | 这是给自己用的单机工具，专用账号带来的只有 `sudo -u` 的摩擦；真正的权限边界由单元的 `ProtectSystem=strict` + `ReadWritePaths=工作目录` 给出。代价是账号本身是登录账号，所以单元的其余加固项全部保留 |
 | D16 | 日志轮转配置放在哪里（**上线后由实测暴露**） | **不装 `/etc/logrotate.d`**。配置装到 `/etc/dywatch/logrotate.conf`，由 `/etc/cron.d/dywatch` 每小时触发，state 文件独立放 `/var/lib/dywatch/logrotate.status`；`install.sh` 升级时删掉老版本留下的 `/etc/logrotate.d/dywatch` | 实测：Armbian 的 `/etc/cron.d/armbian-truncate-logs` 每 15 分钟跑 `armbian-truncate-logs`，`/var/log` 用量 ≥75% 时执行 `logrotate --force /etc/logrotate.conf`——`--force` **跳过日期判断**，把 `/etc/logrotate.d` 下所有配置强制轮转，`monitor.log` 于是每 15 分钟被切一次、`rotate 14` 的归档不到 4 小时就被挤掉。自己的 cron + 独立 state 让轮转节奏只由本项目决定，别人的 `--force` 不再波及 |
+| D17 | 是否触发 DTK 的媒体下载归档 | **做，但默认关（`ARCHIVE_DOWNLOAD_ENABLED=false`）**，需要额外的 `media:write`。落地形状 = `ArchiveTrigger`：只等 DTK 受理（202）；**每个请求过 pacer**；**每轮预算**（`ARCHIVE_DOWNLOAD_MAX_PER_ROUND`，默认 10）按轮算不按账号算；失败/退避/超预算的条目进**内存队列**下轮补发；容量满与配置错进**退避窗口**；调用点排在通知**之后**；任何失败只记日志 | ①监控"只读"是刻意的设计，写操作与权限升级应当是使用方主动的决定，不该默认打开。②DTK 的 `media.max_bytes` 默认 2GiB，满了按时间淘汰未 pin 的下载——`ARCHIVE_DOWNLOAD_PIN` 因此也默认关：全 pin 满之后新下载会持续 `QUEUE_FULL`，该永久保留哪些要人判断。③`NEW_POST` **只会出现一次**（`diff` 保证），所以旁路不能"失败了就算了"——那等于永久丢档，必须有队列；反过来队列只在内存里，进程重启会丢，这是明知而接受的代价（重启前那几条本来也无从补，DTK 不知道我们想存哪几条）。④旁路的"不影响主流程"必须包含**耗时**：第一版把它串行放在通知之前且不过 pacer，DTK 一慢，这一轮的通知就跟着卡住（见第 10 章修正 #11） |
 
 ---
 
@@ -1112,6 +1143,8 @@ douyin-monitor/
 | 8 | `install.sh` 直接 `python3 -m venv` | 先在 `python3.14 → 3.11` 与 `python3` 中挑版本最高的（`PYTHON=` 可覆盖），已有 `.venv` 低于 3.11 时重建 | 项目要求 ≥3.11，但 Ubuntu 22.04 自带的 `python3` 是 3.10，要装到 `pip install .` 那一步才失败、报错还看不出是版本问题；实际部署时是在服务器上手工把脚本里三处 `python3` 改成 `python3.14` 才过去的——"每台机器打一次补丁"该由脚本自己解决 |
 | 9 | 面板"每个账号现在怎么样"（一张表 + 5 个数字） | **移植旧项目的面板**：LED 状态阵列 + 数据条 + 账号列表 + 详情弹窗；详情读 SQLite 后多出"已消失作品"与"最近事件"，`never_seen` 单独一色，闸门关闭时页面顶部出红色警示条 | 一屏的表格说不清"它是变了还是没变"：账号数一多就看不出谁在失败；旧面板那套读数式布局是跑过数月的成品。适配点是数据源——旧项目每账号一个 JSON 文件，这里换成 `authors`/`posts`/`tombstones`/`events` 四张表，于是"已消失"和"最近事件"本来就有落库，只是旧面板没有地方显示 |
 | 10 | 面板详情直接读每账号状态文件 | 改读状态库，并且**读不出来 ≠ 查无此人**：`400` 非法 ID、`404` 库里没这个账号、`503` 库打不开，前端分别显示 | 旧项目里两者都是"查不到"，**看的人会以为是配置问题去翻 users.conf**，而实际是库的问题 |
+| 11 | 归档下载"检测到新作品就 for 循环 await 发出去" | 收成一个 `ArchiveTrigger`：每请求过 pacer、每轮预算、失败进内存队列下轮补、容量/配置类进退避窗口，调用点挪到**通知之后** | 第一版的形状有两个真问题：①一轮 15 条新作品就是 15~30 个**突发**写请求（绕过了节奏器，与 D17 想遵守的"约 11 次/分钟"自相矛盾）；②串行 await 排在**通知之前**，DTK 慢一点这一轮的新作品通知就跟着卡住——旁路不影响主流程必须包括**耗时**，不只是异常。顺带把"失败只记日志"补成"连非 `MonitorError` 的意外也兜住（`CancelledError` 除外）" |
+| 12 | §1 非目标与 §2.1/§2.3 写着"不下载媒体 / 不碰媒体" | 改成"**默认**不碰媒体，唯一例外是默认关闭的归档下载开关"（D17），并在 §2.2 补上 ⑨ 这条写操作的接口说明 | D17 决定加了一条可选的写路径，但那三处表述没跟着改，设计稿会自己打自己——以后有人照着 §2.3 断定"本工具永不写"，就会把 D17 的功能当成 bug 删掉 |
 
 ### 尚未做（明确不在第一版范围）
 

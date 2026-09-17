@@ -3,20 +3,23 @@
 **它是唯一同时知道 `dtk` / `diff` / `state` / `notifiers` 的模块。** 这不是坏味道，
 而是设计：把"这段流程涉及哪些部件"集中在一处，其它每个部件就都能只认识一两个概念。
 
-顺序上有两条不能调换的：
+顺序上有三条不能调换的：
 
 1. **先落库，再通知。** 进程在发通知途中被杀，重启后不会重复推送同一条新作品；
    反过来（先发后存）就会。宁可少推一条，不可重复推——重复的告警会让人关掉通知，
    那才是真正的损失。
 2. **失败不推进判定状态机。** 一次网络抖动如果让"疑似删除"的计数前进一格，
    就等于把确认建立在没看到数据的基础上，这正是旧项目踩过的坑。
+3. **归档下载排在通知之后。** 它是旁路：可以慢、可以欠，但绝不能让主链路等它。
+   详见 `ArchiveTrigger`。
 """
 
 from __future__ import annotations
 
 import time
+from collections import deque
 from datetime import datetime
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from .alerts import Deduplicator, should_send
 from .diff import diff
@@ -38,6 +41,17 @@ from .state import StateStore
 #: 而不是让 N 个账号各失败一遍。
 CONFIG_ERROR_GATE_SECONDS = 3600
 
+#: 归档下载的内存队列上限。队列只在内存里：进程重启会丢，但重启前那几条本来也没有
+#: 别的办法补（DTK 不知道"dywatch 想存哪几条"），为它加一张表不值得。
+ARCHIVE_QUEUE_MAX = 200
+#: 一条作品最多被试几次就放弃。没有这个上限，一条永远失败的作品会堵住队首，
+#: 后面的条目一辈子排不上（它每轮只花掉一个预算）。
+ARCHIVE_MAX_ATTEMPTS = 3
+#: 配置类失败（缺 `media:write`、DTK 没配下载器）的退避窗口：这类问题重试没有意义。
+ARCHIVE_CONFIG_MUTE_SECONDS = 3600
+#: 容量类退避的兜底值——DTK 的 `QUEUE_FULL` 通常自带 `retry_after`，没给时用这个。
+ARCHIVE_CAPACITY_MUTE_SECONDS = 300
+
 
 async def run_author(
     *,
@@ -52,6 +66,7 @@ async def run_author(
     cfg: DiffConfig,
     now: datetime,
     archive_enabled: bool = True,
+    archive_trigger: ArchiveTrigger | None = None,
     logger: Any = None,
 ) -> RoundResult:
     started = time.monotonic()
@@ -129,6 +144,13 @@ async def run_author(
     if deliveries:
         store.record_deliveries(deliveries)
 
+    # ---- 归档下载（**排在通知之后**） ---------------------------------------
+    # 放在这里而不是通知之前，是因为"这一轮该推的消息"比"顺手存个档"重要：写请求慢
+    # 下来只会推迟下一轮的覆盖（旁路本身有节奏器和每轮预算兜着），而通知被拖住，
+    # 就是这条新作品真的没推出去。
+    if archive_trigger is not None:
+        await archive_trigger.trigger(events)
+
     return _summarize(author, next_state, events, error, started)
 
 
@@ -153,6 +175,208 @@ def _should_include_raw(author: AuthorState, cfg: DiffConfig) -> bool:
         have_new_posts=have_new_posts,
         title_changed=changed and not have_new_posts,
     )
+
+
+class ArchiveTrigger:
+    """新作品 → DTK 媒体下载的旁路（`ARCHIVE_DOWNLOAD_ENABLED=true` 时才被创建）。
+
+    它照抄 DTK 自己 `webhooks.py` 的原则——"触发动作绝不能影响主流程"——并把它落成
+    三条不变量，按重要性排序：
+
+    1. **不拖住主链路。** 调用点排在通知之后；**每次请求都过同一个 `RequestPacer`**
+       （与抓取共用节奏，所以不会突发）；写请求用 `dtk.WRITE_TIMEOUT`（10 秒）；
+       失败最多重试一次，不纠缠。
+    2. **不丢档。** `NEW_POST` 只出现一次（`diff` 保证），所以"这一轮没发出去的请求"
+       事后没有任何机会补。于是这里维护一个内存队列：失败、退避、超预算的条目都留在
+       队列里，下一轮接着发。只有"这条作品确实没有可下载的媒体"（`INVALID_PARAM`）
+       和"试满 `ARCHIVE_MAX_ATTEMPTS` 次还是失败"才会出队。
+    3. **不刷屏。** 容量满（`QUEUE_FULL`，DTK 自带 `retry_after`）或配置不对
+       （`NOT_CONFIGURED` / `FORBIDDEN_SCOPE`）时进入退避窗口，窗口内一条请求都不发，
+       只在每次尝试时记一条 debug。
+
+    它知道自己只是旁路：**所有失败都在这里终结**，绝不向 `run_author` 抛异常。
+    """
+
+    __slots__ = (
+        "_client", "_pacer", "_pin_enabled", "_max_per_round", "_log",
+        "_pending", "_in_queue", "_muted_until", "_muted_code", "_budget",
+    )
+
+    def __init__(
+        self,
+        *,
+        client: Any,
+        pacer: RequestPacer,
+        pin: bool = False,
+        max_per_round: int = 10,
+        logger: Any = None,
+    ) -> None:
+        self._client = client
+        self._pacer = pacer
+        self._pin_enabled = bool(pin)
+        self._max_per_round = max(1, int(max_per_round))
+        self._log = logger
+        #: 队列元素是可变的三元组：`[content_id, sec_user_id, attempts]`
+        self._pending: deque[list[Any]] = deque()
+        self._in_queue: set[str] = set()
+        self._muted_until = 0.0
+        self._muted_code: str | None = None
+        self._budget = self._max_per_round
+
+    # ------------------------------------------------------------------ 状态
+    @property
+    def pending(self) -> int:
+        """队列里积压了多少条（面板/日志用）。"""
+        return len(self._pending)
+
+    @property
+    def muted_code(self) -> str | None:
+        return self._muted_code if time.monotonic() < self._muted_until else None
+
+    def start_round(self) -> None:
+        """每轮开头重置预算。由 `loop.run_round` 调用——预算按轮算，不按账号算。"""
+        self._budget = self._max_per_round
+
+    # ------------------------------------------------------------------ 主入口
+    async def trigger(self, events: Sequence[Event]) -> None:
+        """把本轮的新作品放进队列，然后尽预算往外发。"""
+        self._enqueue(events)
+        if not self._pending:
+            return
+        if time.monotonic() < self._muted_until:
+            _log(
+                self._log, "debug", "archive.muted",
+                code=self._muted_code,
+                remaining=round(self._muted_until - time.monotonic(), 1),
+                pending=len(self._pending),
+            )
+            return
+        await self._drain()
+
+    def _enqueue(self, events: Iterable[Event]) -> None:
+        for event in events:
+            content_id = event.content_id
+            if event.kind is not EventKind.NEW_POST or not content_id:
+                continue
+            if content_id in self._in_queue:
+                continue
+            while len(self._pending) >= ARCHIVE_QUEUE_MAX:
+                dropped = self._pending.popleft()
+                self._in_queue.discard(str(dropped[0]))
+                _log(self._log, "warning", "archive.queue_overflow",
+                     dropped=dropped[0], max=ARCHIVE_QUEUE_MAX)
+            self._pending.append([content_id, event.sec_user_id, 0])
+            self._in_queue.add(content_id)
+
+    async def _drain(self) -> None:
+        sent = 0
+        while self._pending and self._budget > 0:
+            content_id, sec_user_id, attempts = self._pending[0]
+            self._budget -= 1
+            await self._pacer.wait_for_turn()
+            try:
+                result = await self._client.start_download(str(content_id))
+            except Exception as exc:  # noqa: BLE001 - 见 `_on_failure`：旁路必须兜住一切
+                # 注意是 `Exception` 而不是 `BaseException`：`asyncio.CancelledError`
+                # 继承自后者，停机时的取消必须照常往上走，不能被这条旁路吃掉。
+                if not await self._on_failure(
+                    exc, content_id=str(content_id), sec_user_id=str(sec_user_id),
+                    attempts=int(attempts),
+                ):
+                    break
+                continue
+            self._dequeue()
+            sent += 1
+            # DTK 对"这条已经在存了/已经存过"返回 200 + reused，那不是一条新的下载，
+            # 记成 started 会让人以为每次都真的重新下了一遍
+            reused = result.get("reused")
+            _log(
+                self._log, "info",
+                "archive.download_reused" if reused else "archive.download_started",
+                sec_user_id=sec_user_id, content_id=content_id,
+                download_id=result.get("download_id"), state=result.get("state"),
+                archived=result.get("archived"), reused=reused,
+            )
+            if self._pin_enabled and result.get("download_id"):
+                await self._pin(str(result["download_id"]), content_id=str(content_id))
+
+        self._log_tail(sent)
+
+    async def _pin(self, download_id: str, *, content_id: str) -> None:
+        await self._pacer.wait_for_turn()
+        try:
+            await self._client.pin_download(download_id, True)
+        except Exception as exc:  # noqa: BLE001 - 与 _drain 同一个理由：不外抛
+            # 下载已经被受理、正在跑，所以这不是"下载失败"；但也不能沉默：
+            # "以为 pin 上了其实没有"意味着这条档在容量满时会被静默淘汰
+            code = exc.code if isinstance(exc, MonitorError) else type(exc).__name__
+            message = (exc.message if isinstance(exc, MonitorError) else str(exc))[:120]
+            _log(self._log, "warning", "archive.pin_failed", download_id=download_id,
+                 content_id=content_id, code=code, message=message)
+            return
+        _log(self._log, "info", "archive.download_pinned",
+             download_id=download_id, content_id=content_id)
+
+    async def _on_failure(
+        self, exc: BaseException, *, content_id: str, sec_user_id: str, attempts: int
+    ) -> bool:
+        """处理一次失败。返回 True = 还可以继续下一条，False = 本轮到此为止。
+
+        DTK 的错误码在这里被分成三类，处置完全不同——把它们混成一句"失败了"是这段
+        逻辑最容易写错的地方。非 `MonitorError` 的意外（客户端自己出 bug）走第三类：
+        旁路连这个都要兜住，因为它唯一不可接受的行为就是"把主流程带崩"。
+        """
+        code = exc.code if isinstance(exc, MonitorError) else type(exc).__name__
+        message = (exc.message if isinstance(exc, MonitorError) else str(exc))[:120]
+
+        if code == "INVALID_PARAM":
+            # 这条作品确实没有可下载的媒体（纯文字、已下架、只有一张封面），
+            # 再试一百次也是一样的结果
+            self._dequeue()
+            _log(self._log, "info", "archive.download_skipped", sec_user_id=sec_user_id,
+                 content_id=content_id, code=code, message=message)
+            return True
+
+        if isinstance(exc, MonitorError) and (exc.is_gate or exc.is_config):
+            # 容量暂停（DTK 自带 retry_after）或配置问题（缺 scope、没配下载器）：
+            # 这一轮剩下的请求再发也是白挨，进窗口等下轮
+            seconds = int(
+                exc.retry_after
+                or (ARCHIVE_CONFIG_MUTE_SECONDS if exc.is_config else ARCHIVE_CAPACITY_MUTE_SECONDS)
+            )
+            self._muted_until = time.monotonic() + seconds
+            self._muted_code = code
+            _log(self._log, "warning", "archive.muted_raised", code=code, seconds=seconds,
+                 pending=len(self._pending), message=message)
+            return False
+
+        # 余下三类都在这里：网络抖动（DTK_UNREACHABLE）、DTK 内部错误、以及非
+        # MonitorError 的意外。留到下轮再试；试满次数就放弃并说清楚——不然一条永远
+        # 失败的条目会一直占着队首（每轮只花掉一个预算，后面的条目一辈子排不上）。
+        attempts += 1
+        if attempts >= ARCHIVE_MAX_ATTEMPTS:
+            self._dequeue()
+            _log(self._log, "warning", "archive.download_given_up", sec_user_id=sec_user_id,
+                 content_id=content_id, attempts=attempts, code=code, message=message)
+            return True
+        self._pending[0][2] = attempts
+        _log(self._log, "warning", "archive.download_failed", sec_user_id=sec_user_id,
+             content_id=content_id, attempts=attempts, code=code, message=message)
+        return False
+
+    def _dequeue(self) -> None:
+        dropped = self._pending.popleft()
+        self._in_queue.discard(str(dropped[0]))
+
+    def _log_tail(self, sent: int) -> None:
+        if not self._pending:
+            return
+        muted = max(0.0, self._muted_until - time.monotonic())
+        _log(
+            self._log, "info", "archive.pending", sent=sent, pending=len(self._pending),
+            muted_seconds=round(muted, 1) if muted else 0,
+            hint="积压的条目下一轮接着发；进程重启会丢队列",
+        )
 
 
 async def _notify_upstream(

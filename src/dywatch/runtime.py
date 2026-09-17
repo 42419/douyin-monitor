@@ -25,6 +25,7 @@ from .dtk import DtkClient
 from .loop import MonitorLoop
 from .notifiers import build_notifier
 from .pacer import RequestPacer, RoundWaiter
+from .pipeline import ArchiveTrigger
 from .scheduler import GlobalGate
 from .settings import Settings
 from .state import StateStore
@@ -183,6 +184,14 @@ class Runtime:
             f"  置顶标志      : INCLUDE_RAW={self.settings['INCLUDE_RAW']}"
             f"（每 {self.settings['RAW_REFRESH_ROUNDS']} 轮最多取一次）",
             f"  归档交叉确认  : {'开启' if self.settings['ARCHIVE_ENABLED'] else '关闭'}",
+            f"  归档下载      : "
+            + (
+                f"开启（pin={'是' if self.settings['ARCHIVE_DOWNLOAD_PIN'] else '否'}，"
+                f"每轮最多 {self.settings['ARCHIVE_DOWNLOAD_MAX_PER_ROUND']} 条，"
+                "需 media:write scope）"
+                if self.settings["ARCHIVE_DOWNLOAD_ENABLED"]
+                else "关闭（新作品不触发媒体下载）"
+            ),
             f"  推送渠道      : "
             + ("静默模式（不推送）" if self.settings["SILENT_MODE"] else ", ".join(self.notifier.names) or "（无）"),
             f"  状态库        : {self.settings.db_path}",
@@ -213,6 +222,16 @@ def build_runtime(settings: Settings, *, logger: StructuredLogger) -> Runtime:
         backoff_max=int(settings["BACKOFF_MAX_SECONDS"]),
     )
     dedup = Deduplicator()
+    # 归档下载旁路：关着的时候连对象都不建，主链路上就是一个 None 判断
+    archive_trigger = None
+    if settings["ARCHIVE_DOWNLOAD_ENABLED"]:
+        archive_trigger = ArchiveTrigger(
+            client=client,
+            pacer=pacer,
+            pin=bool(settings["ARCHIVE_DOWNLOAD_PIN"]),
+            max_per_round=int(settings["ARCHIVE_DOWNLOAD_MAX_PER_ROUND"]),
+            logger=logger,
+        )
     loop = MonitorLoop(
         settings=settings,
         store=store,
@@ -223,6 +242,7 @@ def build_runtime(settings: Settings, *, logger: StructuredLogger) -> Runtime:
         gate=gate,
         dedup=dedup,
         logger=logger,
+        archive_trigger=archive_trigger,
     )
     return Runtime(
         settings=settings,

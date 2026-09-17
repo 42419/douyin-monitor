@@ -369,6 +369,138 @@ async def test_archive_never_seen_returns_none_rather_than_raising():
         assert await client.archive_item("nope") is None
 
 
+# --------------------------------------------------------------------------- 归档下载
+
+
+async def test_start_download_posts_the_right_body():
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["json"] = _json.loads(request.content)
+        return httpx.Response(202, json=envelope({
+            "download_id": "d1", "task_id": "t1", "state": "queued",
+            "directory": "/data/douyin/u1/c1", "planned": [{"name": "video.mp4", "kind": "video"}],
+            "skipped": [], "reused": None, "archived": False,
+        }))
+
+    async with make_client(handler) as client:
+        result = await client.start_download("c1")
+
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/api/v1/downloads"
+    assert seen["json"] == {"platform": "douyin", "content_id": "c1", "skip_existing": True}
+    assert result["download_id"] == "d1"
+    assert result["state"] == "queued"
+
+
+async def test_start_download_does_not_pin_by_itself():
+    """`start_download` 只发一个请求：pin 是第二个写请求，要由调用方单独过节奏器。"""
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        return httpx.Response(202, json=envelope({
+            "download_id": "d1", "task_id": "t1", "state": "queued", "archived": False,
+        }))
+
+    async with make_client(handler) as client:
+        result = await client.start_download("c1")
+
+    assert calls == [("POST", "/api/v1/downloads")]
+    assert result["download_id"] == "d1"
+    assert "pinned" not in result
+
+
+async def test_pin_download_posts_the_pinned_flag():
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["json"] = _json.loads(request.content)
+        return httpx.Response(200, json=envelope({"download_id": "d1", "pinned": True}))
+
+    async with make_client(handler) as client:
+        result = await client.pin_download("d1", True)
+
+    assert (seen["method"], seen["path"]) == ("POST", "/api/v1/downloads/d1/pin")
+    assert seen["json"] == {"pinned": True}
+    assert result["pinned"] is True
+
+
+async def test_pin_failure_propagates_rather_than_silently_dropped():
+    """pin 失败必须让调用方知道——"以为 pin 上了其实没有"比"压根没 pin"更危险，
+    不该被这一层悄悄吞掉。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json=envelope(
+            None, success=False, error={"code": "FORBIDDEN_SCOPE", "message": "no media:write"}))
+
+    async with make_client(handler) as client:
+        with pytest.raises(MonitorError) as exc_info:
+            await client.pin_download("d1", True)
+    assert exc_info.value.code == "FORBIDDEN_SCOPE"
+
+
+async def test_write_requests_use_the_short_timeout():
+    """写请求不能被 DTK_TIMEOUT（默认 35 秒）拖住——旁路慢下来就是整轮跟着慢。"""
+    from dywatch.dtk import WRITE_TIMEOUT
+
+    seen: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        timeout = (request.extensions.get("timeout") or {}).get("read")
+        seen.append(float(timeout))
+        if request.url.path.endswith("/pin"):
+            return httpx.Response(200, json=envelope({"download_id": "d1", "pinned": True}))
+        return httpx.Response(202, json=envelope({"download_id": "d1", "state": "queued"}))
+
+    async with make_client(handler, timeout=35.0) as client:
+        await client.start_download("c1")
+        await client.pin_download("d1", True)
+
+    assert seen == [WRITE_TIMEOUT, WRITE_TIMEOUT]
+
+
+async def test_start_download_capacity_full_maps_to_gate_code():
+    """QUEUE_FULL 已经在 dtk.py 自己的 GATE_CODES 里，验证下载失败时这条分类照样生效
+    （调用方——pipeline.py 的 ArchiveTrigger——靠 MonitorError.code 决定处置方式）。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json=envelope(
+            None, success=False,
+            error={"code": "QUEUE_FULL", "message": "storage at capacity", "retry_after": 300}))
+
+    async with make_client(handler) as client:
+        with pytest.raises(MonitorError) as exc_info:
+            await client.start_download("c1")
+    assert exc_info.value.code == "QUEUE_FULL"
+    assert exc_info.value.is_gate is True
+
+
+async def test_download_storage_parses_usage_and_downloader_health():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/downloads/storage"
+        return httpx.Response(200, json=envelope({
+            "downloads": 12, "bytes_total": 512 * 1024 * 1024, "pinned": 3,
+            "evicted": 5, "in_flight": 1, "by_state": {"done": 11, "queued": 1},
+            "enabled": True, "max_bytes": 2 * 1024 * 1024 * 1024,
+            "max_file_bytes": 512 * 1024 * 1024,
+            "downloader": {"available": True, "version": "1.0", "workers": 2,
+                           "queued": 0, "running": 1, "volume_bytes": 512 * 1024 * 1024,
+                           "detail": "ok"},
+        }))
+
+    async with make_client(handler) as client:
+        storage = await client.download_storage()
+
+    assert storage["bytes_total"] == 512 * 1024 * 1024
+    assert storage["max_bytes"] == 2 * 1024 * 1024 * 1024
+    assert storage["downloader"]["available"] is True
+
+
 # --------------------------------------------------------------------------- 策略
 
 

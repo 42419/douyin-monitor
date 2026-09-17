@@ -20,6 +20,14 @@ def test_every_spec_has_a_default_and_a_note():
         assert spec.note, f"{spec.key} 缺少说明"
 
 
+def test_archive_download_defaults_to_disabled():
+    """需要额外的 media:write scope，不能默认开——升级到带这个功能的版本不该悄悄
+    多申请一层权限。"""
+    settings = load_settings(None, environ={"DTK_API_KEY": "dtk_x"})
+    assert settings["ARCHIVE_DOWNLOAD_ENABLED"] is False
+    assert settings["ARCHIVE_DOWNLOAD_PIN"] is False
+
+
 def test_defaults_validate_once_a_key_and_channel_are_given():
     settings = load_settings(
         None,

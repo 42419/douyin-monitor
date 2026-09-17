@@ -46,6 +46,11 @@ CONFIG_CODES: Final[frozenset[str]] = frozenset(
     {"UNAUTHENTICATED", "FORBIDDEN_SCOPE", "INVALID_PARAM", "NOT_CONFIGURED"}
 )
 
+#: 写请求（归档下载、pin）的超时。DTK 受理一个下载请求是本地操作，正常都在 1 秒内；
+#: 10 秒还不回来就是它不对劲，再等下去只会把整轮的结束时间往后拖——写请求在旁路上，
+#: 没有哪个人在等它。
+WRITE_TIMEOUT: Final[float] = 10.0
+
 #: 上游侧的临时问题，该账号记一次失败然后退避
 TRANSIENT_CODES: Final[frozenset[str]] = frozenset(
     {
@@ -274,18 +279,33 @@ class DtkClient:
 
     # ------------------------------------------------------------ 传输层
     async def _request(
-        self, path: str, params: Mapping[str, Any] | None = None
+        self,
+        path: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        method: str = "GET",
+        json_body: Mapping[str, Any] | None = None,
+        timeout: float | None = None,
+        attempts: int = 2,
     ) -> tuple[int, dict[str, Any]]:
-        """One HTTP call. Returns `(status, envelope)`; raises on transport failure."""
+        """One HTTP call. Returns `(status, envelope)`; raises on transport failure.
+
+        `timeout` / `attempts` 是给写操作留的口子：读可以慢慢等（`wait`→202→轮询本来就
+        要等），而旁路上的写请求一慢就是整轮跟着慢。不传 `timeout` 时用客户端默认值
+        （`DTK_TIMEOUT`）——注意不能传 `None` 给 httpx，那等于"永远不超时"。
+        """
         url = f"{self.base_url}{path}"
         query = {k: v for k, v in (params or {}).items() if v is not None}
         last: Exception | None = None
-        for attempt in (1, 2):
+        for attempt in range(1, max(1, attempts) + 1):
             try:
-                response = await self._client.get(url, params=query, headers=self._headers)
+                response = await self._client.request(
+                    method, url, params=query, json=json_body, headers=self._headers,
+                    timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT,
+                )
             except httpx.HTTPError as exc:
                 last = exc
-                if attempt == 1:
+                if attempt < attempts:
                     await asyncio.sleep(0.5 + random.random() * 0.5)
                     continue
                 raise MonitorError(
@@ -476,6 +496,74 @@ class DtkClient:
         if not isinstance(data, Mapping):
             return None
         return parse_archive_item(data)
+
+    # ------------------------------------------------------------ 归档下载（写操作）
+    #
+    # 这两个方法刻意不走 `_call`：`_call` 是为"读取内容、可以等、可以走 202 轮询"设计的，
+    # 而下载是一次写请求——DTK 接受了就返回，真正的下载在它自己的磁盘上异步进行。
+    # 要不要等下载完成、失败了怎么办，是调用方（loop.py 里触发归档的那段）的判断，
+    # 客户端只负责把请求送到、把响应读回来，不替调用方做决定。
+
+    async def start_download(
+        self, content_id: str, *, skip_existing: bool = True
+    ) -> dict[str, Any]:
+        """请求 DTK 把一条作品的媒体存到它自己的磁盘上，返回 DTK 的受理结果。
+
+        不轮询到下载完成——202 一收到就返回，`download_id`/`task_id` 留给调用方决定
+        要不要跟进。真正的下载在 DTK 那边的磁盘上异步进行，这里等它没有任何意义。
+
+        **pin 刻意不在这里做**：它是第二个写请求，调用方（`ArchiveTrigger`）要让它
+        单独过一遍节奏器，也要能单独处理"下载受理了、但 pin 失败"——"以为 pin 上了
+        其实没有"是比"没 pin"更危险的状态，不该被混在同一个返回值里悄悄吞掉。
+
+        需要 API Key 带 `media:write` scope——比监控本身用的 `douyin:read`/`archive:read`
+        高一级的权限，是否开这个功能应该是使用方主动做的决定（见 ARCHIVE_DOWNLOAD_ENABLED）。
+        """
+        _status, body = await self._request(
+            "/api/v1/downloads",
+            method="POST",
+            json_body={
+                "platform": "douyin",
+                "content_id": content_id,
+                "skip_existing": skip_existing,
+            },
+            timeout=WRITE_TIMEOUT,
+        )
+        if not body.get("success"):
+            self._raise_for_error(body)
+        data = body.get("data")
+        if not isinstance(data, Mapping):
+            raise MonitorError("CONTRACT_VIOLATION", "downloads 返回的 data 不是对象")
+        return dict(data)
+
+    async def pin_download(self, download_id: str, pinned: bool) -> dict[str, Any]:
+        """把一条已发起的下载标记为（不）豁免容量淘汰。同样需要 `media:write`。"""
+        _status, body = await self._request(
+            f"/api/v1/downloads/{download_id}/pin",
+            method="POST",
+            json_body={"pinned": pinned},
+            timeout=WRITE_TIMEOUT,
+        )
+        if not body.get("success"):
+            self._raise_for_error(body)
+        data = body.get("data")
+        if not isinstance(data, Mapping):
+            raise MonitorError("CONTRACT_VIOLATION", "pin 返回的 data 不是对象")
+        return dict(data)
+
+    async def download_storage(self) -> dict[str, Any]:
+        """当前媒体存储用量与上限。只读，需要 `media:read`（比 `media:write` 低一级）。
+
+        `doctor` 用它在真正下载之前先告诉你：2G 的默认上限还剩多少、下载器在不在线——
+        比等到第一次下载失败才发现存储没配对要有用得多。
+        """
+        _status, body = await self._request("/api/v1/downloads/storage")
+        if not body.get("success"):
+            self._raise_for_error(body)
+        data = body.get("data")
+        if not isinstance(data, Mapping):
+            raise MonitorError("CONTRACT_VIOLATION", "downloads/storage 返回的 data 不是对象")
+        return dict(data)
 
 
 def include_raw_for_round(

@@ -25,7 +25,7 @@ from .alerts import Deduplicator
 from .messages import freq_hint, frequency_stats, hours_since
 from .models import AuthorState, DiffConfig, RoundResult
 from .pacer import RequestPacer, RoundWaiter
-from .pipeline import run_author
+from .pipeline import ArchiveTrigger, run_author
 from .scheduler import GlobalGate
 from .settings import Settings
 from .state import StateStore
@@ -47,6 +47,7 @@ class MonitorLoop:
         gate: GlobalGate,
         dedup: Deduplicator,
         logger: Any,
+        archive_trigger: ArchiveTrigger | None = None,
         stop: asyncio.Event | None = None,
     ) -> None:
         self.settings = settings
@@ -57,6 +58,8 @@ class MonitorLoop:
         self.waiter = waiter
         self.gate = gate
         self.dedup = dedup
+        #: 归档下载旁路（`ARCHIVE_DOWNLOAD_ENABLED=false` 时为 None，主链路一行都不碰它）
+        self.archive_trigger = archive_trigger
         self.log = logger
         self.stop = stop or asyncio.Event()
         self.cfg = DiffConfig.from_settings(settings)
@@ -109,6 +112,10 @@ class MonitorLoop:
     async def run_round(self) -> dict[str, Any]:
         started = datetime.now(timezone.utc)
         self._rounds += 1
+        if self.archive_trigger is not None:
+            # 归档下载的每轮预算是按轮算的，不按账号算——否则 20 个账号各触发一次
+            # 就是 20 倍的量
+            self.archive_trigger.start_round()
 
         if not self._users:
             self.log.warning("round.skipped", reason="no users configured")
@@ -185,6 +192,7 @@ class MonitorLoop:
                 cfg=self.cfg,
                 now=now,
                 archive_enabled=bool(self.settings["ARCHIVE_ENABLED"]),
+                archive_trigger=self.archive_trigger,
                 logger=self.log,
             )
 
