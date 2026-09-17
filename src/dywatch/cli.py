@@ -66,10 +66,14 @@ def _load(args: argparse.Namespace) -> Settings:
 def cmd_config_check(settings: Settings) -> int:
     print(f"dywatch {__version__} —— 生效配置")
     print(f"配置文件: {resolve_env_file(None)}")
-    print("-" * 78)
-    for line in settings.describe():
+    lines = settings.describe()
+    # 分隔线跟着最长的一行走：键名长了（比如 ARCHIVE_DOWNLOAD_MAX_PER_ROUND），
+    # 写死 78 会让表格比它自己的框还宽，读起来像是溢出
+    rule = "-" * max(78, *(len(line) for line in lines))
+    print(rule)
+    for line in lines:
         print(line)
-    print("-" * 78)
+    print(rule)
     for note in settings.warnings():
         print(f"提示: {note}")
     errors = settings.validate()

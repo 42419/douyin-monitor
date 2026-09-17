@@ -316,7 +316,12 @@ class Settings:
         return out
 
     def describe(self) -> list[str]:
-        """Every setting, its effective value and where it came from."""
+        """Every setting, its effective value and where it came from.
+
+        键的列宽**按最长键算**而不是写死：注册表随时会长（`ARCHIVE_DOWNLOAD_MAX_PER_ROUND`
+        就让写死的 26 崩过一次），列一处写死，早晚有一列会歪。
+        """
+        key_width = max(len(spec.key) for spec in SETTINGS)
         lines: list[str] = []
         for spec in SETTINGS:
             value = self.values.get(spec.key, spec.default)
@@ -327,7 +332,9 @@ class Settings:
                 shown = ",".join(str(x) for x in value) or "(空)"
             else:
                 shown = str(value)
-            lines.append(f"{spec.key:26s} = {shown:34s}  [{self.sources.get(spec.key, 'default')}]")
+            lines.append(
+                f"{spec.key:{key_width}s} = {shown:34s}  [{self.sources.get(spec.key, 'default')}]"
+            )
         return lines
 
     def as_dict(self) -> dict[str, Any]:

@@ -140,6 +140,13 @@ def test_unrecognized_bool_is_rejected_rather_than_read_as_false():
     assert "非法" in settings.sources["DTK_REFRESH"]
 
 
+def test_describe_columns_line_up_even_for_the_longest_key():
+    """列宽必须自适应：长键（如 ARCHIVE_DOWNLOAD_MAX_PER_ROUND）曾经把 `=` 和来源列顶歪。"""
+    lines = load_settings(None, environ={}).describe()
+    assert len({line.index(" = ") for line in lines}) == 1, "= 不在同一列"
+    assert len({line.rindex("  [") for line in lines}) == 1, "来源列不在同一列"
+
+
 def test_secrets_are_masked_in_describe():
     settings = load_settings(
         None, environ={"DTK_API_KEY": "dtk_secret_value", "DINGTALK_TOKEN": "tok"}
