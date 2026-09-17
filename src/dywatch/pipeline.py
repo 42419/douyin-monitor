@@ -21,7 +21,7 @@ from collections import deque
 from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
 
-from .alerts import Deduplicator, should_send
+from .alerts import Deduplicator, priority_of, should_send
 from .diff import diff
 from .dtk import MonitorError, include_raw_for_round
 from .models import (
@@ -119,8 +119,12 @@ async def run_author(
     event_ids = store.save_round(author.sec_user_id, next_state, events, now=now)
 
     # ---- 通知（落库之后） ---------------------------------------------------
+    # 投递顺序按优先级，不按 diff 的输出顺序：`new_post` 必须第一个发出去。
+    # 一轮里的事件共用同一条投递通道（渠道间隔 + 单渠道超时重试），排在它前面的每一条
+    # 都可能把它推到几十秒之后，甚至因为撞上渠道限流而变成"失败的那一条"。
+    # `(row_id, event)` 成对排序，投递结果才能正确回写到对应的事件行。
     deliveries: dict[int, Mapping[str, Any]] = {}
-    for row_id, event in zip(event_ids, events):
+    for row_id, event in sorted(zip(event_ids, events), key=lambda pair: priority_of(pair[1].kind)):
         if not event.should_notify:
             continue
         allowed, key = should_send(event, dedup)

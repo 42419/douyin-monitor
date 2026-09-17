@@ -362,8 +362,8 @@ DTK 的归一化结果不暴露置顶，只有 `include_raw=true` 时 `raw.is_to
 | `stale_no_update` | `STALE_FALLBACK_DAYS` 天没有新作品 | ✅ | 一次性 |
 | `upstream_degraded` | 上游 429/503/熔断 → 全局闸门关闭 | ✅ | 1 小时 / 错误码 |
 | `self_degraded` | 自身降级（磁盘/状态库超限） | ✅ | 6 小时 —— **目前没有产生点，不会出现** |
-| `revived` | 曾消失的作品又出现（按设计**不算**新作品） | — | |
-| `title_changed` | 已知作品的标题变了 | — | |
+| `revived` | 曾消失的作品又出现（按设计**不算**新作品） | ✅ | 6 小时 / 账号 |
+| `title_changed` | 已知作品的标题变了 | ✅ | 1 小时 / 账号 |
 | `scrolled_out` | 被新作品挤出窗口（静默清理并写 tombstone） | — | |
 | `trimmed` | 超过 `KNOWN_IDS_MAX` 被裁剪（同时写 tombstone） | — | |
 | `initialized` | 首次记录该账号（否则上线新账号会被历史作品刷屏） | — | |
@@ -380,6 +380,11 @@ for kind, n in sqlite3.connect('data/dywatch.db').execute(
 
 `payload_json` 是这条事件的细节，`delivery_json` 记录投递结果（哪些渠道成功/失败）；
 面板点账号名看到的"最近事件"就是这张表的最近 12 条。
+
+**投递顺序永远是 `new_post` 第一**，其余按"越需要立刻知道越靠前"排（`alerts.NOTIFY_PRIORITY`），
+**不是**按上面这张表的顺序、也不是按判定产出的顺序。理由：一轮里所有事件共用同一条投递通道
+（每条间隔 `NOTIFY_GAP`，每渠道 8 秒超时、最多重试 2 次），排在 `new_post` 前面的每一条都可能
+把它推迟几十秒，或者撞上渠道限流让它变成"发送失败"的那一条——而新作品是唯一错过就补不回来的东西。
 
 ---
 

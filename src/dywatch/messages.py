@@ -15,6 +15,8 @@ from .models import Content, EventKind, Kind, PostState
 # --- 标题 -------------------------------------------------------------------
 T_NEW_POST = "【新作品】{nickname} 发布了新{kind_label}"
 T_POST_REMOVED = "【作品消失】{nickname} 有 {count} 条作品已确认消失"
+T_REVIVED = "【作品回归】{nickname} 之前消失的作品又出现了"
+T_TITLE_CHANGED = "【标题变更】{nickname} 的作品换了标题"
 T_ALL_GONE = "【作品全部消失】{nickname} 的全部作品同时不见了"
 T_GAP = "【可能漏检】{nickname} 的更新节奏超过单页窗口"
 T_NEVER_SEEN = "【账号始终无作品】{nickname} 需要核实 ID"
@@ -31,6 +33,8 @@ KIND_UNKNOWN = "作品"
 
 # --- 条目 -------------------------------------------------------------------
 ROW_TITLE = "标题"
+ROW_TITLE_OLD = "原"
+ROW_TITLE_NEW = "新"
 ROW_TYPE = "类型"
 ROW_PUBLISHED = "发布"
 ROW_DURATION = "时长"

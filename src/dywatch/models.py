@@ -62,6 +62,8 @@ NOTIFY_KINDS: frozenset[EventKind] = frozenset(
         EventKind.NEW_POST,
         EventKind.POST_REMOVED,
         EventKind.ALL_GONE,
+        EventKind.REVIVED,
+        EventKind.TITLE_CHANGED,
         EventKind.GAP_DETECTED,
         EventKind.NEVER_SEEN,
         EventKind.ACCOUNT_FAILED,
@@ -72,10 +74,9 @@ NOTIFY_KINDS: frozenset[EventKind] = frozenset(
     }
 )
 
-#: 静默事件（只改状态，不推送）——旧项目对这三类就是静默的
+#: 静默事件（只改状态，不推送）：它们是"窗口挪动"的机械后果，报出来只会淹掉真正该看的东西
 SILENT_KINDS: frozenset[EventKind] = frozenset(
-    {EventKind.REVIVED, EventKind.TITLE_CHANGED, EventKind.SCROLLED_OUT, EventKind.TRIMMED,
-     EventKind.INITIALIZED}
+    {EventKind.SCROLLED_OUT, EventKind.TRIMMED, EventKind.INITIALIZED}
 )
 
 

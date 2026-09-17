@@ -44,12 +44,48 @@ TRIGGERS: Final[Mapping[EventKind, TriggerSpec]] = {
     EventKind.STALE_NO_UPDATE: TriggerSpec("info", 0, "none"),
     # 自身降级：报出来就得让人知道，但别每分钟说一遍
     EventKind.SELF_DEGRADED: TriggerSpec("warning", 6 * HOUR, "global"),
+    # 标题变更会连着来：作者发完作品再补话题标签是常态，1 小时内同一账号只报一次
+    EventKind.TITLE_CHANGED: TriggerSpec("info", HOUR, "author"),
+    # 回归本身罕见，但窗口挪动可以让同一条作品反复"出去又回来"，给个宽窗口兜住这种抖动
+    EventKind.REVIVED: TriggerSpec("info", 6 * HOUR, "author"),
 }
 
 #: 作品级事件没有窗口——它们只发生一次，抑制它们等于丢通知
 NO_WINDOW_EVENTS: Final[frozenset[EventKind]] = frozenset(
     {EventKind.NEW_POST, EventKind.POST_REMOVED, EventKind.ALL_GONE}
 )
+
+#: **投递顺序**，数字越小越先发。
+#:
+#: `new_post` 必须第一个送出去，理由是它和其他事件不同质：它是这个工具存在的理由，
+#: 而且**错过就补不回来**（用户不会知道曾经有过这条作品）。而一轮里的事件共用一条
+#: 投递通道（渠道间隔 + 每渠道超时重试），排在它前面的每一条都可能把它推到几十秒之后，
+#: 甚至因为渠道限流而让它变成"发送失败"那一条。所以顺序不按 `diff` 的输出，按这张表。
+#:
+#: 作品类排在运维类之前：运维类基本都被 `TRIGGERS` 的窗口压过一轮，
+#: 而且它们的"过期成本"远低于漏掉一条作品的成本。
+NOTIFY_PRIORITY: Final[tuple[EventKind, ...]] = (
+    EventKind.NEW_POST,
+    EventKind.ALL_GONE,
+    EventKind.POST_REMOVED,
+    EventKind.REVIVED,
+    EventKind.TITLE_CHANGED,
+    EventKind.ACCOUNT_FAILED,
+    EventKind.ACCOUNT_RECOVERED,
+    EventKind.NEVER_SEEN,
+    EventKind.GAP_DETECTED,
+    EventKind.STALE_NO_UPDATE,
+    EventKind.UPSTREAM_DEGRADED,
+    EventKind.SELF_DEGRADED,
+)
+
+
+def priority_of(kind: EventKind) -> int:
+    """投递优先级；不在表里的排最后（稳定排序保证同优先级维持 `diff` 的原顺序）。"""
+    try:
+        return NOTIFY_PRIORITY.index(kind)
+    except ValueError:  # pragma: no cover - 枚举与表目前一一对应
+        return len(NOTIFY_PRIORITY)
 
 
 def dedup_key(event: Event) -> str:
@@ -117,9 +153,11 @@ def should_send(event: Event, dedup: Deduplicator) -> tuple[bool, str]:
 
 __all__ = [
     "Deduplicator",
+    "NOTIFY_PRIORITY",
     "NO_WINDOW_EVENTS",
     "TRIGGERS",
     "TriggerSpec",
+    "priority_of",
     "dedup_key",
     "should_send",
 ]

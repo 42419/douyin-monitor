@@ -219,3 +219,71 @@ def test_one_line_strips_control_characters_and_truncates():
     assert one_line("长" * 10, limit=5) == "长长长长…"
     assert one_line("普通昵称") == "普通昵称"
     assert strip_controls("x\x07y") == "x y"
+
+
+def test_revived_and_title_changed_render_with_context():
+    """这两个事件现在会推送，因此必须有像样的文案（种类 + 链接来自 diff 带上的 payload）。"""
+    revived = render_event(
+        Event(
+            EventKind.REVIVED, sec_user_id="u1", nickname="阿直", content_id="p1",
+            payload={"title": "老作品", "kind": "video", "web_url": "https://www.douyin.com/video/1"},
+        )
+    )
+    assert "作品回归" in revived.subject and "阿直" in revived.subject
+    assert "老作品" in revived.markdown and "视频" in revived.markdown
+    assert "https://www.douyin.com/video/1" in revived.markdown
+
+    changed = render_event(
+        Event(
+            EventKind.TITLE_CHANGED, sec_user_id="u1", nickname="阿直", content_id="p1",
+            payload={"old": "旧标题", "new": "新标题", "kind": "image_album", "web_url": ""},
+        )
+    )
+    assert "标题变更" in changed.subject
+    assert "旧标题" in changed.markdown and "新标题" in changed.markdown
+    assert "图文" in changed.markdown
+    # 没有链接就不该凭空造一个
+    assert "链接" not in changed.markdown
+
+
+def test_revived_without_context_still_renders():
+    """payload 缺字段（老数据、上游没给）时也不能炸，只是少几行。"""
+    message = render_event(
+        Event(EventKind.REVIVED, sec_user_id="u1", nickname="阿直", content_id="p1", payload={})
+    )
+    assert "作品回归" in message.subject
+    assert "(无标题)" in message.markdown
+
+
+def test_revived_and_title_changed_render_with_context():
+    """这两个事件现在会推送，因此必须有像样的文案（种类 + 链接来自 diff 带上的 payload）。"""
+    revived = render_event(
+        Event(
+            EventKind.REVIVED, sec_user_id="u1", nickname="阿直", content_id="p1",
+            payload={"title": "老作品", "kind": "video", "web_url": "https://www.douyin.com/video/1"},
+        )
+    )
+    assert "作品回归" in revived.subject and "阿直" in revived.subject
+    assert "老作品" in revived.markdown and "视频" in revived.markdown
+    assert "https://www.douyin.com/video/1" in revived.markdown
+
+    changed = render_event(
+        Event(
+            EventKind.TITLE_CHANGED, sec_user_id="u1", nickname="阿直", content_id="p1",
+            payload={"old": "旧标题", "new": "新标题", "kind": "image_album", "web_url": ""},
+        )
+    )
+    assert "标题变更" in changed.subject
+    assert "旧标题" in changed.markdown and "新标题" in changed.markdown
+    assert "图文" in changed.markdown
+    # 没有链接就不该凭空造一个
+    assert "链接" not in changed.markdown
+
+
+def test_revived_without_context_still_renders():
+    """payload 缺字段（老数据、上游没给）时也不能炸，只是少几行。"""
+    message = render_event(
+        Event(EventKind.REVIVED, sec_user_id="u1", nickname="阿直", content_id="p1", payload={})
+    )
+    assert "作品回归" in message.subject
+    assert "(无标题)" in message.markdown

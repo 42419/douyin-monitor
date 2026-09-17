@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, Final, Mapping
 
 from . import messages as msg
-from .models import Content, Event, EventKind
+from .models import Content, Event, EventKind, Kind
 
 SEVERITY: Final[Mapping[EventKind, str]] = {
     EventKind.NEW_POST: "info",
@@ -64,6 +64,21 @@ class Message:
 
 def _join(*lines: str | None) -> str:
     return "\n".join(line for line in lines if line)
+
+
+def _title(value: Any) -> str:
+    return msg.md_escape(str(value or "")) or "(无标题)"
+
+
+def _context_rows(payload: Mapping[str, Any]) -> list[str]:
+    """`revived` / `title_changed` 共用的补充行：类型与链接（`diff` 顺手带上的）。"""
+    rows: list[str] = []
+    raw_kind = payload.get("kind")
+    if raw_kind:
+        rows.append(f"**{msg.ROW_TYPE}**：{msg.kind_label(Kind.parse(raw_kind))}")
+    if payload.get("web_url"):
+        rows.append(f"**{msg.ROW_LINK}**：{payload['web_url']}")
+    return rows
 
 
 def render_event(event: Event, *, now: datetime | None = None) -> Message:
@@ -137,6 +152,21 @@ def _build(
             rows.append(f"- …另有 {len(removed) - 10} 条")
         note = msg.NOTE_ALL_GONE if all_gone else ""
         return subject, _join(f"### {subject}", "", *rows, note)
+
+    if kind is EventKind.REVIVED:
+        subject = msg.T_REVIVED.format(nickname=safe_name)
+        rows = [f"**{msg.ROW_TITLE}**：{_title(payload.get('title'))}"]
+        rows.extend(_context_rows(payload))
+        return subject, _join(f"### {subject}", "", *rows)
+
+    if kind is EventKind.TITLE_CHANGED:
+        subject = msg.T_TITLE_CHANGED.format(nickname=safe_name)
+        rows = [
+            f"**{msg.ROW_TITLE_OLD}**：{_title(payload.get('old'))}",
+            f"**{msg.ROW_TITLE_NEW}**：{_title(payload.get('new'))}",
+        ]
+        rows.extend(_context_rows(payload))
+        return subject, _join(f"### {subject}", "", *rows)
 
     if kind is EventKind.GAP_DETECTED:
         subject = msg.T_GAP.format(nickname=safe_name)

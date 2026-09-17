@@ -167,7 +167,8 @@ def diff(
                 sec_user_id=prev.sec_user_id,
                 nickname=prev.nickname,
                 content_id=content_id,
-                payload={"title": item.title},
+                # 带上 kind 与 web_url：这两条现在会推送，通知里给得出类型和链接
+                payload={"title": item.title, "kind": item.kind.value, "web_url": item.web_url},
             )
         )
 
@@ -189,7 +190,12 @@ def diff(
                     sec_user_id=prev.sec_user_id,
                     nickname=prev.nickname,
                     content_id=content_id,
-                    payload={"old": entry.title, "new": item.title},
+                    payload={
+                        "old": entry.title,
+                        "new": item.title,
+                        "kind": item.kind.value,
+                        "web_url": item.web_url,
+                    },
                 )
             )
         # 只有带了 raw 才相信 is_top，否则保留库里的值（见模块头注释第 3 条）

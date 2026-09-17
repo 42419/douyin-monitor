@@ -383,7 +383,12 @@ def test_gap_judgement_ignores_pinned_posts():
 # ---------------------------------------------------------------- 静默更新
 
 
-def test_title_change_is_silent_in_state_but_recorded():
+def test_title_change_is_recorded_and_notified():
+    """标题变更从"只落库"改成"也推送"（`NOTIFY_KINDS`）。
+
+    它是作者真实做过的动作，而通知里同时给出原文、新文与链接；担心刷屏的部分交给
+    `alerts.TRIGGERS` 的窗口（同一账号 1 小时一次），不是靠不推送。
+    """
     prev = AuthorState(
         sec_user_id="u1",
         ever_had_posts=True,
@@ -396,10 +401,10 @@ def test_title_change_is_silent_in_state_but_recorded():
         cfg=CFG,
     )
 
-    assert EventKind.TITLE_CHANGED in kinds(events)
-    assert EventKind.TITLE_CHANGED not in [
-        e.kind for e in events if e.should_notify
-    ], "标题变更必须静默"
+    changed = [e for e in events if e.kind is EventKind.TITLE_CHANGED]
+    assert len(changed) == 1
+    assert changed[0].should_notify
+    assert changed[0].payload["old"] == "旧标题" and changed[0].payload["new"] == "新标题"
     assert state.post("1").title == "新标题"
 
 
