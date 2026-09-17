@@ -199,6 +199,10 @@ python -m dywatch add "https://www.douyin.com/user/MS4wLjABAAAA..."
 全部配置放在 `.env`（权限 `0600`）。这张表由 `src/dywatch/settings.py` 的 `SETTINGS`
 注册表生成，所以代码与文档不会各说各的。带 ⚙️ 的是**不建议改**的实测值。
 
+布尔值可以写成 `true/false`、`1/0`、`yes/no`、`on/off`（大小写不敏感，前后空格无所谓）。
+**写成别的一律按非法处理**：该项回退到默认值，并在 `config-check` 的来源列里标成
+`非法,已回退默认`——不会把 `ture` 这种手滑当成 false 悄悄放过去。
+
 ### 上游
 
 | 键                   | 默认                    | 说明                                                                 |

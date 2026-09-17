@@ -127,8 +127,28 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
 SPECS: Final[Mapping[str, SettingSpec]] = {spec.key: spec for spec in SETTINGS}
 
 
+#: 布尔配置认哪些写法。**不收别的一律报错**：多认一种拼写，就多一次"以为生效了"的机会；
+#: 而这些已经是各服务配置里的常见写法，够用了。
+BOOL_TRUE: Final[frozenset[str]] = frozenset({"1", "true", "yes", "y", "on", "enable", "enabled"})
+BOOL_FALSE: Final[frozenset[str]] = frozenset({"0", "false", "no", "n", "off", "disable", "disabled"})
+
+
 def _to_bool(raw: str) -> bool:
-    return raw.strip().lower() in ("1", "true", "yes", "on")
+    """布尔取值：`on/off`、`yes/no`、`1/0`、`true/false` 都认。
+
+    **认不出来就抛 ValueError**，不静默当成 False。原因是"写错一个字母"和"明确关掉"
+    在那之前长得一模一样：`ARCHIVE_DOWNLOAD_PIN=ture` 会安静地变成 false，而人以为
+    自己打开了。抛错之后，`load_settings` 会回退到该项的默认值、并把来源标成
+    `非法,已回退默认`——`config-check` 一眼能看出是哪一个键写错了。
+    """
+    text = raw.strip().lower()
+    if text in BOOL_TRUE:
+        return True
+    if text in BOOL_FALSE:
+        return False
+    raise ValueError(
+        f"无法识别的布尔值 {raw!r}：可用 1/0、true/false、yes/no、on/off（大小写不敏感）"
+    )
 
 
 def _cast(kind: str, raw: Any) -> Any:

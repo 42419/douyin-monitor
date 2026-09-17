@@ -111,6 +111,35 @@ def test_bad_values_fall_back_to_the_default_and_say_so(tmp_path):
     assert "非法" in settings.sources["FETCH_COUNT"]
 
 
+@pytest.mark.parametrize("raw", ["1", "true", "TRUE", " True ", "yes", "on", "enabled", "y"])
+def test_bool_accepts_common_truthy_spellings(raw):
+    settings = load_settings(None, environ={"WEB_ENABLED": raw})
+    assert settings["WEB_ENABLED"] is True
+    assert settings.sources["WEB_ENABLED"] == "env"
+
+
+@pytest.mark.parametrize("raw", ["0", "false", "False", "no", "off", "disabled", "n"])
+def test_bool_accepts_common_falsy_spellings(raw):
+    settings = load_settings(None, environ={"DTK_REFRESH": raw})
+    assert settings["DTK_REFRESH"] is False
+    assert settings.sources["DTK_REFRESH"] == "env"
+
+
+def test_unrecognized_bool_is_rejected_rather_than_read_as_false():
+    """`ture` 这类手滑必须落回默认值并标出来。
+
+    静默当成 false 的后果是双向的：默认关的项会被以为"已经打开了"，而默认开的项会被
+    悄悄关掉（后者更危险——它改变的是正在运行的行为，却没有任何提示）。
+    """
+    settings = load_settings(
+        None, environ={"ARCHIVE_DOWNLOAD_PIN": "ture", "DTK_REFRESH": "flase"}
+    )
+    assert settings["ARCHIVE_DOWNLOAD_PIN"] is False  # 该项的默认值
+    assert settings["DTK_REFRESH"] is True  # 默认 true 的项没被手滑关掉
+    assert "非法" in settings.sources["ARCHIVE_DOWNLOAD_PIN"]
+    assert "非法" in settings.sources["DTK_REFRESH"]
+
+
 def test_secrets_are_masked_in_describe():
     settings = load_settings(
         None, environ={"DTK_API_KEY": "dtk_secret_value", "DINGTALK_TOKEN": "tok"}
