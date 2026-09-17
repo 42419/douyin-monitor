@@ -56,6 +56,7 @@ from .messages import (
     frequency_stats,
     hours_since,
     kind_label,
+    newest_post_at,
     tombstone_reason,
 )
 from .models import Kind, PostState
@@ -209,15 +210,24 @@ _PAGE = Template(r"""<!DOCTYPE html>
   .led-legend span { display: inline-flex; align-items: center; gap: 6px; }
   .led-legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
 
-  /* ---- 数据条：方括号包裹的标签 + 大号等宽数字 ---- */
+  /* ---- 数据条：方括号包裹的标签 + 大号等宽数字 ----
+     用 grid 而不是 flex+wrap，也不给格子画竖分割线，原因有两个，都是"换行"引起的：
+       1. 竖线只能靠 `+ .stat` 这种"除第一个以外"的写法加，换行之后每行的第一个格子
+          也会匹配到，于是第二行整体右移一个内边距——一行装不下时立刻就能看出来；
+       2. flex 换行按"本行有几个"分配宽度，每行数量不同时列与列对不上；
+          grid 的列宽是全局算的，2 列还是 3 列都各列对齐。
+     列间距代替竖线：少了点仪器感，但任何宽度下都不会再错位。 */
   .stats {
-    display: flex; flex-wrap: wrap;
+    display: grid;
+    /* 104px 是照着"6 格 + 5 个间距刚好放得下默认的 780px 内容宽"定的：
+       再宽一点第 6 格就会被挤到第二行，孤零零一个 */
+    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+    column-gap: 18px;
     border-top: 1px solid var(--line);
     border-bottom: 1px solid var(--line);
     margin-bottom: 40px;
   }
-  .stat { flex: 1 1 0; min-width: 104px; padding: 16px 20px 16px 0; }
-  .stat + .stat { padding-left: 20px; border-left: 1px solid var(--line-2); }
+  .stat { padding: 16px 0; }
   .stat-label { font-size: 11px; color: var(--text3); margin-bottom: 6px; }
   .stat-label::before { content: "["; }
   .stat-label::after { content: "]"; }
@@ -239,7 +249,9 @@ _PAGE = Template(r"""<!DOCTYPE html>
     display: flex; align-items: center; gap: 12px;
     padding: 13px 4px;
     border-bottom: 1px solid var(--line-2);
+    cursor: pointer;
   }
+  .row:hover { background: var(--off-soft); }
   .row-off { opacity: .62; }
   .row-badge { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 2px; }
   .row-name {
@@ -304,13 +316,19 @@ _PAGE = Template(r"""<!DOCTYPE html>
   .detail-overlay {
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,.35);
     z-index: 100; backdrop-filter: blur(3px);
-    align-items: center; justify-content: center;
+    /* 内容长的时候由**这一层**滚动，弹窗自己不设 max-height/overflow——
+       弹窗内滚动条会让人以为"就这么多内容"，而且手机上还会和外层滚动打架 */
+    overflow-y: auto; overscroll-behavior: contain;
+    padding: 30px 16px;
   }
   .detail-overlay.open { display: flex; }
   .detail-panel {
     background: var(--panel); border: 1px solid var(--line);
     border-radius: 12px; padding: 28px 28px 24px;
-    width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto;
+    width: 90%; max-width: 600px;
+    /* flex 里用 margin:auto 居中：内容比视口高时自动退化成"贴顶 + 外层滚动"，
+       而 justify-content:center 在那种情况下会把顶部裁掉 */
+    margin: auto;
     box-shadow: 0 8px 32px rgba(0,0,0,.12);
     opacity: 0; transform: scale(.95); transition: opacity .2s, transform .2s;
   }
@@ -356,26 +374,54 @@ _PAGE = Template(r"""<!DOCTYPE html>
   .video-list .vabsent { flex: 0 0 auto; font-size: 11px; color: var(--red); font-weight: 600; }
   .detail-empty { color: var(--text3); text-align: center; padding: 24px; }
 
+  /* 窄桌面（窗口拖到 560~760px）：固定三列，免得 auto-fit 把最后一格挤成孤行。
+     必须排在小屏那条前面——两条都命中时后写的赢。 */
+  @media (max-width: 760px) {
+    .stats { grid-template-columns: repeat(3, 1fr); }
+  }
+
+  /* ---- 小屏：手机上的一屏装得下多少信息，就只放多少 ---- */
   @media (max-width: 560px) {
-    body { padding: 36px 16px 56px; }
-    h1 { font-size: 24px; }
-    .stat { min-width: 45%; padding: 12px 12px 12px 0; }
-    .stat + .stat { padding-left: 12px; }
-    .stat-value { font-size: 22px; }
+    body { padding: 26px 14px 44px; -webkit-tap-highlight-color: transparent; }
+    .eyebrow { margin-bottom: 12px; }
+    h1 { font-size: 23px; margin-bottom: 8px; }
+    .meta { font-size: 11.5px; margin-bottom: 20px; gap: 2px 8px; }
+    .meta .hide-sm { display: none; }  /* 上游地址与 PID：手机上只是噪音 */
     .led { height: 14px; }
-    .row { flex-wrap: wrap; gap: 6px 8px; padding: 12px 4px; }
-    .row-status { order: -1; }
+    .led-legend { gap: 2px 14px; font-size: 11.5px; margin-bottom: 24px; }
+    /* 手机固定两列：数字大、看得清，也不用猜 auto-fit 会排成几列 */
+    .stats { grid-template-columns: repeat(2, 1fr); column-gap: 14px; margin-bottom: 26px; }
+    .stat { padding: 12px 0; }
+    .stat-value { font-size: 22px; }
+
+    /* 列表行改成"状态一行 / 名字整行 / 细节一行"：
+       名字独占一行既不容易点错，也放得下长昵称 */
+    .row { flex-wrap: wrap; gap: 4px 8px; padding: 13px 2px; cursor: pointer; }
+    .row-badge, .row-status { order: 0; }
+    .row-status { min-width: 0; font-size: 11.5px; }
+    .row-name { order: 1; flex: 1 1 100%; font-size: 15.5px; padding: 1px 0; }
+    .freq-tag, .row-count { order: 2; }
     .row-count { min-width: auto; text-align: left; font-size: 12px; }
-    .row-time { min-width: auto; text-align: left; font-size: 11px; flex-basis: 100%; }
-    .detail-overlay { align-items: flex-end; justify-content: stretch; }
+    .row-time { order: 2; min-width: auto; margin-left: auto; text-align: right; font-size: 11.5px; }
+    /* 气泡提示在窄屏居中会溢出屏幕，改成左对齐 + 自动换行 */
+    .freq-tag .tip { left: 0; transform: none; white-space: normal; width: max-content; max-width: 72vw; }
+    .freq-tag .tip::after { left: 18px; }
+
+    /* 详情：底部抽屉。内容短时贴底，长时整层滚动——抽屉自己不出现滚动条 */
+    .detail-overlay { padding: 0; }
     .detail-panel {
       width: 100%; max-width: none; border-radius: 16px 16px 0 0;
       border: none; border-top: 1px solid var(--line);
-      max-height: 80vh; padding: 20px 16px 28px;
+      margin: auto 0 0;
+      padding: 18px 16px calc(24px + env(safe-area-inset-bottom));
       box-shadow: 0 -4px 16px rgba(0,0,0,.1);
       opacity: 1; transform: translateY(100%); transition: transform .25s ease-out;
     }
     .detail-overlay.open .detail-panel { transform: translateY(0); }
+    .detail-close { width: 40px; height: 40px; font-size: 20px; }
+    .detail-head h2 { font-size: 17px; }
+    .detail-grid { grid-template-columns: repeat(auto-fit, minmax(122px, 1fr)); gap: 4px 12px; }
+    .detail-id { margin: -6px 0 12px; }
   }
   @media (prefers-reduced-motion: reduce) {
     .eyebrow .dot { animation: none; opacity: 1; }
@@ -390,8 +436,8 @@ _PAGE = Template(r"""<!DOCTYPE html>
     <span>检查于 $timestamp</span><span class="sep">·</span>
     <span>第 $rounds 轮</span><span class="sep">·</span>
     <span>渠道 $channels</span><span class="sep">·</span>
-    <span>上游 $upstream</span><span class="sep">·</span>
-    <span>PID $pid</span><span class="sep">·</span>
+    <span class="hide-sm">上游 $upstream</span><span class="sep hide-sm">·</span>
+    <span class="hide-sm">PID $pid</span><span class="sep hide-sm">·</span>
     <span>$refresh 秒自动刷新</span>
   </div>
 
@@ -422,19 +468,24 @@ _PAGE = Template(r"""<!DOCTYPE html>
 </div>
 
 <script>
-// 点击账号名打开详情：用 data-uid 属性 + 事件委托，而不是把 uid
+// 点击整行打开详情：用 data-uid 属性 + 事件委托，而不是把 uid
 // 拼进内联 onclick 的 JS 字符串里——HTML 实体转义没法防住内联事件处理器
 // 里的 JS 字符串截断（浏览器解析属性值时会先做实体解码，解码结果才是
 // 真正拿去当 JS 源码执行的内容，所以 &#39; 这类转义在这个上下文里防不住
 // 单引号截断），用 dataset 读取就完全没有这个问题。
-document.querySelectorAll('.row-name').forEach(function(el) {
-  el.addEventListener('click', function() {
-    var uid = el.closest('.row').dataset.uid;
+// 整行可点是给手指用的：手机上按名字那一行字太小了。
+document.querySelectorAll('.row').forEach(function(row) {
+  row.addEventListener('click', function(event) {
+    // 频率气泡自己有交互（悬停/点按看均值），别让它顺带打开弹窗
+    if (event.target.closest && event.target.closest('.freq-tag')) return;
+    var uid = row.dataset.uid;
     if (uid) openDetail(uid);
   });
 });
 function openDetail(uid) {
   document.getElementById('detailOverlay').classList.add('open');
+  // 弹窗自己滚动，所以背后那一页要停住，否则手机上滑到底会把列表也带着滚
+  document.body.style.overflow = 'hidden';
   document.getElementById('detailName').textContent = '加载中...';
   document.getElementById('detailId').textContent = uid;
   document.getElementById('detailContent').innerHTML = '<div class="detail-empty">加载中...</div>';
@@ -447,6 +498,8 @@ function openDetail(uid) {
 }
 function closeDetail() {
   document.getElementById('detailOverlay').classList.remove('open');
+  document.body.style.overflow = '';
+  document.getElementById('detailOverlay').scrollTop = 0;  // 下次打开从顶部开始
 }
 document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeDetail(); });
 
@@ -462,17 +515,18 @@ function renderDetail(d) {
   h += di('已知作品', d.known_posts + ' 条');
   h += di('已消失', d.tombstones + ' 条');
   h += di('连续失败', d.consecutive_fails + ' 次');
-  h += di('距上次更新', d.last_update_ago);
+  h += di('最新作品发布', d.newest_post_at || '还没有作品');
+  h += di('距最新作品', d.newest_post_ago);
+  h += di('更新频率', d.update_frequency || '样本不足', d.freq_hint || '');
   h += di('累计轮次', d.runs);
   h += di('首次记录', d.initialized_at || '-');
-  h += di('更新频率', d.update_frequency || '样本不足', d.freq_hint || '');
   h += '</div>';
   if (d.last_error_code) {
     h += '<div class="detail-section">最近一次错误</div>';
     h += '<div class="detail-note mono">' + esc(d.last_error_code) + ' ' + esc(d.last_error || '') + '</div>';
   }
   if (d.posts && d.posts.length > 0) {
-    h += '<div class="detail-section">已知作品（最近 ' + d.posts.length + ' 条）</div>';
+    h += '<div class="detail-section">已知作品（' + d.posts.length + ' 条，置顶在最前）</div>';
     h += '<ul class="video-list">';
     d.posts.forEach(function(v) {
       h += '<li>';
@@ -552,7 +606,7 @@ _ROW_TEMPLATE = Template("""<div class="row$row_class" data-uid="$uid">
   $freq_tag
   <span class="row-status $status_color">$status_text</span>
   <span class="row-count mono">$known_posts 条</span>
-  <span class="row-time mono">$last_update_text</span>
+  <span class="row-time mono">$post_age_text</span>
 </div>""")
 
 _FREQ_TAG = Template('<span class="freq-tag">$label<span class="tip">$tip</span></span>')
@@ -578,21 +632,25 @@ def classify_account(user: Mapping[str, Any], stale_days: int) -> tuple[str, str
         return "red", f"失败 {fails} 次"
     if not user.get("ever_had_posts"):
         return "blue", "从未有作品"
-    hours = user.get("hours_since_update")
+    hours = user.get("hours_since_newest_post")
     if hours is not None and hours >= stale_days * 24:
-        return "amber", f"{hours // 24} 天无更新"
+        return "amber", f"{hours // 24} 天无新作品"
     return "green", "正常"
 
 
-def _format_last_update(hours: int | None) -> str:
-    """明确写成"距上次更新 X 天"，而不是模糊的相对时间。"""
+def _format_post_age(hours: int | None) -> str:
+    """距**最新一条作品发布**过了多久。
+
+    注意不是"距上次检测到变化"：账号被删了一条作品、或改了标题，`last_update_at`
+    就会刷新，于是"距上次更新"会显示"刚刚"，而它其实已经 20 天没发东西了。
+    """
     if hours is None:
-        return "从未更新"
+        return "还没有作品"
     if hours < 1:
-        return "刚刚更新"
+        return "刚刚发布"
     if hours < 24:
-        return f"距上次更新 {hours} 小时"
-    return f"距上次更新 {hours // 24} 天"
+        return f"{hours} 小时前发布"
+    return f"{hours // 24} 天前发布"
 
 
 def _overall_line(total: int, ok: int, failing: int, stale: int, never: int) -> str:
@@ -781,7 +839,7 @@ def _render_row(user: Mapping[str, Any], stale_days: int) -> str:
             else ""
         ),
         known_posts=int(user.get("known_posts") or 0),
-        last_update_text=_escape_html(_format_last_update(user.get("hours_since_update"))),
+        post_age_text=_escape_html(_format_post_age(user.get("hours_since_newest_post"))),
     )
 
 
@@ -838,9 +896,11 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
         if author is None:
             return None
         posts = conn.execute(
-            # NULL 发布时间排最后：抖音偶尔不返回 created_at，它不该因此排到最新
+            # 置顶排最前（作者自己摆在最上面的东西，看的人往往就是想知道那几条），
+            # 其余按发布时间倒序；NULL 发布时间排最后：抖音偶尔不返回 created_at，
+            # 它不该因此排到最新。
             "SELECT * FROM posts WHERE sec_user_id = ?"
-            " ORDER BY created_at IS NULL, created_at DESC",
+            " ORDER BY is_top DESC, created_at IS NULL, created_at DESC",
             (sec_user_id,),
         ).fetchall()
         removed = conn.execute(
@@ -864,18 +924,20 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
     # 在列表上写"已移除"、点开却写"正常"。
     known_ids = {entry.sec_user_id for entry in load_users_conf(settings.users_conf)}
     configured = sec_user_id in known_ids
-    hours = hours_since(_parse_dt(author["last_update_at"]) or _parse_dt(author["initialized_at"]))
+    post_states = [_post_state(post) for post in posts]
+    newest = newest_post_at(post_states)
+    hours = hours_since(newest)
     row = {
         "sec_user_id": sec_user_id,
         "nickname": author["nickname"] or sec_user_id,
         "configured": configured,
         "consecutive_fails": int(author["consecutive_fails"] or 0),
         "ever_had_posts": bool(author["ever_had_posts"]),
-        "hours_since_update": hours,
+        "hours_since_newest_post": hours,
     }
     color, status_text = classify_account(row, int(settings.get("STALE_FALLBACK_DAYS", 14)))
 
-    freq = frequency_stats([_post_state(post) for post in posts])
+    freq = frequency_stats(post_states)
 
     return {
         "sec_user_id": sec_user_id,
@@ -885,7 +947,8 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
         "known_posts": len(posts),
         "tombstones": removed_total,
         "consecutive_fails": row["consecutive_fails"],
-        "last_update_ago": _format_last_update(hours),
+        "newest_post_ago": _format_post_age(hours),
+        "newest_post_at": fmt_time(newest),
         "initialized_at": fmt_time(_parse_dt(author["initialized_at"])),
         "last_seen_at": fmt_time(_parse_dt(author["last_seen_at"])),
         "update_frequency": freq[0] if freq else None,

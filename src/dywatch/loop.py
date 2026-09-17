@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .alerts import Deduplicator
-from .messages import freq_hint, frequency_stats, hours_since
+from .messages import freq_hint, frequency_stats, hours_since, newest_post_at
 from .models import AuthorState, DiffConfig, RoundResult
 from .pacer import RequestPacer, RoundWaiter
 from .pipeline import ArchiveTrigger, run_author
@@ -228,6 +228,7 @@ class MonitorLoop:
         for sec_user_id, state in states.items():
             result = by_id.get(sec_user_id)
             freq = frequency_stats(state.posts)
+            newest = newest_post_at(state.posts)
             entries.append(
                 {
                     "sec_user_id": sec_user_id,
@@ -242,7 +243,10 @@ class MonitorLoop:
                     "last_seen_at": _iso(state.last_seen_at),
                     "last_update_at": _iso(state.last_update_at),
                     "last_new_video_at": _iso(state.last_new_video_at),
-                    "hours_since_update": hours_since(state.last_update_at or state.initialized_at),
+                    # 面板上的"多久没更新"用这两个：最新作品的发布时间，而不是"上次检测到变化"
+                    # 的时间——后者会被一次删除/改名刷新，看起来像账号很活跃，是误导。
+                    "newest_post_at": _iso(newest),
+                    "hours_since_newest_post": hours_since(newest),
                     "update_frequency": freq[0] if freq else None,
                     # 面板的频率气泡要用到这两个数：只有分级文案说不清"这个分级是怎么来的"
                     "freq_avg_days": round(freq[1], 2) if freq else None,

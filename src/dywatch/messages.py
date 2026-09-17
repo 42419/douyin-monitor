@@ -169,6 +169,17 @@ def hours_since(value: datetime | None, now: datetime | None = None) -> int | No
     return max(0, int((reference - value).total_seconds() // 3600))
 
 
+def newest_post_at(posts: Iterable[PostState]) -> datetime | None:
+    """已知作品里**最新的发布时间**，没有就返回 `None`。
+
+    置顶作品也算在内：它的 `created_at` 是真实发布时间，只是被作者置顶了。
+    "这个账号多久没发新作品"问的就是这个最大值——它和"上次检测到变化是什么时候"
+    （`last_update_at`）是两回事，后者会因为一次删除/改名而刷新，对"多久没更新"是误导。
+    """
+    times = [post.created_at for post in posts if post.created_at is not None]
+    return max(times) if times else None
+
+
 def frequency_stats(
     posts: Iterable[PostState], *, exclude_top: bool = True
 ) -> tuple[str, float, int] | None:

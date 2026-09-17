@@ -102,7 +102,7 @@ def cmd_status(settings: Settings) -> int:
     notify = data.get("notify") or {}
     print(f"推送渠道: {', '.join(notify.get('channels') or []) or '（静默/无）'}")
     print("-" * 78)
-    header = f"{'账号':<22}{'状态':<10}{'作品':>4}{'失败':>5}  {'频率':<8}{'上次更新':<12}备注"
+    header = f"{'账号':<22}{'状态':<10}{'作品':>4}{'失败':>5}  {'频率':<8}{'最新作品':<12}备注"
     print(header)
     for user in data.get("users") or []:
         status = "正常"
@@ -112,7 +112,9 @@ def cmd_status(settings: Settings) -> int:
             status = "无作品"
         elif not user.get("configured"):
             status = "已移除"
-        hours = user.get("hours_since_update")
+        # "最新作品多久前发布"，不是"上次检测到变化"——后者会被一次删除/改名刷新，
+        # 看起来像账号很活跃（与面板同一口径）
+        hours = user.get("hours_since_newest_post")
         when = "—" if hours is None else (f"{hours} 小时前" if hours else "刚刚")
         print(
             f"{(user.get('nickname') or '')[:20]:<22}{status:<10}"

@@ -63,7 +63,7 @@ def user_entry(**overrides: Any) -> dict[str, Any]:
         "tombstones": 2,
         "ever_had_posts": True,
         "consecutive_fails": 0,
-        "hours_since_update": 5,
+        "hours_since_newest_post": 5,
         "update_frequency": "日更",
         "freq_avg_days": 1.0,
         "freq_sample_count": 7,
@@ -103,8 +103,9 @@ def seed_db(settings: Settings) -> None:
             content_id=f"74{index:017d}",
             kind=Kind.VIDEO if index % 2 else Kind.IMAGE_ALBUM,
             title=f"第 {index} 条",
-            # 第 3 条故意没有发布时间：抖音偶尔不给 created_at，它不该因此排到最新
-            created_at=None if index == 3 else NOW - timedelta(days=index),
+            # 第 3 条故意没有发布时间：抖音偶尔不给 created_at，它不该因此排到最新；
+            # 置顶那条故意是最旧的（30 天前）——"置顶排最前"不能靠"它碰巧最新"来蒙对
+            created_at=None if index == 3 else NOW - timedelta(days=30 if index == 0 else index),
             is_top=index == 0,
             first_seen_at=NOW - timedelta(days=index),
             absent_rounds=1 if index == 2 else 0,
@@ -202,9 +203,12 @@ def test_row_template_does_not_use_inline_onclick_for_uid(tmp_path):
         ({"configured": False, "consecutive_fails": 3}, "已移除"),  # 已移出配置的先说
         ({"consecutive_fails": 2}, "失败 2 次"),
         ({"consecutive_fails": 2, "ever_had_posts": False}, "失败 2 次"),  # 失败比无作品更急
-        ({"ever_had_posts": False, "hours_since_update": None}, "从未有作品"),
-        ({"hours_since_update": 24 * 20}, "20 天无更新"),
-        ({"hours_since_update": 24 * 20, "ever_had_posts": False}, "从未有作品"),
+        ({"ever_had_posts": False, "hours_since_newest_post": None}, "从未有作品"),
+        ({"hours_since_newest_post": 24 * 20}, "20 天无新作品"),
+        # 关键差异：即使"刚刚检测到变化"（比如删了一条作品），只要最新作品是 20 天前的，
+        # 就该标成"长期无新作品"——旧口径（看 last_update_at）在这里会显示成正常
+        ({"hours_since_newest_post": 24 * 20, "hours_since_update": 1}, "20 天无新作品"),
+        ({"hours_since_newest_post": 24 * 20, "ever_had_posts": False}, "从未有作品"),
         ({}, "正常"),
     ],
 )
@@ -231,7 +235,7 @@ def test_led_array_and_stats_render(tmp_path):
         users=[
             user_entry(),
             user_entry(sec_user_id=ID_WRONG, nickname="写错的", ever_had_posts=False,
-                       hours_since_update=None, update_frequency=None),
+                       hours_since_newest_post=None, update_frequency=None),
             user_entry(sec_user_id=ID_FAIL, nickname="失败的", consecutive_fails=3),
             user_entry(sec_user_id="MS4wLjABAAAAgone", nickname="老的", configured=False),
         ],
@@ -246,6 +250,18 @@ def test_led_array_and_stats_render(tmp_path):
     assert "[ 闸门关闭 ]" not in html  # 闸门开着时不渲染警示条（CSS 注释里那个不算）
     # 四个账号四种状态，标题要能说清楚
     assert "全部正常" not in html
+
+
+def test_row_shows_how_long_since_the_newest_post(tmp_path):
+    """列表的时间列是"最新作品多久前发布"，不是"上次检测到变化"。"""
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    write_status(settings, users=[user_entry(hours_since_newest_post=30)])
+
+    html = render_page(settings)
+
+    assert "1 天前发布" in html
+    assert "距上次更新" not in html
 
 
 def test_gate_closed_renders_warning_strip(tmp_path):
@@ -294,10 +310,14 @@ def test_user_detail_reports_posts_tombstones_and_events(tmp_path):
     assert detail["runs"] == 120
     assert detail["update_frequency"] == "日更"
     assert "平均 1.0 天/条" in detail["freq_hint"]
-    # 最新的排最前；没有发布时间的那条排在最后，而不是被当成"最新"
-    assert detail["posts"][0]["is_top"] is True
+    # 置顶的在最前（即使它是最旧的一条），其余按发布时间倒序，
+    # 没有发布时间的那条排最后而不是被当成"最新"
+    assert [post["is_top"] for post in detail["posts"]] == [True, False, False, False]
     assert detail["posts"][-1]["date"] == "未知"
     assert detail["posts"][-1]["title"] == "第 3 条"
+    # "距最新作品"看的是最新那条作品的发布时间（第 1 条，1 天前），不是置顶那条 30 天前的
+    assert detail["newest_post_ago"] == "1 天前发布"
+    assert detail["newest_post_at"] != "未知"
     assert detail["posts"][0]["kind"] in ("视频", "图文")
     assert [p["absent_rounds"] for p in detail["posts"]].count(1) == 1
     assert {row["reason"] for row in detail["removed"]} == {"已确认消失", "被新作品挤出窗口"}

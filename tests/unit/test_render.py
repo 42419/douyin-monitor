@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from dywatch.messages import fmt_count, fmt_duration, fmt_gap, md_escape
-from dywatch.models import Content, Event, EventKind, Kind
+from dywatch.messages import fmt_count, fmt_duration, fmt_gap, md_escape, newest_post_at, newest_post_at
+from dywatch.models import Content, Event, EventKind, Kind, PostState, PostState
 from dywatch.render import render_event
 
 NOW = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
@@ -174,3 +174,27 @@ def test_formatters():
     assert fmt_duration(3_930_000) == "1:05:30"
     assert fmt_gap(NOW - timedelta(days=3, hours=4), NOW) == "3 天 4 小时"
     assert fmt_gap(NOW - timedelta(hours=2, minutes=5), NOW) == "2 小时 5 分钟"
+
+
+def test_newest_post_at_takes_the_latest_and_ignores_missing_dates():
+    """置顶也算：它的发布时间是真的，只是被作者置顶了；缺时间的那条不参与比较。"""
+    posts = (
+        PostState(content_id="a", created_at=NOW - timedelta(days=30), is_top=True),
+        PostState(content_id="b", created_at=NOW - timedelta(days=1)),
+        PostState(content_id="c"),  # 抖音偶尔不返回 created_at
+    )
+    assert newest_post_at(posts) == NOW - timedelta(days=1)
+    assert newest_post_at((PostState(content_id="c"),)) is None
+    assert newest_post_at(()) is None
+
+
+def test_newest_post_at_takes_the_latest_and_ignores_missing_dates():
+    """置顶也算：它的发布时间是真的，只是被作者置顶了；缺时间的那条不参与比较。"""
+    posts = (
+        PostState(content_id="a", created_at=NOW - timedelta(days=30), is_top=True),
+        PostState(content_id="b", created_at=NOW - timedelta(days=1)),
+        PostState(content_id="c"),  # 抖音偶尔不返回 created_at
+    )
+    assert newest_post_at(posts) == NOW - timedelta(days=1)
+    assert newest_post_at((PostState(content_id="c"),)) is None
+    assert newest_post_at(()) is None
