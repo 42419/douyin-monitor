@@ -79,6 +79,7 @@ def write_status(settings: Settings, **overrides: Any) -> Path:
         "timestamp": "2026-09-16T20:00:00+08:00",
         "pid": 4321,
         "rounds": 137,
+        "rounds_total": 3214,
         "gate": {"open": True, "reason": None, "remaining_seconds": 0, "times_closed": 0},
         "upstream": {"base_url": "http://192.168.20.4:8000"},
         "notify": {"channels": ["dingtalk"], "silent": False},
@@ -192,6 +193,75 @@ def test_row_template_does_not_use_inline_onclick_for_uid(tmp_path):
     seed_db(settings)
     write_status(settings)
     assert 'onclick="openDetail(' not in render_page(settings)
+
+
+def test_panel_labels_the_two_round_counts_separately(tmp_path):
+    """回归：面板上那个轮数曾被当成"累计轮数"读，实际只是本次进程的计数。
+
+    `rounds`（进程内存，重启归零）与 `rounds_total`（状态库累计）必须同时出现、
+    各自带口径，否则"库里几千轮、面板第 51 轮"看起来像丢了数据。
+    """
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    write_status(settings, rounds=51, rounds_total=3214)
+
+    html = render_page(settings)
+
+    assert "本次运行第 51 轮" in html
+    assert "累计 3214 轮" in html
+
+
+def test_panel_survives_snapshot_without_rounds_total(tmp_path):
+    """旧快照（没有 `rounds_total` 键）不能让页面渲染失败。
+
+    升级换代码后、还没跑完一轮时，快照就是上一版写的，缺这个键。
+    """
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    path = write_status(settings)
+    snapshot = json.loads(path.read_text(encoding="utf-8"))
+    snapshot.pop("rounds_total")
+    path.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+
+    html = render_page(settings)
+
+    assert "本次运行第 137 轮" in html
+    assert "累计 — 轮" in html
+
+
+def test_panel_and_metrics_survive_a_hand_edited_snapshot(tmp_path):
+    """快照被手工改坏（类型不对）时，页面、`/metrics`、`/api/health` 都不能崩。
+
+    回归：`rounds: "abc"` 曾让 `/metrics` 抛 `ValueError`，**整次抓取失败**——
+    一个数字读不出来，比显示 0 严重得多。`status.json` 是文本文件，不能假设
+    "它是我们写的就一定是干净的"。
+    """
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    write_status(
+        settings,
+        rounds="abc",
+        rounds_total=["1"],
+        users=[
+            user_entry(
+                known_posts={}, consecutive_fails="x", hours_since_newest_post="很久"
+            )
+        ],
+    )
+
+    html = render_page(settings)  # 页面：不崩，坏值原样显示
+    assert "本次运行第 abc 轮" in html
+
+    with panel(settings) as base:
+        status, body = get(base + "/metrics")
+        assert status == 200
+        assert "dywatch_rounds_total 0" in body
+        assert "dywatch_rounds_recorded_total 0" in body
+        assert 'dywatch_known_posts{author="示例账号"} 0' in body
+        assert 'dywatch_account_failures{author="示例账号"} 0' in body
+
+        assert get(base + "/")[0] == 200
+        assert get(base + "/api/health")[0] == 200
 
 
 # --------------------------------------------------------------------- 状态分级
@@ -424,6 +494,9 @@ def test_routes(tmp_path, monkeypatch):
     with panel(settings) as base:
         status, body = get(base + "/")
         assert status == 200 and "DYWATCH / STATUS" in body
+        # 两个轮次数都要出现，且各自带口径——只显示其中一个会被读成"累计轮数"
+        assert "本次运行第 137 轮" in body
+        assert "累计 3214 轮" in body
 
         status, body = get(base + "/api/state")
         assert status == 200 and json.loads(body)["rounds"] == 137
@@ -431,6 +504,7 @@ def test_routes(tmp_path, monkeypatch):
         status, body = get(base + "/api/health")
         health = json.loads(body)
         assert (status, health["users"], health["failed_users"]) == (200, 1, 0)
+        assert health["rounds"] == 137 and health["rounds_total"] == 3214
 
         assert get(base + "/healthz") == (200, '{"status": "ok"}')
         assert get(base + "/readyz")[0] == 200
@@ -438,6 +512,9 @@ def test_routes(tmp_path, monkeypatch):
         status, body = get(base + "/metrics")
         assert status == 200 and "dywatch_gate_open 1" in body
         assert 'dywatch_known_posts{author="示例账号"} 8' in body
+        # 进程级的那个保留 counter 语义（重启归零），累计的另起一个名字
+        assert "dywatch_rounds_total 137" in body
+        assert "dywatch_rounds_recorded_total 3214" in body
 
         assert get(base + "/nope")[0] == 404
 

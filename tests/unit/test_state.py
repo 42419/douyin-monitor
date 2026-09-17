@@ -152,6 +152,34 @@ def test_record_round_summarises_results(store):
     assert rounds[0]["duration_ms"] == 1234
 
 
+def test_rounds_total_counts_across_restarts_and_survives_pruning(store):
+    """累计轮数跨进程、且不被保留期裁剪影响——面板"累计 N 轮"就是它。
+
+    用 `COUNT(*)` 会随 `maintenance()` 删旧行而变小，看着像"轮数丢了"；
+    `MAX(id)` 在旧行被删光后会掉回 0。这正是面板与数据库对不上的成因之一。
+    """
+    assert store.rounds_total() == 0  # 一轮都没跑过时是 0，不该抛
+
+    for _ in range(3):
+        store.record_round(now=NOW, results=[], gate_state="open", duration_ms=1)
+    assert store.rounds_total() == 3
+
+    # 换一个 StateStore 实例（= 重启后新进程），累计值必须接着数
+    reopened = StateStore(store.path)
+    reopened.migrate()
+    try:
+        assert reopened.rounds_total() == 3
+        reopened.record_round(now=NOW, results=[], gate_state="open", duration_ms=1)
+        assert reopened.rounds_total() == 4
+    finally:
+        reopened.close()
+
+    # 保留期把 3 行旧的删掉后：COUNT(*) 归 0，累计值仍然是 4
+    store.maintenance(now=NOW + timedelta(days=100), events_days=90, rounds_days=30)
+    assert store.recent_rounds(10) == []
+    assert store.rounds_total() == 4
+
+
 def test_ensure_author_creates_then_updates_the_nickname(store):
     created = store.ensure_author("u9", "老昵称", NOW)
     assert created.nickname == "老昵称"

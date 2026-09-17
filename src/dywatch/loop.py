@@ -262,7 +262,14 @@ class MonitorLoop:
         snapshot = {
             "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
             "pid": os.getpid(),
+            # 两个轮次数，口径不同，**不能互相校验**：
+            #   rounds       本次进程启动以来跑了多少轮（内存计数，重启归零）
+            #   rounds_total 状态库里累计记录了多少轮（sqlite_sequence 号段，跨重启，
+            #                也不受 ROUNDS_KEEP_DAYS 裁剪影响）
+            # 只给其中一个会出事：面板原来只显示前者，放在页面最显眼的位置，
+            # 看的人会把它读成"累计轮数"，于是"库里几千轮、面板第 51 轮"看起来像丢了数据。
             "rounds": self._rounds,
+            "rounds_total": self.store.rounds_total(),
             "gate": self.gate.snapshot(),
             "upstream": {"base_url": self.settings["DTK_BASE_URL"]},
             "notify": {

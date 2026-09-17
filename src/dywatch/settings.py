@@ -120,8 +120,8 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
     # ---------------------------------------------------------------- 其他
     SettingSpec("LOG_LEVEL", "INFO", "str", "终端日志级别（不影响日志文件）"),
     SettingSpec("MONITOR_HOME", "", "str", "工作目录；留空则用当前目录"),
-    SettingSpec("EVENTS_KEEP_DAYS", 90, "int", "events 审计保留天数"),
-    SettingSpec("ROUNDS_KEEP_DAYS", 30, "int", "rounds 汇总保留天数"),
+    SettingSpec("EVENTS_KEEP_DAYS", 30, "int", "events 审计保留天数"),
+    SettingSpec("ROUNDS_KEEP_DAYS", 5, "int", "rounds 汇总保留天数（每轮一行；本表没有读取方，纯排障用）"),
 )
 
 SPECS: Final[Mapping[str, SettingSpec]] = {spec.key: spec for spec in SETTINGS}

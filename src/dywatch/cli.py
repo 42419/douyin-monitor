@@ -101,6 +101,12 @@ def cmd_status(settings: Settings) -> int:
     print(f"上游闸门: {'正常' if gate.get('open', True) else '已关闭(' + str(gate.get('reason')) + ')'}")
     notify = data.get("notify") or {}
     print(f"推送渠道: {', '.join(notify.get('channels') or []) or '（静默/无）'}")
+    # 两个轮次数并排显示并标口径：只给"本次运行"会让人以为轮数被重置了
+    # （`rounds` 是进程内存计数，`rounds_total` 才是状态库里跨重启累计的那个）
+    print(
+        f"轮次: 本次运行 {data.get('rounds') if data.get('rounds') is not None else '—'} 轮，"
+        f"累计 {data.get('rounds_total') if data.get('rounds_total') is not None else '—'} 轮"
+    )
     print("-" * 78)
     header = f"{'账号':<22}{'状态':<10}{'作品':>4}{'失败':>5}  {'频率':<8}{'最新作品':<12}备注"
     print(header)

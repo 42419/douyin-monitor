@@ -435,7 +435,8 @@ _PAGE = Template(r"""<!DOCTYPE html>
   <h1>$overall_line</h1>
   <div class="meta mono">
     <span>检查于 $timestamp</span><span class="sep">·</span>
-    <span>第 $rounds 轮</span><span class="sep">·</span>
+    <span>本次运行第 $rounds 轮</span><span class="sep">·</span>
+    <span>累计 $rounds_total 轮</span><span class="sep">·</span>
     <span>渠道 $channels</span><span class="sep">·</span>
     <span class="hide-sm">上游 $upstream</span><span class="sep hide-sm">·</span>
     <span class="hide-sm">PID $pid</span><span class="sep hide-sm">·</span>
@@ -628,12 +629,12 @@ def classify_account(user: Mapping[str, Any], stale_days: int) -> tuple[str, str
     """
     if not user.get("configured", True):
         return "off", "已移除"
-    fails = int(user.get("consecutive_fails") or 0)
+    fails = _as_int(user.get("consecutive_fails"))
     if fails > 0:
         return "red", f"失败 {fails} 次"
     if not user.get("ever_had_posts"):
         return "blue", "从未有作品"
-    hours = user.get("hours_since_newest_post")
+    hours = _as_number(user.get("hours_since_newest_post"))
     if hours is not None and hours >= stale_days * 24:
         return "amber", f"{hours // 24} 天无新作品"
     return "green", "正常"
@@ -811,6 +812,9 @@ def render_page(settings: Settings) -> str:
         overall_line=overall,
         timestamp=_escape_html(data.get("timestamp") or "—"),
         rounds=_escape_html(str(data.get("rounds") if data.get("rounds") is not None else "—")),
+        rounds_total=_escape_html(
+            str(data.get("rounds_total") if data.get("rounds_total") is not None else "—")
+        ),
         channels=_escape_html(channels),
         upstream=_escape_html(upstream),
         pid=_escape_html(str(data.get("pid") or "—")),
@@ -839,8 +843,8 @@ def _render_row(user: Mapping[str, Any], stale_days: int) -> str:
             if freq_label
             else ""
         ),
-        known_posts=int(user.get("known_posts") or 0),
-        post_age_text=_escape_html(_format_post_age(user.get("hours_since_newest_post"))),
+        known_posts=_as_int(user.get("known_posts")),
+        post_age_text=_escape_html(_format_post_age(_as_number(user.get("hours_since_newest_post")))),
     )
 
 
@@ -855,6 +859,27 @@ def _escape_html(text: Any) -> str:
     )
 
 
+# `status.json` 是本进程自己写的，但**不能假设它一定是我们写的**：它是个文本文件，
+# 可能被人手工改过（调值时改坏了），也可能被别的脚本覆写。`/metrics` 尤其脆——
+# 一个值抛异常等于这次抓取整体失败，比显示一个 0 严重得多（同一个教训在通知层上过：
+# 渲染路径必须对畸形载荷免疫）。所以读快照的数值一律走这两个函数，认不出来就用
+# "没有"而不是抛。
+
+def _as_int(value: Any) -> int:
+    """把快照里的值当整数读；认不出来（`"abc"` / 列表 / 字典）就当 0。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _as_number(value: Any) -> float | None:
+    """快照里的小时数这类字段；不是数就当"没有作品"处理，而不是让比较抛异常。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
 # =================== 单账号详情（读状态库） ===================
 
 def build_health(settings: Settings) -> dict[str, Any]:
@@ -863,12 +888,13 @@ def build_health(settings: Settings) -> dict[str, Any]:
     if not data:
         return {"status": "no_data", "users": 0, "failed_users": 0}
     users = [item for item in (data.get("users") or []) if isinstance(item, dict)]
-    failing = sum(1 for user in users if int(user.get("consecutive_fails") or 0) > 0)
+    failing = sum(1 for user in users if _as_int(user.get("consecutive_fails")) > 0)
     return {
         "status": "ok",
         "timestamp": data.get("timestamp"),
         "pid": data.get("pid"),
         "rounds": data.get("rounds"),
+        "rounds_total": data.get("rounds_total"),
         "users": len(users),
         "active_users": len(users) - failing,
         "failed_users": failing,
@@ -1132,9 +1158,13 @@ class _Handler(BaseHTTPRequestHandler):
             "# HELP dywatch_users Configured or known accounts.",
             "# TYPE dywatch_users gauge",
             f"dywatch_users {len(users)}",
-            "# HELP dywatch_rounds_total Rounds this process has completed.",
+            "# HELP dywatch_rounds_total Rounds this process has completed (resets on restart).",
             "# TYPE dywatch_rounds_total counter",
-            f"dywatch_rounds_total {int(data.get('rounds') or 0)}",
+            f"dywatch_rounds_total {_as_int(data.get('rounds'))}",
+            "# HELP dywatch_rounds_recorded_total Rounds ever recorded in the state DB"
+            " (survives restarts).",
+            "# TYPE dywatch_rounds_recorded_total counter",
+            f"dywatch_rounds_recorded_total {_as_int(data.get('rounds_total'))}",
             "# HELP dywatch_gate_open 1 when the global gate is open.",
             "# TYPE dywatch_gate_open gauge",
             f"dywatch_gate_open {1 if (data.get('gate') or {}).get('open', True) else 0}",
@@ -1143,9 +1173,9 @@ class _Handler(BaseHTTPRequestHandler):
         ]
         for user in users:
             label = _label(str(user.get("nickname") or user.get("sec_user_id") or "?"))
-            lines.append(f'dywatch_known_posts{{author="{label}"}} {int(user.get("known_posts") or 0)}')
+            lines.append(f'dywatch_known_posts{{author="{label}"}} {_as_int(user.get("known_posts"))}')
             lines.append(
-                f'dywatch_account_failures{{author="{label}"}} {int(user.get("consecutive_fails") or 0)}'
+                f'dywatch_account_failures{{author="{label}"}} {_as_int(user.get("consecutive_fails"))}'
             )
         lines.append("# HELP dywatch_never_seen_accounts Accounts that never returned a post.")
         lines.append("# TYPE dywatch_never_seen_accounts gauge")

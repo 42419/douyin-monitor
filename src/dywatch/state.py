@@ -232,6 +232,25 @@ class StateStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def rounds_total(self) -> int:
+        """这个实例累计跑过多少轮——**跨重启**的那个数。
+
+        取 `sqlite_sequence`（`AUTOINCREMENT` 的号段计数器），它单调不减：
+        `maintenance()` 会按 `ROUNDS_KEEP_DAYS` 删掉更早的 `rounds` 行，
+        而删行不动号段。两个看似可以替代的写法都不行：
+
+        * `COUNT(*)` 只数保留窗口内的行，于是它会随天数上下浮动，看着像"轮数丢了"；
+        * `MAX(id)` 在**一行都不剩**时是 NULL——裁剪把旧行删光之后这个数会掉回 0。
+
+        还没跑过一轮时 `sqlite_sequence` 里没有这一行，返回 0。
+
+        注意它和 `MonitorLoop._rounds`（进程内存、重启归零）不是一个口径，别互相校验。
+        """
+        row = self._conn.execute(
+            "SELECT seq FROM sqlite_sequence WHERE name = 'rounds'"
+        ).fetchone()
+        return int(row[0]) if row is not None and row[0] is not None else 0
+
     # ---------------------------------------------------------------- 写
     def save_round(
         self,

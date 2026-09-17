@@ -731,7 +731,8 @@ tombstones(                               -- 消失过的作品，防"窗口回�
   removed_at TEXT NOT NULL, reason TEXT,        -- scrolled_out | confirmed | trimmed
   PRIMARY KEY (sec_user_id, content_id));
 
-rounds(                                   -- 每轮汇总，供面板与排障
+rounds(                                   -- 每轮汇总。**没有任何读取方**，纯排障用；
+                                          -- `id` 的自增号段是面板"累计 M 轮"的来源
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ts TEXT NOT NULL, checked INTEGER, new_count INTEGER, deleted_count INTEGER,
   title_changed INTEGER, failed INTEGER, gate_state TEXT, duration_ms INTEGER);
@@ -747,8 +748,13 @@ events(                                   -- 通知审计：能回答"当时到�
 抄在 README §6；**`self_degraded` 目前没有任何产生点**（见第 10 章"尚未做"）。
 
 维护任务（每轮顺带，不单独起线程）：tombstone 按上限与 TTL 回收、
-`events` 保留 `EVENTS_KEEP_DAYS`（默认 90）、`rounds` 保留 30 天、
+`events` 保留 `EVENTS_KEEP_DAYS`（默认 30）、`rounds` 保留 `ROUNDS_KEEP_DAYS`（默认 5）、
 `posts` 清理已不在窗口且已 tombstone 的行。
+
+> `rounds` 是**唯一会持续增长**的表（轮次周期只有几十秒：1 个账号 ≈ 每天 2600 轮，
+> 30 天就是 7.8 万行）。它没有任何读取方，保留期就是这个表的唯一取舍——默认只给 5 天，
+> 嫌短再往上调（调小后下一轮 `maintenance()` 就会删掉超期行，但删行不缩文件，
+> 要真正回收磁盘得 `VACUUM`，README 排障表有命令）。
 
 **为什么不用每账号一个 JSON**（旧工具做法）：文件数随账号数增长、跨账号视图要遍历目录、
 并发写要自己防。SQLite 是标准库、单文件、有事务、断电安全，直接解决这三个问题。
@@ -959,7 +965,13 @@ payload 形状直接参考 v5 `ops/channels.py`（已验证可用的形状，不
   （日更 / 隔天更新 / 周更 / 半月更 / 月更 / 更新较少：排除置顶后按相邻发布时间间隔均值分类，
   与 `messages.frequency_stats()` 同一个实现）**。注意这里刻意**不**提供"距上次检测到变化"
   的小时数：那个数会被一次删除/改名刷新，放在面板上会让人以为账号很活跃（见第 10 章修正 #13）
-- `/metrics`：Prometheus 文本：`dywatch_users`、`dywatch_rounds_total`、`dywatch_gate_open`、
+- **轮次数有两个口径，面板上必须并排显示并标明**（第 10 章修正 #15）：
+  「本次运行第 N 轮」= 进程内存计数（`MonitorLoop._rounds`，重启归零）；
+  「累计 M 轮」= 状态库里的累计值（`StateStore.rounds_total()`，跨重启、不受 `ROUNDS_KEEP_DAYS`
+  裁剪影响，取 `sqlite_sequence` 的自增号段而不是行数）。详情弹窗里的「累计轮次」是第三个口径：
+  **这个账号**被检查过多少轮（`authors.runs`）。三者互不相等，少标一个就会被读成"轮数丢了"
+- `/metrics`：Prometheus 文本：`dywatch_users`、`dywatch_rounds_total`（**进程级**，重启归零，
+  符合 counter 语义）、`dywatch_rounds_recorded_total`（状态库累计）、`dywatch_gate_open`、
   `dywatch_known_posts{author}`、`dywatch_account_failures{author}`、`dywatch_never_seen_accounts`
   （设计稿早期写的 `monitor_*` 前缀未落地，见第 10 章"尚未做"）
 - **启动横幅**（沿用旧项目：分组对齐打印关键信息，一眼确认生效配置）：
@@ -1162,6 +1174,7 @@ douyin-monitor/
 | 12 | §1 非目标与 §2.1/§2.3 写着"不下载媒体 / 不碰媒体" | 改成"**默认**不碰媒体，唯一例外是默认关闭的归档下载开关"（D17），并在 §2.2 补上 ⑨ 这条写操作的接口说明 | D17 决定加了一条可选的写路径，但那三处表述没跟着改，设计稿会自己打自己——以后有人照着 §2.3 断定"本工具永不写"，就会把 D17 的功能当成 bug 删掉 |
 | 13 | 面板列表用 `hours_since_update`（距上次检测到变化）当"多久没更新" | 改用 `hours_since_newest_post`（最新一条作品的发布时间），`dywatch status` 同一口径；快照不再提供前者 | `last_update_at` 在**任何变化**时都会刷新（删掉一条、改个标题），于是"距上次更新 1 小时"和"20 天没发新作品"可以同时成立——列表上显示前者，等于告诉人"这账号挺活跃"。顺带三处交互：详情里已知作品改为**置顶排最前**（作者自己摆在最上面的那几条，往往就是点开想看的东西）、弹窗取消内部滚动（改由整层滚动，手机上不再两层滚动打架）、小屏下状态与账号名分两行且整行可点 |
 | 14 | `revived` / `title_changed` 只落库不推送，通知按 `diff` 的输出顺序投递 | 两个事件进 `NOTIFY_KINDS` 并各自带窗口（1 小时 / 6 小时，按账号）；投递改为按 `alerts.NOTIFY_PRIORITY` 排序，`new_post` 恒定第一 | 旧做法两头都不对：①"作品回归""标题被改"是作者真实做过的动作，只躺在库里没人会去看——怕刷屏的部分交给窗口就行，不是靠不推；②按 `diff` 的输出顺序投递，等于让"标题变更"这类可以先等的事件排在 `new_post` 前面，而它们共用一条投递通道（间隔 + 8 秒超时 × 2 次重试 + 渠道限流），排前面的每一条都在拿"会不会漏掉一条作品"去赌 |
+| 15 | 面板顶部只显示一个轮次数（`status.json` 的 `rounds`，即进程内存计数） | 改成并排两个：「**本次运行**第 N 轮」+「**累计** M 轮」；`status.json` 增 `rounds_total`（`StateStore.rounds_total()`，取 `sqlite_sequence` 号段）；`/api/health`、`/metrics`（新增 `dywatch_rounds_recorded_total`）、`dywatch status` 同步 | 上线后被真实读成"轮数丢了"：库里 `rounds` 表几万行（**跨重启累计**），面板却写"第 51 轮"（**本次进程**），两个数口径完全不同却摆在同一处、且没标。修的时候注意三点：①累计值不能用 `COUNT(*)`（会被 `ROUNDS_KEEP_DAYS` 裁剪，数会变小），也不能用 `MAX(id)`（旧行被删光后是 NULL，会掉回 0），用 `AUTOINCREMENT` 的号段计数器才是单调的；②`/metrics` 那个**保持进程级**（counter 重启归零符合 Prometheus 语义），累计值另起一个名字，不把原指标改成另一个口径；③第三个轮次数（详情弹窗的「累计轮次」= `authors.runs`，按账号）不改，但要在 README 里把三者摆在一起说清楚 |
 
 ### 尚未做（明确不在第一版范围）
 
