@@ -1,0 +1,55 @@
+name: Docs
+
+# 只在文档相关内容变化时构建发布；也可以在 Actions 页面手动触发
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Pages 同一时间只允许一个发布任务，排队而不取消进行中的那次
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `lastUpdated: true` 依赖 git 历史取每页最后提交时间，浅克隆会全部显示成构建时间
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/configure-pages@v5
+      - name: 安装依赖
+        run: npm ci
+      # 站点在自定义域名的根路径下，VitePress 的 base 保持默认 '/'；若改回 GitHub 项目页
+      # （https://<owner>.github.io/<repo>/）则需要另设 base，见 docs/.vitepress/config.mts
+      - name: 构建文档
+        run: npm run docs:build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/.vitepress/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
