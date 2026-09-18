@@ -39,7 +39,7 @@ export default defineConfig({
         {
           text: '快速开始',
           items: [
-            { text: '前置：部署 DTK v5', link: '/guide/dtk-setup' },
+            { text: '前置：DTK v5 与 API Key', link: '/guide/dtk-setup' },
             { text: '安装 dywatch', link: '/guide/quick-start' },
             { text: '命令行', link: '/guide/commands' },
             { text: '监控列表 users.conf', link: '/guide/users-conf' },

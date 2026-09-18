@@ -38,8 +38,8 @@ PostgreSQL 归档、REST API / MCP server / Web 控制台，都由它负责。dy
 进程 + 一个 SQLite 文件 + 一份配置，systemd 已经把开机自启、崩溃重启、日志归集、
 权限隔离都管完了，再加一层容器编排只会多一处要维护的东西。
 
-DTK 本身怎么部署是另一回事（通常用 Docker Compose，见
-[前置：部署 DTK v5](/guide/dtk-setup)），dywatch 只要能通过 HTTP 访问到它即可，
+DTK 本身怎么部署是另一回事（以上游文档为准，见
+[官方 Quick start](https://douyin.wtf/quickstart/)），dywatch 只要能通过 HTTP 访问到它即可，
 两者不需要在同一台机器上。
 
 ## 判定 → 通知的核心逻辑
@@ -55,5 +55,5 @@ DTK 本身怎么部署是另一回事（通常用 Docker Compose，见
 
 ## 准备好了？
 
-从 [前置：部署 DTK v5](/guide/dtk-setup) 开始，或者如果你已经有一个可用的 DTK v5
+从 [前置：DTK v5 与 API Key](/guide/dtk-setup) 开始，或者如果你已经有一个可用的 DTK v5
 实例和 API Key，直接跳到 [安装 dywatch](/guide/quick-start)。

@@ -43,16 +43,28 @@ watchlist），所以只需要两个 scope，也不会把 DTK 实例搞坏。唯
 
 ### 1. 前置：DTK v5 实例 + 一把 API Key
 
-在 DTK 控制台 **Access → API keys** 创建。Key 的形态是 `dtk_<12位十六进制>_<32位base64url>`
-（共 49 字符），**完整值只在创建时显示一次**。监控本身只需要两个 scope，角色 `viewer` 即可：
+**DTK 本身怎么部署，以上游文档为准**——本仓库不复制那些步骤（复制过来就会过期）：
+[官方 Quick start](https://douyin.wtf/quickstart/)（从零跑起来、初始化向导、第一把 Key）、
+[GitHub 仓库](https://github.com/Evil0ctal/Douyin_TikTok_Download_API)（源码 / 镜像 / 反馈）。
+
+dywatch 侧只有两件事要确认：
+
+1. **身份池不能是空的。** 池子空着时所有请求会一直报 `503 IDENTITY_POOL_EXHAUSTED`，
+   与 Key、scope 都无关。补池子的两条路见官方
+   [Step 3](https://douyin.wtf/quickstart/#step-3--decide-about-the-browser-container)。
+2. **一把 Key、两个 scope。** 控制台 **API keys → Create key**，勾下面两个就够
+   （`viewer` 账号看不到入口，用初始化向导建的管理员账号来建；Key 建好后只按自身 scope 鉴权）：
 
 | scope          | 用途                                               |
 | -------------- | -------------------------------------------------- |
 | `douyin:read`  | 读作者作品列表（主抓手）、识别分享链接、读任务结果 |
 | `archive:read` | 读本地归档，做删除交叉确认（零身份成本）           |
 
-还没部署 DTK v5？看 [前置：部署 DTK v5](https://dywatch.yunov.top/guide/dtk-setup)——
-**身份池那一步不能跳**：装完不处理身份池，dywatch 会一直收到 `503 IDENTITY_POOL_EXHAUSTED`。
+Key 形态是 `dtk_<12位十六进制>_<32位base64url>`（共 49 字符），**完整值只在创建时显示一次**。
+
+后续要开[归档下载](https://dywatch.yunov.top/guide/archive-download)再加 `media:write`；
+其余细节（角色与 scope 的关系、Key 怎么验证）见
+[前置：DTK v5 与 API Key](https://dywatch.yunov.top/guide/dtk-setup)。
 
 ### 2. 安装
 
@@ -146,7 +158,8 @@ sudo bash deploy/install.sh --yes                  # 必须重跑：.venv 里装
 | 想做的事                                       | 文档                                                              |
 | ---------------------------------------------- | ----------------------------------------------------------------- |
 | 这个工具是什么、和 DTK v5 怎么分工、边界在哪   | [这是什么](https://dywatch.yunov.top/guide/what-is-dywatch)       |
-| 把 DTK v5 部署起来（含身份池、API Key 入口）   | [前置：部署 DTK v5](https://dywatch.yunov.top/guide/dtk-setup)    |
+| **把 DTK v5 部署起来（上游官方文档）**         | [官方 Quick start](https://douyin.wtf/quickstart/) · [GitHub](https://github.com/Evil0ctal/Douyin_TikTok_Download_API) |
+| dywatch 只要哪两个 scope、身份池为什么不能空   | [前置：DTK v5 与 API Key](https://dywatch.yunov.top/guide/dtk-setup) |
 | 完整安装 / 卸载 / 首次配置                     | [安装 dywatch](https://dywatch.yunov.top/guide/quick-start)       |
 | 查某个命令怎么用                               | [命令行](https://dywatch.yunov.top/guide/commands)                |
 | 加账号、改昵称、粘主页链接                     | [监控列表 users.conf](https://dywatch.yunov.top/guide/users-conf) |

@@ -2,7 +2,8 @@
 
 ## dywatch 需要的 scope
 
-在 DTK 控制台左侧 **Access → API keys** 页面（Create key）创建 Key 时，
+在 DTK 控制台的 **API keys → Create key** 创建 Key 时（措辞与上游
+[Users and API keys](https://douyin.wtf/users-and-api-keys/) 一致），
 **监控本身只需要两个 scope**：
 
 | scope          | 用途                                                 |
