@@ -14,7 +14,7 @@ from dywatch.settings import (
 
 
 def test_every_spec_has_a_default_and_a_note():
-    """注册表是 README 配置章节的唯一来源，所以每一项都得说明白自己在干什么。"""
+    """注册表是配置参考页与 .env.example 的唯一来源，所以每一项都得说明白自己在干什么。"""
     for spec in SETTINGS:
         assert spec.default is not None or spec.key == "DTK_API_KEY"
         assert spec.note, f"{spec.key} 缺少说明"

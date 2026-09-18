@@ -486,7 +486,7 @@ v5 的代码质量主要来自一批**成文且被强制执行的规矩**。本�
 | --- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | **严格的接缝与单向依赖**：`api` 从不打开 socket，`worker` 不 import `api`；路由只做 authorize/validate/submit/answer | 依赖方向单向、无环（见 4.1）：`dtk.py` 是唯一知道 HTTP 的模块，`diff.py` 是唯一知道判定规则的模块，`notifiers/` 是唯一知道第三方 payload 的模块，三者互不 import |
 | 2   | **统一信封 + 稳定错误码**，人类可读文案永不参与判断                                                                  | 内部错误模型 `MonitorError(code, details, retry_after)`；`dtk.py` 把四类失败（连接 / 非信封响应 / 信封失败 / 载荷违契约）**归一化**，上层只按 `code` 分支        |
-| 3   | **配置即声明式注册表**：`SettingSpec(key, default, scope, type, description)` 集中登记，控制台可改、有描述           | `settings.py` 一张 `SETTINGS` 表 + `.env` 覆盖 + `--config-check` 打印全表与来源；README 配置章节由这张表生成                                                    |
+| 3   | **配置即声明式注册表**：`SettingSpec(key, default, scope, type, description)` 集中登记，控制台可改、有描述           | `settings.py` 一张 `SETTINGS` 表 + `.env` 覆盖 + `--config-check` 打印全表与来源；文档站的配置参考页由这张表生成                                                    |
 | 4   | **纯函数 + 不可变值对象**：解析、分类、渲染都是纯函数，`frozen=True` 模型                                            | `diff.py` 输入输出全是 frozen dataclass，事件用 `StrEnum`（照搬 v5 `NotifyEvent` 风格）；判定零 I/O，可脱网单测                                                  |
 | 5   | **提交与跟踪分离**：`202 + task_id`，长轮询只是便利，工作始终走队列                                                  | 不必实现任务队列，但借其分离原则：`fetch` / `diff` / `notify` 三段解耦，各自可重试、可单测、可单独关掉                                                           |
 | 6   | **去重窗口 + 作用域**：`TriggerSpec(severity, dedup_seconds, scope_fields)`；10 分钟咆哮会让人关掉通知               | 运维类告警（上游故障 / 池耗尽 / 连续失败 / 长期无更新）**整套照搬**；作品级事件靠 known/tombstone 天然去重                                                       |
@@ -626,7 +626,7 @@ class SettingSpec:
     key: str            # POLL_INTERVAL_MIN
     default: Any
     cast: type          # str/int/float/bool/list[str]
-    note: str           # 一句话说明 → 生成 README 配置表
+    note: str           # 一句话说明 → 生成配置参考页与 .env.example
 ```
 
 | 组       | 键                                      | 默认                           | 说明                                                                                                                               |
@@ -747,7 +747,8 @@ events(                                   -- 通知审计：能回答"当时到�
 ```
 
 `kind` 的取值与"哪一种会推送"以 `models.EventKind` / `NOTIFY_KINDS` 为准，清单与抑制窗口
-抄在 README §6；**`self_degraded` 目前没有任何产生点**（见第 10 章"尚未做"）。
+抄在文档站的「参考 / 事件类型」（`docs/reference/events.md`）；
+**`self_degraded` 目前没有任何产生点**（见第 10 章"尚未做"）。
 
 维护任务（每轮顺带，不单独起线程）：tombstone 按上限与 TTL 回收、
 `events` 保留 `EVENTS_KEEP_DAYS`（默认 30）、`rounds` 保留 `ROUNDS_KEEP_DAYS`（默认 5）、
@@ -756,7 +757,7 @@ events(                                   -- 通知审计：能回答"当时到�
 > `rounds` 是**唯一会持续增长**的表（轮次周期只有几十秒：1 个账号 ≈ 每天 2600 轮，
 > 30 天就是 7.8 万行）。它没有任何读取方，保留期就是这个表的唯一取舍——默认只给 5 天，
 > 嫌短再往上调（调小后下一轮 `maintenance()` 就会删掉超期行，但删行不缩文件，
-> 要真正回收磁盘得 `VACUUM`，README 排障表有命令）。
+> 要真正回收磁盘得 `VACUUM`，文档站的排障页有命令（`docs/operations/troubleshooting.md`）。
 
 **为什么不用每账号一个 JSON**（旧工具做法）：文件数随账号数增长、跨账号视图要遍历目录、
 并发写要自己防。SQLite 是标准库、单文件、有事务、断电安全，直接解决这三个问题。
@@ -995,7 +996,7 @@ payload 形状直接参考 v5 `ops/channels.py`（已验证可用的形状，不
 ```
 douyin-monitor/
 ├── DESIGN.md                  # 本文件
-├── README.md                  # 用法 + 由 SETTINGS 表生成的配置参考（S5 产出）
+├── README.md                  # 落地页：定位 / 安装 / 升级 / 常用命令 / 文档站索引
 ├── pyproject.toml             # 依赖：httpx + python-dotenv（SQLite / asyncio 用标准库）
 ├── .env.example
 ├── users.conf.example
