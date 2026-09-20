@@ -48,15 +48,25 @@ TRIGGERS: Final[Mapping[EventKind, TriggerSpec]] = {
     EventKind.TITLE_CHANGED: TriggerSpec("info", HOUR, "author"),
     # 回归本身罕见，但窗口挪动可以让同一条作品反复"出去又回来"，给个宽窗口兜住这种抖动
     EventKind.REVIVED: TriggerSpec("info", 6 * HOUR, "author"),
-    # 核验发现"作品对访客不可见"：同一账号连着好几条被藏是可能的，按账号给个宽窗口，
-    # 一批合成一条；同一条作品只会被标记一次（标记落库后就再也不核验它了），
-    # 所以这个窗口不会压掉"又一条新作品被藏"的提醒。
-    EventKind.HIDDEN_FROM_GUEST: TriggerSpec("info", 6 * HOUR, "author"),
+    # `hidden_from_guest` 刻意**不在**这张表里，见下面 `NO_WINDOW_EVENTS` 里的理由
 }
 
-#: 作品级事件没有窗口——它们只发生一次，抑制它们等于丢通知
+#: 没有抑制窗口的事件——它们**每条都携带一次性的新信息**，抑制等于丢通知。
+#:
+#: `HIDDEN_FROM_GUEST` 曾按"6 小时/账号"给过窗口（2026-09-20 改掉）：那条思路是错的，
+#: 而且和它自己的机制相反——一条作品被核验标记之后就**再也不会进入核验**（标记存在的
+#: 目的就是让它不再被判成消失），所以同一条作品根本不可能重复产生这个事件。窗口在这里
+#: 唯一能压掉的，只会是"6 小时内又发现了**另一条**被藏的作品"这种真正的新信息，而那条
+#: 通知永远不会补发（标记已落库、不会再次核验）→ 永久丢失。
+#: 发现速率本身由作者的发布节奏决定，且同一次核验里发现的多条会**聚合成一条**，
+#: 不需要窗口兜重复。
 NO_WINDOW_EVENTS: Final[frozenset[EventKind]] = frozenset(
-    {EventKind.NEW_POST, EventKind.POST_REMOVED, EventKind.ALL_GONE}
+    {
+        EventKind.NEW_POST,
+        EventKind.POST_REMOVED,
+        EventKind.ALL_GONE,
+        EventKind.HIDDEN_FROM_GUEST,
+    }
 )
 
 #: **投递顺序**，数字越小越先发。

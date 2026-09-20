@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from dywatch.alerts import Deduplicator, should_send
+from dywatch.alerts import TRIGGERS, Deduplicator, should_send
 from dywatch.dtk import MonitorError, parse_author_profile
 from dywatch.models import (
     AuthorProfile,
@@ -744,20 +744,32 @@ def test_strip_from_removals_never_breaks_an_event_with_a_hostile_payload():
     assert _strip_from_removals((all_hidden,), {"h1"}) == (), "整条都是假象时撤销这条事件"
 
 
-def test_hidden_from_guest_event_is_windowed_per_author():
-    """同一账号 6 小时内只推一次（一批作品被藏 → 一条通知），而不是无条件放行。"""
-    now = datetime.now(timezone.utc)
-    event = Event(
-        EventKind.HIDDEN_FROM_GUEST,
-        sec_user_id="u1", nickname="示例",
-        payload={"hidden": [{"content_id": "hidden1", "title": "x", "created_at": now.isoformat()}]},
-    )
+def test_hidden_from_guest_has_no_suppression_window():
+    """这个事件**必须没有**抑制窗口——它的信息是一次性的，压掉就是永久丢。
+
+    曾经给过"6 小时/账号"的窗口，理由写的是"同一条作品只会被标记一次，所以不会压掉
+    又一条新作品的提醒"——那个理由恰好是反的：正因为标记让同一条作品的重复不可能，
+    窗口唯一能压掉的只有"6 小时内又发现**另一条**被藏的作品"，而那条通知不会补发
+    （标记已落库 → 不会再核验），所以窗口不是兜重复，是丢新信息。这条测试钉住这个结论。
+    """
+    def event(title: str) -> Event:
+        return Event(
+            EventKind.HIDDEN_FROM_GUEST,
+            sec_user_id="u1", nickname="示例",
+            payload={"hidden": [{"content_id": "x", "title": title, "created_at": None}]},
+        )
+
     dedup = Deduplicator()
-    first, key = should_send(event, dedup)
+    first, key = should_send(event("第一条被藏的作品"), dedup)
     assert first is True
-    assert key, "有窗口的事件必须返回 key，投递失败时才好还回去"
-    second, _key2 = should_send(event, dedup)
-    assert second is False, "同一账号 6 小时窗口内不该重复推送"
-    # new_post 那类无窗口事件不受影响
-    fresh = Deduplicator()
-    assert should_send(event, fresh)[0] is True
+    assert key == "", "无窗口事件不该占用去重键（投递失败时也没有键要还回去）"
+
+    # 一小时后发现的是**另一条**作品：两条都必须送出去
+    second, _ = should_send(event("一小时后发现的另一条"), dedup)
+    assert second is True, "另一个新发现不能被账号级窗口压掉"
+
+    # 同一账号连着好几条被藏时，一次核验会聚合成一条事件（见 pipeline 的聚合），
+    # 所以这里放行不会变成刷屏
+    assert not TRIGGERS.get(EventKind.HIDDEN_FROM_GUEST), (
+        "它不该被加回 TRIGGERS：任何窗口都只会丢新发现"
+    )
