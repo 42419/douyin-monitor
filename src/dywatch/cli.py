@@ -203,6 +203,42 @@ async def cmd_doctor(settings: Settings) -> int:
                 except MonitorError as exc:
                     print(f"! 读取存储用量失败：{exc.code}")
 
+        if settings["HIDDEN_POST_CHECK_ENABLED"]:
+            if not settings["PINNED_IDENTITY_ID"]:
+                print("✗ HIDDEN_POST_CHECK_ENABLED=true，但 PINNED_IDENTITY_ID 未配置")
+                problems.append("缺少 PINNED_IDENTITY_ID（隐藏作品核验需要）")
+            else:
+                pin_key_configured = bool(settings["PIN_DTK_API_KEY"])
+                if pin_key_configured:
+                    # 独立 Key：跟主 Key 不是一回事，得单独查一次它自己的 scopes
+                    try:
+                        async with DtkClient(
+                            settings["DTK_BASE_URL"],
+                            settings["PIN_DTK_API_KEY"],
+                            wait=0,
+                            timeout=float(settings["DTK_TIMEOUT"]),
+                            user_agent=str(settings["DTK_USER_AGENT"]),
+                        ) as pin_client:
+                            pin_me = await pin_client.me()
+                        pin_scopes = set((pin_me.get("user") or {}).get("scopes") or [])
+                    except MonitorError as exc:
+                        print(f"✗ PIN_DTK_API_KEY 不可用：{exc.code} —— {exc.message}")
+                        problems.append("PIN_DTK_API_KEY 不可用")
+                        pin_scopes = set()
+                else:
+                    pin_scopes = scopes  # 没配独立 Key，复用主 Key，scopes 前面已经查过了
+
+                if "identity:manage" not in pin_scopes:
+                    which = "PIN_DTK_API_KEY" if pin_key_configured else "DTK_API_KEY"
+                    print(f"✗ HIDDEN_POST_CHECK_ENABLED=true，但 {which} 缺少 identity:manage scope")
+                    print("  这个 scope 能解密查看任意身份的 cookie 明文，建议单独开一把 Key 只给这一处用")
+                    problems.append("缺少 identity:manage（隐藏作品核验需要）")
+                else:
+                    print(
+                        f"✓ 隐藏作品核验可用：定向身份 {str(settings['PINNED_IDENTITY_ID'])[:8]}…"
+                        f"（{'独立 Key' if pin_key_configured else '复用主 Key'}）"
+                    )
+
         rate = me.get("rate_limit_per_min")
         print(f"  速率上限: {rate if rate is not None else '未单独设置（用实例默认 120/分钟）'}")
 

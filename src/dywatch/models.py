@@ -79,6 +79,12 @@ SILENT_KINDS: frozenset[EventKind] = frozenset(
     {EventKind.SCROLLED_OUT, EventKind.TRIMMED, EventKind.INITIALIZED}
 )
 
+#: `Event.payload["source"]` 的一个取值——标记这条 `REVIVED` 事件不是本轮列表里
+#: 自己看到的回归，而是隐藏作品核验（登录身份定向查证）翻出来的。三处要认得这个值：
+#: `alerts.should_send`（不吃 REVIVED 的 6 小时抑制窗口）、`render`（换一套文案）、
+#: `pipeline`（写这个标记的地方）。见 DESIGN.md「隐藏作品核验」一节。
+REVIVED_VIA_HIDDEN_CHECK: str = "hidden_check"
+
 
 @dataclass(frozen=True, slots=True)
 class Content:
@@ -163,6 +169,18 @@ class Tombstone:
 
 
 @dataclass(frozen=True, slots=True)
+class AuthorProfile:
+    """`GET /api/v1/douyin/user` 的裁剪版——目前只用得到发布总数这一个字段。
+
+    `content_count` 对应抖音自己的 `aweme_count`：账号级的发布总数统计，实测**不**
+    受访客身份限制（跟"关注/粉丝/获赞"这几个数字同一类，游客态也能看到真实值）——
+    这条是使用方（见隐藏作品核验那一节）亲自用登录态账号核对过的，不是猜的。
+    """
+
+    content_count: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AuthorState:
     """Everything `diff` knows about one monitored account."""
 
@@ -192,6 +210,13 @@ class AuthorState:
     runs: int = 0
     posts: tuple[PostState, ...] = ()
     tombstones: tuple[Tombstone, ...] = ()
+    #: 上一次确认过的 `content_count`（见隐藏作品核验）。`None` = 还没确认过。
+    baseline_content_count: int | None = None
+    baseline_content_count_at: datetime | None = None
+    #: 连续几轮"数字对不上、但核验没能解释"——只在这种未解决状态下才递增，
+    #: 解决了（或者干脆没有缺口）就清零。到达上限会放弃这次追踪、直接接受
+    #: 当下的实际值，避免一个解释不了的缺口让核验无限重试下去。
+    content_count_drift_rounds: int = 0
 
     @property
     def known_ids(self) -> frozenset[str]:

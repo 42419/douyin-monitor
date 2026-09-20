@@ -234,3 +234,88 @@ def test_a_failed_write_leaves_the_previous_round_intact(store):
     after = store.load_authors()["u1"]
     assert after.known_ids == before.known_ids
     assert after.runs == before.runs
+
+
+# ---------------------------------------------------------------- schema 迁移
+def test_migrate_upgrades_a_v1_database_without_losing_data(tmp_path):
+    """模拟一个升级前的旧库（没有 baseline_content_count 两列，version=1），
+    验证 `migrate()` 能把它升到 v2、不报错、也不丢已有数据——这是这个项目
+    第一条真正的迁移路径（v1 → v2），值得单独锁住。
+    """
+    import sqlite3
+
+    db_path = tmp_path / "old.db"
+    # 手写一份 v1 版本的 authors 表（没有 baseline_content_count / _at 两列）——
+    # 这样等下 StateStore.migrate() 里的 `CREATE TABLE IF NOT EXISTS` 才会因为
+    # 表已经存在而跳过，真正走到 `_migrate_1_to_2` 的 `ALTER TABLE` 那条路径，
+    # 而不是被新版 SCHEMA 一次性建成新结构，测不出迁移代码本身有没有 bug。
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE schema_version (version INTEGER NOT NULL);
+        INSERT INTO schema_version (version) VALUES (1);
+
+        CREATE TABLE authors (
+          sec_user_id           TEXT PRIMARY KEY,
+          nickname              TEXT NOT NULL DEFAULT '',
+          initialized_at        TEXT,
+          ever_had_posts        INTEGER NOT NULL DEFAULT 0,
+          consecutive_fails     INTEGER NOT NULL DEFAULT 0,
+          last_error            TEXT,
+          last_error_code       TEXT,
+          fail_alerted          INTEGER NOT NULL DEFAULT 0,
+          last_fail_alert_at    TEXT,
+          all_gone_rounds       INTEGER NOT NULL DEFAULT 0,
+          empty_rounds          INTEGER NOT NULL DEFAULT 0,
+          never_seen_alerted    INTEGER NOT NULL DEFAULT 0,
+          newest_seen_created_at TEXT,
+          raw_refresh_round     INTEGER NOT NULL DEFAULT 0,
+          last_new_video_at     TEXT,
+          last_update_at        TEXT,
+          stale_alerted         INTEGER NOT NULL DEFAULT 0,
+          last_seen_at          TEXT,
+          runs                  INTEGER NOT NULL DEFAULT 0,
+          created_at            TEXT NOT NULL,
+          updated_at            TEXT NOT NULL
+        );
+        INSERT INTO authors (
+          sec_user_id, nickname, initialized_at, ever_had_posts, runs,
+          created_at, updated_at
+        ) VALUES (
+          'old_user', '老账号', '2026-01-01T00:00:00+00:00', 1, 42,
+          '2026-01-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00'
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    store = StateStore(db_path)
+    store.migrate()  # 不该报错——一路从 v1 经 v2 升到当前的 v3
+
+    with store._tx() as tx:  # noqa: SLF001 —— 就是要验证迁移后的原始表结构
+        version = tx.execute("SELECT version FROM schema_version").fetchone()[0]
+        assert version == 3
+        columns = {row[1] for row in tx.execute("PRAGMA table_info(authors)")}
+        assert "baseline_content_count" in columns
+        assert "baseline_content_count_at" in columns
+        assert "content_count_drift_rounds" in columns
+
+    authors = store.load_authors()
+    assert "old_user" in authors
+    old = authors["old_user"]
+    assert old.nickname == "老账号"
+    assert old.runs == 42
+    assert old.ever_had_posts is True
+    # 老账号从没做过隐藏作品核验，新列必须是 None（"还没确认过"），不能悄悄变成 0
+    # （0 会被读成"账号发布数是 0"，是另一件事）
+    assert old.baseline_content_count is None
+    assert old.baseline_content_count_at is None
+    # drift 计数器默认应该是 0（"目前没有未解决的缺口"），不是 NULL
+    assert old.content_count_drift_rounds == 0
+
+    # 迁移之后新列要能正常读写，不是只加了个空壳
+    updated = old.with_updates(baseline_content_count=7, baseline_content_count_at=NOW)
+    store.save_round("old_user", updated, events=[], now=NOW)
+    reloaded = store.load_authors()["old_user"]
+    assert reloaded.baseline_content_count == 7

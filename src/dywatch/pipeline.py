@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -30,6 +31,8 @@ from .models import (
     DiffConfig,
     Event,
     EventKind,
+    PostState,
+    REVIVED_VIA_HIDDEN_CHECK,
     RoundResult,
 )
 from .pacer import RequestPacer
@@ -52,6 +55,26 @@ ARCHIVE_CONFIG_MUTE_SECONDS = 3600
 #: 容量类退避的兜底值——DTK 的 `QUEUE_FULL` 通常自带 `retry_after`，没给时用这个。
 ARCHIVE_CAPACITY_MUTE_SECONDS = 300
 
+#: 数字对不上、但定向核验没能解释缺口时，连续几轮之后放弃追踪、直接接受当下的
+#: 实际值——见 `_check_hidden_posts`。防止一个解释不了的缺口（比如置顶项被删导致
+#: 的偏差，或者上游数据本身的一次性异常）让核验无限期重试下去。
+MAX_UNRESOLVED_DRIFT_ROUNDS = 5
+
+
+@dataclass(frozen=True, slots=True)
+class HiddenCheckConfig:
+    """隐藏作品核验（`HIDDEN_POST_CHECK_ENABLED`）需要的三样东西。
+
+    `HIDDEN_POST_CHECK_ENABLED=false` 时 `run_author` 根本不接这个参数（`None`），
+    主链路上就是一次 `is None` 判断——跟归档下载旁路（`ArchiveTrigger`）同一个套路。
+    """
+
+    #: 定向核验用的身份 UUID（DTK 控制台 Identities 页面可查）
+    pinned_identity: str
+    #: 定向请求走哪个 client——可以是复用主 client，也可以是配了 identity:manage
+    #: 的独立 Key 建的 client（见 `PIN_DTK_API_KEY`），两种都行，pipeline 不关心
+    pin_client: Any
+
 
 async def run_author(
     *,
@@ -67,6 +90,7 @@ async def run_author(
     now: datetime,
     archive_enabled: bool = True,
     archive_trigger: ArchiveTrigger | None = None,
+    hidden_check: HiddenCheckConfig | None = None,
     logger: Any = None,
 ) -> RoundResult:
     started = time.monotonic()
@@ -115,6 +139,20 @@ async def run_author(
                 _log(logger, "debug", "archive.unavailable", code=exc.code)
 
     events, next_state = diff(author, now=now, cfg=cfg, page=page, error=error, archive=archive)
+
+    if hidden_check is not None and error is None and page is not None:
+        next_state, events = await _check_hidden_posts(
+            prev=author,
+            next_state=next_state,
+            events=events,
+            client=client,
+            pacer=pacer,
+            cfg=cfg,
+            now=now,
+            hidden_check=hidden_check,
+            raw_included=raw_included,
+            logger=logger,
+        )
 
     event_ids = store.save_round(author.sec_user_id, next_state, events, now=now)
 
@@ -188,6 +226,248 @@ def _should_include_raw(author: AuthorState, cfg: DiffConfig) -> bool:
         refresh_rounds=cfg.raw_refresh_rounds,
         have_new_posts=have_new_posts,
         title_changed=changed and not have_new_posts,
+    )
+
+
+async def _check_hidden_posts(
+    *,
+    prev: AuthorState,
+    next_state: AuthorState,
+    events: tuple[Event, ...],
+    client: Any,
+    pacer: RequestPacer,
+    cfg: DiffConfig,
+    now: datetime,
+    hidden_check: HiddenCheckConfig,
+    raw_included: bool,
+    logger: Any,
+) -> tuple[AuthorState, tuple[Event, ...]]:
+    """隐藏作品核验：游客身份有时看不到作者主页最新发布的作品（抖音的访客限制），
+    这里用"发布总数对不对得上"作为触发信号，只在真的对不上时才用登录身份重新核实一遍。
+
+    返回的是**这一轮最终应该使用的完整 `events`**（不是"额外追加的"）——如果核验
+    推翻了这一轮刚产出的删除确认，需要把矛盾的部分先摘掉，调用方不用再关心这些。
+
+    在四种情况下会真的去调用 `/api/v1/douyin/user`（不是每轮都调）：
+
+    1. 账号第一次被记录（`INITIALIZED`）——还没有基准值，先建立一个
+    2. 本轮有新作品（`NEW_POST`）——游客视角已经看到了，不需要核验，但要把这些
+       新增算进基准值，不然基准值会跟着漂移，等下次真的对不上时算出错误的缺口
+    3. 本轮有作品被确认消失（`POST_REMOVED` / `ALL_GONE`）——核对数字对不对得上
+    4. 长期无更新的一次性兜底提醒触发（`STALE_NO_UPDATE`）——同样核对一次
+
+    其余轮次（既没有新作品、也没有作品消失、也没有触发兜底）直接原样返回，不产生
+    任何额外请求。
+
+    **已知盲区**：如果一条新作品从发布起就一直被游客身份隐藏，而账号后续也没有
+    任何作品被删除、也没有碰到长期无更新的阈值，这条作品会一直悬空，要等到以后
+    某次不相关的删除/兜底事件才会被连带翻出来——`STALE_FALLBACK_DAYS` 把这条尾巴
+    的上限锁在 `STALE_FALLBACK_DAYS` 天之内，但不保证更快。这是权衡过的结果：
+    改成不看事件、纯定期轮询能缩短这个上限，但意味着每个开启了这个功能的账号，
+    不管有没有发生任何变化，都要按固定周期消耗一次请求——参见 DESIGN.md §4.10。
+    """
+    initialized = any(e.kind is EventKind.INITIALIZED for e in events)
+    removed_count = 0
+    for event in events:
+        if event.kind in (EventKind.POST_REMOVED, EventKind.ALL_GONE):
+            removed_count += len(event.payload.get("removed") or [])
+    new_count = sum(1 for e in events if e.kind is EventKind.NEW_POST)
+    stale_triggered = any(e.kind is EventKind.STALE_NO_UPDATE for e in events)
+
+    if not (initialized or new_count > 0 or removed_count > 0 or stale_triggered):
+        return next_state, events
+
+    try:
+        await pacer.wait_for_turn()
+        profile = await client.author_profile(prev.sec_user_id)
+    except MonitorError as exc:
+        # 核验层，不是主判定：读失败不该影响这一轮已经算好的结果——下次再有触发
+        # 时会重新算一遍基准值差，这次的空手不会造成永久性的漂移
+        _log(logger, "debug", "hidden_check.profile_unavailable",
+             sec_user_id=prev.sec_user_id, code=exc.code)
+        return next_state, events
+
+    actual = profile.content_count
+    if actual is None:
+        return next_state, events
+
+    if prev.baseline_content_count is None:
+        # 还没有基准值可比（通常是这个账号第一次被记录），这次先把它立起来，
+        # 不做比较——没有"上一次"就无从谈起"对不对得上"
+        return next_state.with_updates(
+            baseline_content_count=actual, baseline_content_count_at=now,
+            content_count_drift_rounds=0,
+        ), events
+
+    expected = prev.baseline_content_count + new_count - removed_count
+
+    if actual <= expected:
+        # 对得上，或者比预期还少（比如别处也发生了这轮没被确认到的删除，
+        # 数字只会更小，不是"隐藏"要处理的问题）——都直接信任这次查到的实际值
+        next_state = next_state.with_updates(
+            baseline_content_count=actual, baseline_content_count_at=now,
+            content_count_drift_rounds=0,
+        )
+        return next_state, events
+
+    # actual > expected：有缺口，尝试定向核验
+    try:
+        await pacer.wait_for_turn()
+        page = await hidden_check.pin_client.author_posts(
+            prev.sec_user_id, cfg.fetch_count,
+            include_raw=raw_included, identity=hidden_check.pinned_identity,
+        )
+    except MonitorError as exc:
+        _log(logger, "warning", "hidden_check.verify_failed",
+             sec_user_id=prev.sec_user_id, code=exc.code, message=exc.message[:120])
+        page = None
+
+    recovered_events: tuple[Event, ...] = ()
+    if page is not None:
+        recovered_events, next_state = _merge_hidden_verification(next_state, page, now)
+
+    if recovered_events:
+        # 缺口被解释清楚了：基准值推进，未解决计数清零。核验刚找回的作品如果
+        # 恰好也在这一轮刚产出的 POST_REMOVED/ALL_GONE 里（同一轮先确认删除、
+        # 核验又把它找回来了），要把它从那条事件里摘掉——不然"作品消失"和
+        # "其实还在"会同批发出两条自相矛盾的通知
+        recovered_ids = {e.content_id for e in recovered_events if e.kind is EventKind.REVIVED}
+        events = _reconcile_recovered_removals(events, recovered_ids)
+        events = events + recovered_events
+        _log(logger, "info", "hidden_check.recovered",
+             sec_user_id=prev.sec_user_id, count=len(recovered_events),
+             expected=expected, actual=actual)
+        next_state = next_state.with_updates(
+            baseline_content_count=actual, baseline_content_count_at=now,
+            content_count_drift_rounds=0,
+        )
+        return next_state, events
+
+    # 数字对不上，但这次没能解释清楚（核验请求失败，或者核验拿到的页面里也
+    # 没有本地不认识的 id）——**不推进基准值**，留到下一次触发时继续比对同一个
+    # 缺口，而不是悄悄把它吃掉当作"已经解决"。但也不能无限期重试：连续太多轮
+    # 都解释不了，大概率是别的原因（比如置顶项被删导致的偏差、上游数据的一次性
+    # 异常），继续追踪没有意义，达到上限后放弃、直接接受当下的实际值。
+    drift_rounds = prev.content_count_drift_rounds + 1
+    if drift_rounds >= MAX_UNRESOLVED_DRIFT_ROUNDS:
+        _log(logger, "warning", "hidden_check.drift_gave_up",
+             sec_user_id=prev.sec_user_id, expected=expected, actual=actual,
+             rounds=drift_rounds)
+        next_state = next_state.with_updates(
+            baseline_content_count=actual, baseline_content_count_at=now,
+            content_count_drift_rounds=0,
+        )
+    else:
+        _log(logger, "debug", "hidden_check.mismatch_unresolved",
+             sec_user_id=prev.sec_user_id, expected=expected, actual=actual,
+             rounds=drift_rounds)
+        next_state = next_state.with_updates(content_count_drift_rounds=drift_rounds)
+    return next_state, events
+
+
+def _reconcile_recovered_removals(
+    events: tuple[Event, ...], recovered_ids: set[str]
+) -> tuple[Event, ...]:
+    """核验刚发现某些 id 其实没删，把它们从这一轮已经产出的 `POST_REMOVED` /
+    `ALL_GONE` 事件里摘掉——不然会跟核验产出的 `REVIVED` 同批发出两条自相矛盾
+    的通知（"作品消失" + "其实还在"）。
+
+    摘完如果一条 removed 事件的作品列表变空了，整条事件跟着撤销：这一批"消失"
+    全部被核验推翻了，没有任何真实消失可报。
+    """
+    if not recovered_ids:
+        return events
+    result: list[Event] = []
+    for event in events:
+        if event.kind not in (EventKind.POST_REMOVED, EventKind.ALL_GONE):
+            result.append(event)
+            continue
+        removed = event.payload.get("removed") or []
+        kept = [item for item in removed if item.get("content_id") not in recovered_ids]
+        if not kept:
+            continue  # 这一批消失全部被核验推翻，整条事件撤销
+        if len(kept) != len(removed):
+            event = Event(
+                event.kind,
+                sec_user_id=event.sec_user_id,
+                nickname=event.nickname,
+                content_id=event.content_id,
+                payload={**event.payload, "removed": kept},
+            )
+        result.append(event)
+    return tuple(result)
+
+
+def _merge_hidden_verification(
+    state: AuthorState, page: Any, now: datetime
+) -> tuple[tuple[Event, ...], AuthorState]:
+    """把定向核验拿到的页面，合并进（这一轮已经算完的）状态里。
+
+    刻意不复用 `diff()`：`diff()` 每次调用都会推进 `runs` / `raw_refresh_round` /
+    `last_seen_at` 这些"一轮只应该走一次"的计数器，同一轮里调两次会把它们算错。
+    这里只关心"核验页面里有没有本地不认识的 id"，产出的事件形状照抄 `diff()` 里
+    `new_ids` / `reappeared` 那两段——分辨"全新"还是"曾经确认删除、现在核验回来了"
+    的逻辑完全一致，只是重新出现的那一类会额外打上 `source` 标记：
+    `alerts.should_send` 认这个标记不吃 `REVIVED` 的 6 小时抑制窗口，
+    `render` 认它换一套"疑似此前一直被隐藏"的文案。
+    """
+    known = state.known_ids
+    tomb_ids = state.tombstone_ids
+    current = {item.content_id: item for item in page.items}
+
+    posts = {p.content_id: p for p in state.posts}
+    tombstones = {t.content_id: t for t in state.tombstones}
+    events: list[Event] = []
+    found_new = False
+
+    for content_id, item in current.items():
+        if content_id in known:
+            continue
+        posts[content_id] = PostState(
+            content_id=content_id,
+            kind=item.kind,
+            title=item.title,
+            created_at=item.created_at,
+            is_top=item.is_top,
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+        if content_id in tomb_ids:
+            tombstones.pop(content_id, None)
+            events.append(
+                Event(
+                    EventKind.REVIVED,
+                    sec_user_id=state.sec_user_id,
+                    nickname=state.nickname,
+                    content_id=content_id,
+                    payload={
+                        "title": item.title,
+                        "kind": item.kind.value,
+                        "web_url": item.web_url,
+                        "source": REVIVED_VIA_HIDDEN_CHECK,
+                    },
+                )
+            )
+        else:
+            found_new = True
+            events.append(
+                Event(
+                    EventKind.NEW_POST,
+                    sec_user_id=state.sec_user_id,
+                    nickname=state.nickname,
+                    content_id=content_id,
+                    payload={"content": item, "gap_days": None, "source": REVIVED_VIA_HIDDEN_CHECK},
+                )
+            )
+
+    if not events:
+        return (), state
+
+    return tuple(events), state.with_updates(
+        posts=tuple(posts.values()),
+        tombstones=tuple(tombstones.values()),
+        last_update_at=now,
+        last_new_video_at=now if found_new else state.last_new_video_at,
     )
 
 

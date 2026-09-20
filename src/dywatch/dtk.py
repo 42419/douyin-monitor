@@ -29,7 +29,7 @@ from typing import Any, Final, Mapping, Sequence
 
 import httpx
 
-from .models import ArchiveItem, Content, Kind, Page
+from .models import ArchiveItem, AuthorProfile, Content, Kind, Page
 
 #: 上游错误码里，值得整体闸门暂停的那些 —— 都是"现在别发请求"的意思
 GATE_CODES: Final[frozenset[str]] = frozenset(
@@ -226,6 +226,17 @@ def parse_archive_item(node: Mapping[str, Any]) -> ArchiveItem:
     )
 
 
+def parse_author_profile(payload: Mapping[str, Any]) -> AuthorProfile:
+    """`GET /api/v1/douyin/user` 的裁剪版解析——目前只要 `content_count`。
+
+    实测字段路径是 `stats.content_count`（DTK 的 `AuthorStats` 模型），
+    不存在时按 `None` 处理，不当成 0——道理跟 `parse_content` 里 `play_count`
+    的处理一样：缺值和"确实是 0 条"是两件不同的事。
+    """
+    stats = payload.get("stats") or {}
+    return AuthorProfile(content_count=_int_or_none(stats.get("content_count")))
+
+
 # ---------------------------------------------------------------------------
 # 客户端
 # ---------------------------------------------------------------------------
@@ -410,18 +421,44 @@ class DtkClient:
 
     # ------------------------------------------------------------ 业务读
     async def author_posts(
-        self, sec_user_id: str, count: int, *, include_raw: bool = False
+        self,
+        sec_user_id: str,
+        count: int,
+        *,
+        include_raw: bool = False,
+        identity: str | None = None,
     ) -> Page:
-        """★ 主抓手：作者最新一页作品。"""
+        """★ 主抓手：作者最新一页作品。
+
+        `identity` 默认不传——走身份池正常调度。传了就等于`定向`：这次请求只用
+        这一个身份，且**不读不写缓存、只有 1 次传输尝试**（DTK 的语义，不是本客户端
+        加的限制）。需要 Key 带 `identity:manage` scope，且 owner 账号至少 operator——
+        比监控本身用的 `douyin:read`/`archive:read` 高一截，只在隐藏作品核验时才用，
+        见 `HIDDEN_POST_CHECK_ENABLED`。
+        """
         payload, _status, task_id = await self._call(
             "/api/v1/douyin/user/posts",
             {
                 "sec_user_id": sec_user_id,
                 "count": count,
                 "include_raw": "true" if include_raw else None,
+                "identity": identity,
             },
         )
         return parse_page(payload, raw_included=include_raw, task_id=task_id)
+
+    async def author_profile(self, sec_user_id: str) -> AuthorProfile:
+        """作者主页统计（目前只要发布总数）。
+
+        零身份成本的情况居多：DTK 对这个端点有 15 分钟缓存（`cache.author_ttl`），
+        本客户端固定带 `refresh=true`（见 `__init__`），所以每次都是真实请求、
+        每次都消耗身份——这是刻意的，隐藏作品核验要的就是"当下的真实值"，不能被
+        15 分钟前的缓存糊弄过去。
+        """
+        payload, _status, _task = await self._call(
+            "/api/v1/douyin/user", {"sec_user_id": sec_user_id}
+        )
+        return parse_author_profile(payload)
 
     async def content_detail(self, content_id: str) -> Content:
         """One post's detail. Note: `raw.is_top` here is always 0 — never read it."""

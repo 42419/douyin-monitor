@@ -17,7 +17,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Final, Iterable, Iterator, Mapping, Sequence
 
 from .models import (
     AuthorState,
@@ -29,7 +29,7 @@ from .models import (
     Tombstone,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -55,7 +55,10 @@ CREATE TABLE IF NOT EXISTS authors (
   last_seen_at          TEXT,
   runs                  INTEGER NOT NULL DEFAULT 0,
   created_at            TEXT NOT NULL,
-  updated_at            TEXT NOT NULL
+  updated_at            TEXT NOT NULL,
+  baseline_content_count    INTEGER,
+  baseline_content_count_at TEXT,
+  content_count_drift_rounds INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS posts (
@@ -107,6 +110,38 @@ CREATE INDEX IF NOT EXISTS ix_rounds_ts ON rounds (ts);
 """
 
 
+def _migrate_1_to_2(conn: sqlite3.Connection) -> None:
+    """加隐藏作品核验要用的两列。`ADD COLUMN` 缺省值为 NULL == `None`，正合适：
+
+    老账号在这次升级之前从没做过核验，`baseline_content_count` 本来就该是
+    "还没确认过"，而不是 0（0 会被读成"账号发布数是 0"，是另一件事）。
+    """
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(authors)")}
+    if "baseline_content_count" not in existing:
+        conn.execute("ALTER TABLE authors ADD COLUMN baseline_content_count INTEGER")
+    if "baseline_content_count_at" not in existing:
+        conn.execute("ALTER TABLE authors ADD COLUMN baseline_content_count_at TEXT")
+
+
+def _migrate_2_to_3(conn: sqlite3.Connection) -> None:
+    """加"连续几轮解释不了缺口"的计数器。默认 0（跟全新账号的初始值一致，
+    老账号升级过来当然也是"目前没有未解决的缺口"）。
+    """
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(authors)")}
+    if "content_count_drift_rounds" not in existing:
+        conn.execute(
+            "ALTER TABLE authors ADD COLUMN content_count_drift_rounds INTEGER NOT NULL DEFAULT 0"
+        )
+
+
+#: 版本号 -> "从这个版本升到下一个版本"的步骤。新增迁移时按顺序追加，
+#: 键是**升级前**的版本号（比如从 2 升到 3 的步骤，键是 2）。
+_MIGRATIONS: Final[Mapping[int, Callable[[sqlite3.Connection], None]]] = {
+    1: _migrate_1_to_2,
+    2: _migrate_2_to_3,
+}
+
+
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
@@ -151,16 +186,41 @@ class StateStore:
 
     # ---------------------------------------------------------------- 生命周期
     def migrate(self) -> None:
+        """建表 + 版本升级。
+
+        `executescript(SCHEMA)` 对已存在的表是 no-op —— `CREATE TABLE IF NOT EXISTS`
+        不会给一张已经存在的表补列。所以**版本升级只能靠显式的 `ALTER TABLE`**，
+        不能指望重跑一遍 `SCHEMA` 常量就把旧库补齐。
+
+        这是这个项目第一次真的需要一条迁移路径（v1 → v2，加两列存
+        `baseline_content_count` / `_at`，给隐藏作品核验用）。以前只有一个版本，
+        版本不对直接报错就够了；现在开始，`_MIGRATIONS` 按顺序追加，"当前版本"
+        永远是最后一步迁移完成后的版本。
+        """
         with self._tx() as conn:
             conn.executescript(SCHEMA)
             row = conn.execute("SELECT version FROM schema_version").fetchone()
             if row is None:
+                # 全新库：SCHEMA 本身已经是最新形状，不需要跑任何一步迁移
                 conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
-            elif int(row["version"]) != SCHEMA_VERSION:
-                # 只有一个版本，所以这里不做迁移，只把不一致说出来
+                return
+
+            version = int(row["version"])
+            if version > SCHEMA_VERSION:
                 raise RuntimeError(
-                    f"状态库 schema 版本为 {row['version']}，本程序期望 {SCHEMA_VERSION}"
+                    f"状态库 schema 版本为 {version}，比本程序期望的 {SCHEMA_VERSION} 还新——"
+                    "大概率是用了更新的 dywatch 跑过这个库，当前这个版本读不了，请升级 dywatch。"
                 )
+            while version < SCHEMA_VERSION:
+                step = _MIGRATIONS.get(version)
+                if step is None:
+                    raise RuntimeError(
+                        f"状态库 schema 版本为 {version}，没有找到从它升到"
+                        f" {version + 1} 的迁移步骤——这是代码 bug，不是配置问题。"
+                    )
+                step(conn)
+                version += 1
+                conn.execute("UPDATE schema_version SET version = ?", (version,))
 
     def close(self) -> None:
         try:
@@ -277,8 +337,9 @@ class StateStore:
                   last_error, last_error_code, fail_alerted, last_fail_alert_at,
                   all_gone_rounds, empty_rounds, never_seen_alerted, newest_seen_created_at,
                   raw_refresh_round, last_new_video_at, last_update_at, stale_alerted,
-                  last_seen_at, runs, created_at, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  last_seen_at, runs, created_at, updated_at,
+                  baseline_content_count, baseline_content_count_at, content_count_drift_rounds
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(sec_user_id) DO UPDATE SET
                   nickname=excluded.nickname,
                   initialized_at=excluded.initialized_at,
@@ -298,7 +359,10 @@ class StateStore:
                   stale_alerted=excluded.stale_alerted,
                   last_seen_at=excluded.last_seen_at,
                   runs=excluded.runs,
-                  updated_at=excluded.updated_at
+                  updated_at=excluded.updated_at,
+                  baseline_content_count=excluded.baseline_content_count,
+                  baseline_content_count_at=excluded.baseline_content_count_at,
+                  content_count_drift_rounds=excluded.content_count_drift_rounds
                 """,
                 (
                     state.sec_user_id,
@@ -322,6 +386,9 @@ class StateStore:
                     state.runs,
                     _iso(now),
                     _iso(now),
+                    state.baseline_content_count,
+                    _iso(state.baseline_content_count_at),
+                    state.content_count_drift_rounds,
                 ),
             )
 
@@ -463,6 +530,11 @@ def _row_to_state(
         stale_alerted=bool(row["stale_alerted"]),
         last_seen_at=_dt(row["last_seen_at"]),
         runs=int(row["runs"]),
+        baseline_content_count=(
+            int(row["baseline_content_count"]) if row["baseline_content_count"] is not None else None
+        ),
+        baseline_content_count_at=_dt(row["baseline_content_count_at"]),
+        content_count_drift_rounds=int(row["content_count_drift_rounds"] or 0),
         posts=tuple(
             PostState(
                 content_id=p["content_id"],

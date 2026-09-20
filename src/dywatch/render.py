@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, Final, Mapping
 
 from . import messages as msg
-from .models import Content, Event, EventKind, Kind
+from .models import Content, Event, EventKind, Kind, REVIVED_VIA_HIDDEN_CHECK
 
 SEVERITY: Final[Mapping[EventKind, str]] = {
     EventKind.NEW_POST: "info",
@@ -161,10 +161,14 @@ def _build(
         return subject, _join(f"### {subject}", "", *rows, note)
 
     if kind is EventKind.REVIVED:
-        subject = msg.T_REVIVED.format(nickname=safe_name)
+        via_hidden_check = payload.get("source") == REVIVED_VIA_HIDDEN_CHECK
+        subject = (msg.T_REVIVED_HIDDEN if via_hidden_check else msg.T_REVIVED).format(
+            nickname=safe_name
+        )
         rows = [f"**{msg.ROW_TITLE}**：{_title(payload.get('title'))}"]
         rows.extend(_context_rows(payload))
-        return subject, _join(f"### {subject}", "", *rows)
+        note = msg.NOTE_REVIVED_HIDDEN if via_hidden_check else ""
+        return subject, _join(f"### {subject}", "", *rows, note)
 
     if kind is EventKind.TITLE_CHANGED:
         subject = msg.T_TITLE_CHANGED.format(nickname=safe_name)

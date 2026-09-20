@@ -99,6 +99,26 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
         "每轮最多触发几条归档下载。请求会过全局节奏器（3~8 秒一次），所以这个数直接"
         "决定旁路最多把一轮拖长多久；超出预算的条目排队等下一轮，不会丢",
     ),
+    # ---------------------------------------------------------------- 隐藏作品核验
+    SettingSpec(
+        "HIDDEN_POST_CHECK_ENABLED", False, "bool",
+        "游客身份有时看不到作者主页最新发布的作品（抖音的访客限制，与本工具无关）。"
+        "开启后，在作品消失确认 / 长期无更新兜底触发的那一刻，顺手核对一次作者的"
+        "发布总数：数字对不上时，才用一次登录态身份把这一轮的列表重新拉一遍，"
+        "找出被游客视角漏掉的作品。默认关闭，且不逐轮轮询——只在这两类事件触发时才调用。",
+    ),
+    SettingSpec(
+        "PINNED_IDENTITY_ID", "", "str",
+        "登录态身份的 UUID（DTK 控制台 Identities 页面可查），核验时把请求定向到这一个"
+        "身份。HIDDEN_POST_CHECK_ENABLED=true 时必填。需要 Key 带 identity:manage scope，"
+        "且 Key 的 owner 账号至少 operator——比监控本身用的 scope 高一截，建议用",
+    ),
+    SettingSpec(
+        "PIN_DTK_API_KEY", "", "str",
+        "定向核验专用的 Key（留空则复用 DTK_API_KEY）。identity:manage 能解密查看"
+        "任意身份的 cookie 明文，权限比监控本身重得多，建议单独开一把 Key、只给这一处用，"
+        "泄露的影响面才不会牵连到主监控用的只读凭据",
+    ),
     # ---------------------------------------------------------------- 通知
     SettingSpec("NOTIFY_CHANNELS", ["dingtalk"], "csv", "启用的渠道，逗号分隔"),
     SettingSpec("SILENT_MODE", False, "bool", "跳过全部推送，监控与面板照常"),
@@ -281,6 +301,13 @@ class Settings:
             errors.append("BARK_SERVER 必须以 http:// 或 https:// 开头")
         if v["WEBHOOK_URL"] and not v["WEBHOOK_URL"].startswith(("http://", "https://")):
             errors.append("WEBHOOK_URL 必须以 http:// 或 https:// 开头")
+
+        if v["HIDDEN_POST_CHECK_ENABLED"] and not v["PINNED_IDENTITY_ID"]:
+            errors.append(
+                "HIDDEN_POST_CHECK_ENABLED=true 但 PINNED_IDENTITY_ID 未配置 —— "
+                "核验时不知道该定向到哪个身份，去 DTK 控制台 Identities 页面复制一个"
+                "登录态身份的 UUID 填进来"
+            )
 
         return errors
 

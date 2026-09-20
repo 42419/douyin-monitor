@@ -18,10 +18,16 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Final, Mapping
 
-from .models import Event, EventKind
+from .models import Event, EventKind, REVIVED_VIA_HIDDEN_CHECK
 
 MINUTE: Final[int] = 60
 HOUR: Final[int] = 3600
+
+#: 隐藏作品核验找回的 revived，窗口比普通 REVIVED（6 小时/账号）短得多——
+#: 核验本身已经是"主动查证过"的结果，该比游客视角自己抖动更快触达；但如果
+#: 游客隐藏问题本身没解决，同一条作品可能反复"确认删除 -> 核验找回"，这个窗口
+#: 就是兜住这种复读的安全阀，而不是完全不设限（P1，见 DESIGN.md §4.10）。
+HIDDEN_REVIVED_WINDOW_SECONDS: Final[int] = 30 * MINUTE
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +147,13 @@ def should_send(event: Event, dedup: Deduplicator) -> tuple[bool, str]:
     """Whether this event should be delivered now, and the key it claimed."""
     if event.kind in NO_WINDOW_EVENTS:
         return True, ""
+    if event.kind is EventKind.REVIVED and event.payload.get("source") == REVIVED_VIA_HIDDEN_CHECK:
+        # 核验主动查证过的回归，不该套用普通 REVIVED 那套 6 小时/账号的宽窗口
+        # （那是为了兜"游客视角自己抖动"设计的，核验这条不是同一类问题）。但也
+        # 不能完全不设限：如果游客隐藏问题持续存在，"确认删除 -> 核验找回"可能
+        # 反复发生，给一个短得多的窗口压住这种复读。
+        key = f"hidden_revived:{event.sec_user_id}"
+        return dedup.allow(key, HIDDEN_REVIVED_WINDOW_SECONDS), key
     spec = TRIGGERS.get(event.kind)
     if spec is None:
         return True, ""

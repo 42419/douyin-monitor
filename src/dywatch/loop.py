@@ -25,7 +25,7 @@ from .alerts import Deduplicator
 from .messages import freq_hint, frequency_stats, hours_since, newest_post_at
 from .models import AuthorState, DiffConfig, RoundResult
 from .pacer import RequestPacer, RoundWaiter
-from .pipeline import ArchiveTrigger, run_author
+from .pipeline import ArchiveTrigger, HiddenCheckConfig, run_author
 from .scheduler import GlobalGate
 from .settings import Settings
 from .state import StateStore
@@ -48,6 +48,7 @@ class MonitorLoop:
         dedup: Deduplicator,
         logger: Any,
         archive_trigger: ArchiveTrigger | None = None,
+        hidden_check: HiddenCheckConfig | None = None,
         stop: asyncio.Event | None = None,
     ) -> None:
         self.settings = settings
@@ -60,6 +61,8 @@ class MonitorLoop:
         self.dedup = dedup
         #: 归档下载旁路（`ARCHIVE_DOWNLOAD_ENABLED=false` 时为 None，主链路一行都不碰它）
         self.archive_trigger = archive_trigger
+        #: 隐藏作品核验（`HIDDEN_POST_CHECK_ENABLED=false` 时为 None，同上）
+        self.hidden_check = hidden_check
         self.log = logger
         self.stop = stop or asyncio.Event()
         self.cfg = DiffConfig.from_settings(settings)
@@ -193,6 +196,7 @@ class MonitorLoop:
                 now=now,
                 archive_enabled=bool(self.settings["ARCHIVE_ENABLED"]),
                 archive_trigger=self.archive_trigger,
+                hidden_check=self.hidden_check,
                 logger=self.log,
             )
 
