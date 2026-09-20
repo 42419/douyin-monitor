@@ -279,6 +279,133 @@ def test_all_gone_resets_when_a_post_comes_back():
     assert state.post("1") is not None
 
 
+# ------------------------------------------------------- 对访客不可见（核验标记）
+
+
+def test_marked_post_absent_from_the_page_is_silent_and_keeps_its_marker():
+    """带 `hidden_from_guest_at` 的作品缺席访客列表是**预期内的**，不是可疑信号。
+
+    这是那次死循环的直接根因：访客列表里"真的被删了"和"只是访客看不到"长得一模一样，
+    所以只能靠核验时留下的这个标记区分。标记一旦失效，每一轮都会把它确认成"已消失"、
+    紧接着又被核验从登录视角填回来，两个视角来回横跳。
+    """
+    prev = AuthorState(
+        sec_user_id="u1",
+        nickname="A",
+        ever_had_posts=True,
+        posts=(
+            PostState(content_id="visible", title="标题visible", created_at=T0 - timedelta(days=1)),
+            PostState(
+                content_id="hidden",
+                title="标题hidden",
+                created_at=T0 - timedelta(hours=2),
+                hidden_from_guest_at=T0 - timedelta(hours=1),
+            ),
+        ),
+    )
+
+    # 连跑 4 轮（远超 delete_rounds=2），缺席次数一次都不该涨
+    state = prev
+    for round_no in range(1, 5):
+        events, state = diff(state, page=page(post("visible", minutes_ago=1440)), now=at(round_no), cfg=CFG)
+        assert kinds(events) == [], f"第 {round_no} 轮不该有任何事件"
+        entry = state.post("hidden")
+        assert entry is not None, "标记的作品要留在已知作品里，不能进墓碑"
+        assert entry.absent_rounds == 0, "不该累计缺席"
+        assert entry.hidden_from_guest_at is not None, "标记要一直留着"
+    assert state.tombstones == (), "不该为它写墓碑"
+
+
+def test_marked_post_does_not_consume_the_scroll_out_budget():
+    """缺席预算（被新作品挤出窗口）也不该算到带标记的作品头上。
+
+    预算只对"这个窗口真的装不下"有意义；一条访客从来就看不到的作品并不占窗口位置。
+    算进去的话，被挤出窗口的额度会被它白吃一份，把**真正**被挤出去的那条留成"可疑"。
+    """
+    prev = AuthorState(
+        sec_user_id="u1",
+        nickname="A",
+        ever_had_posts=True,
+        posts=(
+            PostState(content_id="old", title="标题old", created_at=T0 - timedelta(days=10)),
+            PostState(
+                content_id="hidden",
+                title="标题hidden",
+                created_at=T0 - timedelta(days=9),
+                hidden_from_guest_at=T0 - timedelta(hours=1),
+            ),
+        ),
+    )
+
+    # 本页只回了 1 条新作品 → 预算 1，够吸收 old 这一条
+    events, state = diff(prev, page=page(post("brand_new")), now=at(1), cfg=CFG)
+
+    assert EventKind.NEW_POST in kinds(events)
+    assert EventKind.POST_REMOVED not in kinds(events), "预算够，没有人该被确认删除"
+    assert EventKind.ALL_GONE not in kinds(events)
+    assert state.post("hidden") is not None and state.post("hidden").hidden_from_guest_at is not None
+    assert {t.content_id for t in state.tombstones} == {"old"}, "预算只吸收了 old"
+
+
+def test_reappearing_marked_post_clears_the_marker_silently():
+    """它又出现在访客列表里 ⇒"对访客不可见"这个前提不成立了，静默清标记。
+
+    刻意不发事件：我们**从来没有报过它消失**，所以也没有"回归"可报——发「作品回归」
+    会暗示它曾经消失过，而事实是访客视角从头到尾没看到过它。
+    """
+    prev = AuthorState(
+        sec_user_id="u1",
+        nickname="A",
+        ever_had_posts=True,
+        posts=(
+            PostState(
+                content_id="hidden",
+                title="标题hidden",
+                created_at=T0 - timedelta(hours=2),
+                hidden_from_guest_at=T0 - timedelta(hours=1),
+            ),
+        ),
+    )
+
+    events, state = diff(prev, page=page(post("hidden", minutes_ago=120)), now=at(1), cfg=CFG)
+
+    assert kinds(events) == [], "清标记是静默的，不发 REVIVED / NEW_POST"
+    assert state.post("hidden").hidden_from_guest_at is None
+
+
+def test_all_posts_marked_and_empty_page_is_not_all_gone():
+    """已知作品**全部**带标记时，访客列表为空是常态，不是"作者把作品删光了"。
+
+    不这么判的话，那个账号每轮都会满足"posts 非空 + 列表为空"，`all_gone_rounds`
+    会一直往上涨——而它是"全体消失要等 N 轮"那个计时器，被推高之后会让后来真正
+    进入确认流程的作品**绕过等待**，也就是把删除报早。
+    """
+    prev = AuthorState(
+        sec_user_id="u1",
+        nickname="A",
+        ever_had_posts=True,
+        all_gone_rounds=7,  # 假设之前被推高过，这一轮应该被压回 0
+        posts=(
+            PostState(
+                content_id="h1", title="t1", created_at=T0 - timedelta(days=1),
+                hidden_from_guest_at=T0 - timedelta(hours=1),
+            ),
+            PostState(
+                content_id="h2", title="t2", created_at=T0 - timedelta(days=2),
+                hidden_from_guest_at=T0 - timedelta(hours=1),
+            ),
+        ),
+    )
+
+    state = prev
+    for round_no in range(1, 5):
+        events, state = diff(state, page=page(), now=at(round_no), cfg=CFG)
+        assert kinds(events) == [], f"第 {round_no} 轮不该有任何事件（尤其不该有 ALL_GONE）"
+        assert state.all_gone_rounds == 0
+        assert state.ever_had_posts is True
+    assert state.tombstones == ()
+
+
 # ---------------------------------------------------------------- never_seen
 
 

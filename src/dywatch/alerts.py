@@ -18,16 +18,10 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Final, Mapping
 
-from .models import Event, EventKind, REVIVED_VIA_HIDDEN_CHECK
+from .models import Event, EventKind
 
 MINUTE: Final[int] = 60
 HOUR: Final[int] = 3600
-
-#: 隐藏作品核验找回的 revived，窗口比普通 REVIVED（6 小时/账号）短得多——
-#: 核验本身已经是"主动查证过"的结果，该比游客视角自己抖动更快触达；但如果
-#: 游客隐藏问题本身没解决，同一条作品可能反复"确认删除 -> 核验找回"，这个窗口
-#: 就是兜住这种复读的安全阀，而不是完全不设限（P1，见 DESIGN.md §4.10）。
-HIDDEN_REVIVED_WINDOW_SECONDS: Final[int] = 30 * MINUTE
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +48,10 @@ TRIGGERS: Final[Mapping[EventKind, TriggerSpec]] = {
     EventKind.TITLE_CHANGED: TriggerSpec("info", HOUR, "author"),
     # 回归本身罕见，但窗口挪动可以让同一条作品反复"出去又回来"，给个宽窗口兜住这种抖动
     EventKind.REVIVED: TriggerSpec("info", 6 * HOUR, "author"),
+    # 核验发现"作品对访客不可见"：同一账号连着好几条被藏是可能的，按账号给个宽窗口，
+    # 一批合成一条；同一条作品只会被标记一次（标记落库后就再也不核验它了），
+    # 所以这个窗口不会压掉"又一条新作品被藏"的提醒。
+    EventKind.HIDDEN_FROM_GUEST: TriggerSpec("info", 6 * HOUR, "author"),
 }
 
 #: 作品级事件没有窗口——它们只发生一次，抑制它们等于丢通知
@@ -72,6 +70,9 @@ NO_WINDOW_EVENTS: Final[frozenset[EventKind]] = frozenset(
 #: 而且它们的"过期成本"远低于漏掉一条作品的成本。
 NOTIFY_PRIORITY: Final[tuple[EventKind, ...]] = (
     EventKind.NEW_POST,
+    # 与 new_post 同理：它只在核验那一刻被发现一次，错过就补不回来。而且它同时
+    # 承载"作者发了新东西"这层信息（只是访客看不到），排在作品类里最靠前的位置
+    EventKind.HIDDEN_FROM_GUEST,
     EventKind.ALL_GONE,
     EventKind.POST_REMOVED,
     EventKind.REVIVED,
@@ -147,13 +148,6 @@ def should_send(event: Event, dedup: Deduplicator) -> tuple[bool, str]:
     """Whether this event should be delivered now, and the key it claimed."""
     if event.kind in NO_WINDOW_EVENTS:
         return True, ""
-    if event.kind is EventKind.REVIVED and event.payload.get("source") == REVIVED_VIA_HIDDEN_CHECK:
-        # 核验主动查证过的回归，不该套用普通 REVIVED 那套 6 小时/账号的宽窗口
-        # （那是为了兜"游客视角自己抖动"设计的，核验这条不是同一类问题）。但也
-        # 不能完全不设限：如果游客隐藏问题持续存在，"确认删除 -> 核验找回"可能
-        # 反复发生，给一个短得多的窗口压住这种复读。
-        key = f"hidden_revived:{event.sec_user_id}"
-        return dedup.allow(key, HIDDEN_REVIVED_WINDOW_SECONDS), key
     spec = TRIGGERS.get(event.kind)
     if spec is None:
         return True, ""

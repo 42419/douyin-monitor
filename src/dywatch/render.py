@@ -16,10 +16,12 @@ from datetime import datetime
 from typing import Any, Final, Mapping
 
 from . import messages as msg
-from .models import Content, Event, EventKind, Kind, REVIVED_VIA_HIDDEN_CHECK
+from .models import Content, Event, EventKind, Kind
 
 SEVERITY: Final[Mapping[EventKind, str]] = {
     EventKind.NEW_POST: "info",
+    # 不是故障，是曝光被平台限制住了——比 info 稍需注意，但远不到 warning
+    EventKind.HIDDEN_FROM_GUEST: "info",
     EventKind.POST_REMOVED: "warning",
     EventKind.ALL_GONE: "error",
     EventKind.GAP_DETECTED: "warning",
@@ -161,14 +163,22 @@ def _build(
         return subject, _join(f"### {subject}", "", *rows, note)
 
     if kind is EventKind.REVIVED:
-        via_hidden_check = payload.get("source") == REVIVED_VIA_HIDDEN_CHECK
-        subject = (msg.T_REVIVED_HIDDEN if via_hidden_check else msg.T_REVIVED).format(
-            nickname=safe_name
-        )
+        subject = msg.T_REVIVED.format(nickname=safe_name)
         rows = [f"**{msg.ROW_TITLE}**：{_title(payload.get('title'))}"]
         rows.extend(_context_rows(payload))
-        note = msg.NOTE_REVIVED_HIDDEN if via_hidden_check else ""
-        return subject, _join(f"### {subject}", "", *rows, note)
+        return subject, _join(f"### {subject}", "", *rows)
+
+    if kind is EventKind.HIDDEN_FROM_GUEST:
+        # 同一轮可能有多条：和 POST_REMOVED 一样按列表渲染，只认字典条目
+        hidden = [item for item in _as_list(payload.get("hidden")) if isinstance(item, Mapping)]
+        subject = msg.T_HIDDEN_FROM_GUEST.format(nickname=safe_name, count=len(hidden))
+        rows = []
+        for item in hidden[:10]:
+            when = msg.fmt_time(_parse(item.get("created_at")))
+            rows.append(f"- {msg.md_escape(str(item.get('title') or '(无标题)'))} · {when}")
+        if len(hidden) > 10:
+            rows.append(f"- …另有 {len(hidden) - 10} 条")
+        return subject, _join(f"### {subject}", "", *rows, msg.NOTE_HIDDEN_FROM_GUEST)
 
     if kind is EventKind.TITLE_CHANGED:
         subject = msg.T_TITLE_CHANGED.format(nickname=safe_name)

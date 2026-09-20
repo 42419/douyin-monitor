@@ -483,7 +483,51 @@ def test_user_detail_counts_all_tombstones_beyond_the_listing_limit(tmp_path):
     assert len(detail["removed"]) == 20
 
 
+def test_user_detail_hidden_count_matches_the_per_post_badges(tmp_path):
+    """「对访客不可见」的读数必须与逐条徽章**同源**。
+
+    踩过的坑：统计格从 `_post_state()`（行→模型的转换层）取数、徽章读原始行，而转换层
+    漏映射了 `hidden_from_guest_at` → 统计恒为 0、徽章却显示"对访客不可见"，同一个
+    弹窗里自相矛盾。这条测试把两个读数钉在一起，掉字段就会红。
+    """
+    settings = make_settings(tmp_path)
+    store = StateStore(settings.db_path)
+    store.migrate()
+    store.ensure_author(ID_OK, "示例账号", NOW)
+    store.save_round(
+        ID_OK,
+        AuthorState(
+            sec_user_id=ID_OK,
+            nickname="示例账号",
+            ever_had_posts=True,
+            initialized_at=NOW - timedelta(days=30),
+            last_update_at=NOW - timedelta(minutes=1),
+            posts=(
+                PostState(content_id="visible", title="看得见的",
+                          created_at=NOW - timedelta(days=2)),
+                PostState(content_id="hidden", title="看不见的",
+                          created_at=NOW - timedelta(days=1),
+                          hidden_from_guest_at=NOW - timedelta(hours=1)),
+            ),
+        ),
+        [],
+        now=NOW,
+    )
+    store.close()
+
+    detail = user_detail(settings, ID_OK)
+    badges = [post for post in detail["posts"] if post["hidden"]]
+
+    assert len(badges) == 1
+    assert detail["hidden_posts"] == len(badges), "统计格和徽章必须是同一个数"
+    assert badges[0]["title"] == "看不见的"
+    assert badges[0]["hidden_since"], "徽章上要能看出它是从什么时候起看不见的"
+    assert detail["known_posts"] == 2, "被隐藏的作品仍在已知作品里（它没消失）"
+    assert detail["tombstones"] == 0, "它不该出现在「已消失」里"
+
+
 # --------------------------------------------------------------------- HTTP
+
 
 def test_routes(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)

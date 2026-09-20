@@ -16,7 +16,7 @@ from .models import Content, EventKind, Kind, PostState
 T_NEW_POST = "【新作品】{nickname} 发布了新{kind_label}"
 T_POST_REMOVED = "【作品消失】{nickname} 有 {count} 条作品已确认消失"
 T_REVIVED = "【作品回归】{nickname} 之前消失的作品又出现了"
-T_REVIVED_HIDDEN = "【疑似隐藏】{nickname} 一条此前判定已删除的作品，核验后发现其实还在"
+T_HIDDEN_FROM_GUEST = "【对访客不可见】{nickname} 有 {count} 条作品未登录看不到"
 T_TITLE_CHANGED = "【标题变更】{nickname} 的作品换了标题"
 T_ALL_GONE = "【作品全部消失】{nickname} 的全部作品同时不见了"
 T_GAP = "【可能漏检】{nickname} 的更新节奏超过单页窗口"
@@ -51,9 +51,11 @@ NOTE_ALL_GONE = (
     "\n> 注意：该账号的全部作品在同一时间段内消失。如果账号实际仍有作品，"
     "可能是上游返回了空列表（接口异常/风控）或作者把作品设为私密，请核实后再处理。"
 )
-NOTE_REVIVED_HIDDEN = (
-    "\n> 此前把这条作品判定为「已消失」，核验后发现它其实一直都在——大概率是游客身份"
-    "一直没能看到它导致的误判（抖音对访客身份的主页展示有限制），不代表作者真的删除过它。"
+NOTE_HIDDEN_FROM_GUEST = (
+    "\n> 核验（用登录态身份对照一次）确认：这些作品在登录视角里存在，但**未登录访客**"
+    "访问该主页时看不到它们。这是抖音对访客身份的展示限制，不是接口出错、也不代表作品"
+    "被删除。已记为「对访客不可见」，之后不再按访客视角判定它们的消失；它们重新对访客"
+    "可见时标记会自动清掉。"
 )
 NOTE_NEVER_SEEN = (
     "\n> 该账号从未返回过任何作品。最常见的原因是 **sec_user_id 写错了**"
@@ -256,6 +258,7 @@ def freq_hint(stats: tuple[str, float, int] | None) -> str:
 # --- 事件与消失原因（面板与事后审计读同一份文案） -----------------------------
 EVENT_LABELS: dict[EventKind, str] = {
     EventKind.NEW_POST: "新作品",
+    EventKind.HIDDEN_FROM_GUEST: "对访客不可见",
     EventKind.POST_REMOVED: "作品消失",
     EventKind.REVIVED: "作品回归",
     EventKind.TITLE_CHANGED: "标题变更",

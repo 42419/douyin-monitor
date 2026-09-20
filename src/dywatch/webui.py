@@ -373,6 +373,7 @@ _PAGE = Template(r"""<!DOCTYPE html>
   .video-list .vtop { flex: 0 0 auto; font-size: 11px; color: var(--amber); font-weight: 600; }
   .video-list .vkind { flex: 0 0 auto; font-size: 11px; color: var(--text3); }
   .video-list .vabsent { flex: 0 0 auto; font-size: 11px; color: var(--red); font-weight: 600; }
+  .video-list .vhidden { flex: 0 0 auto; font-size: 11px; color: var(--amber); font-weight: 600; }
   .detail-empty { color: var(--text3); text-align: center; padding: 24px; }
 
   /* 窄桌面（窗口拖到 560~760px）：固定三列，免得 auto-fit 把最后一格挤成孤行。
@@ -516,6 +517,7 @@ function renderDetail(d) {
   h += di('状态', d.status_text);
   h += di('已知作品', d.known_posts + ' 条');
   h += di('已消失', d.tombstones + ' 条');
+  h += di('对访客不可见', (d.hidden_posts || 0) + ' 条', d.hidden_posts ? '登录可见、未登录看不到' : '');
   h += di('连续失败', d.consecutive_fails + ' 次');
   h += di('最新作品发布', d.newest_post_at || '还没有作品');
   h += di('距最新作品', d.newest_post_ago);
@@ -535,6 +537,8 @@ function renderDetail(d) {
       h += '<span class="vtitle">' + esc(v.title) + '</span>';
       if (v.is_top) h += '<span class="vtop">置顶</span>';
       if (v.absent_rounds > 0) h += '<span class="vabsent">缺席 ' + v.absent_rounds + ' 轮</span>';
+      if (v.hidden) h += '<span class="vhidden" title="' + esc(v.hidden_since)
+        + ' 起对访客不可见（登录视角一直看得到）">对访客不可见</span>';
       h += '<span class="vkind">' + esc(v.kind) + '</span>';
       h += '<span class="vdate">' + esc(v.date) + '</span>';
       h += '</li>';
@@ -966,6 +970,23 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
 
     freq = frequency_stats(post_states)
 
+    # 作品列表先建好，再让「对访客不可见」那格从**同一份数据**里数——两个读数各算一遍
+    # 是错过的（`_post_state` 掉了列 → 统计恒 0、徽章却是对的，同一页自相矛盾）
+    post_list = [
+        {
+            "content_id": post["content_id"],
+            "title": post["title"] or "(无标题)",
+            "kind": kind_label(Kind.parse(post["kind"])),
+            "is_top": bool(post["is_top"]),
+            "date": fmt_time(_parse_dt(post["created_at"])),
+            "first_seen": fmt_time(_parse_dt(post["first_seen_at"])),
+            "absent_rounds": int(post["absent_rounds"] or 0),
+            "hidden": bool(post["hidden_from_guest_at"]),
+            "hidden_since": fmt_time(_parse_dt(post["hidden_from_guest_at"])),
+        }
+        for post in posts
+    ]
+
     return {
         "sec_user_id": sec_user_id,
         "nickname": row["nickname"],
@@ -973,6 +994,9 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
         "status_color": color,
         "known_posts": len(posts),
         "tombstones": removed_total,
+        # 核验确认过"登录可见、未登录看不到"的那些（它们仍在 known_posts 里——
+        # 作品没消失，只是访客视角看不到，这也是不在"已消失"里计数的原因）
+        "hidden_posts": sum(1 for p in post_list if p["hidden"]),
         "consecutive_fails": row["consecutive_fails"],
         "newest_post_ago": _format_post_age(hours),
         "newest_post_at": fmt_time(newest),
@@ -983,18 +1007,7 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
         "runs": int(author["runs"] or 0),
         "last_error": author["last_error"],
         "last_error_code": author["last_error_code"],
-        "posts": [
-            {
-                "content_id": post["content_id"],
-                "title": post["title"] or "(无标题)",
-                "kind": kind_label(Kind.parse(post["kind"])),
-                "is_top": bool(post["is_top"]),
-                "date": fmt_time(_parse_dt(post["created_at"])),
-                "first_seen": fmt_time(_parse_dt(post["first_seen_at"])),
-                "absent_rounds": int(post["absent_rounds"] or 0),
-            }
-            for post in posts
-        ],
+        "posts": post_list,
         "removed": [
             {
                 "content_id": row_["content_id"],
@@ -1015,6 +1028,14 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
 
 
 def _post_state(post: sqlite3.Row) -> PostState:
+    """行 → 模型，**只映射下面几处读数要用的列**（最新作品时间、更新频率）。
+
+    刻意不是"把每一列都搬过来"：逐条作品的展示字段（尤其是 `hidden_from_guest_at`
+    这种标志位）在 `user_detail` 里直接从原始行建列表，不走这里。曾经因为有人拿这个
+    局部视图去数"对访客不可见"的作品，掉了一个列 → 统计恒为 0、而同一页的徽章仍然
+    是对的（徽章读原始行），一个弹窗里两个互相矛盾的说法。要数逐条作品的属性，
+    数 `post_list` 那份，别数这里。
+    """
     return PostState(
         content_id=post["content_id"],
         kind=Kind.parse(post["kind"]),

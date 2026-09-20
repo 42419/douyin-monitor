@@ -181,6 +181,10 @@ def diff(
         item = current[content_id]
         entry = posts[content_id]
         changes: dict[str, Any] = {"last_seen_at": now, "absent_rounds": 0}
+        if entry.hidden_from_guest_at is not None:
+            # 又能在访客列表里看到了 → 那个"已知不可见"的前提不成立了，清掉标记。
+            # 刻意不发事件：我们**从来没有报过它消失**，所以也没有"回归"可报。
+            changes["hidden_from_guest_at"] = None
         if item.title != entry.title:
             title_changed += 1
             changes["title"] = item.title
@@ -217,7 +221,13 @@ def diff(
             last_seen_at=now,
         )
 
-    all_gone = bool(prev.posts) and not current_ids
+    # "全部作品都不见了"只对**访客本来能看到**的作品才有意义：如果已知作品全部带
+    # `hidden_from_guest_at` 标记，访客列表为空是预期内的常态，不是"删光"。不这么判的话，
+    # 那个账号每一轮都会满足这个条件，`all_gone_rounds` 会一直往上涨（虽然此刻没有可确认
+    # 的条目、发不出事件，但等真有作品进入确认流程时，它会绕过"全体消失等 N 轮"的等待）。
+    all_gone = bool(prev.posts) and not current_ids and (
+        any(p.hidden_from_guest_at is None for p in prev.posts)
+    )
     all_gone_rounds = prev.all_gone_rounds + 1 if all_gone else 0
 
     # ---- 删除判定（挤出预算 + 分级确认） ----------------------------------
@@ -233,6 +243,12 @@ def diff(
     for content_id in ordered:
         entry = posts.get(content_id)
         if entry is None:  # pragma: no cover - 防御：状态不一致时跳过
+            continue
+        if entry.hidden_from_guest_at is not None:
+            # 核验确认过"这条对访客不可见"：它**缺席访客列表是预期内的**，不是可疑信号。
+            # 既不计缺席、也不算被挤出窗口、更不判消失——否则每轮都会把它确认成
+            # "已消失"，紧接着又被核验从登录视角填回来，两个视角来回横跳（曾经的真实故障）。
+            # 它重新出现在本页时标记会被清掉，见上面的标题同步段。
             continue
         is_top = entry.is_top
 

@@ -1,17 +1,18 @@
-"""隐藏作品核验（`HIDDEN_POST_CHECK_ENABLED`）：见 DESIGN.md「隐藏作品核验」一节。
+"""隐藏作品核验（`HIDDEN_POST_CHECK_ENABLED`）：见 DESIGN.md §4.10。
 
 这个文件锁的是几条关键不变量：
 
-1. **不是逐轮轮询** —— 只在账号初始化 / 有作品被确认消失 / 长期无更新兜底触发
-   这三种情况下才会调用 `/api/v1/douyin/user`，其余轮次（哪怕有新作品）不产生
-   任何额外请求
-2. **数字对得上就不定向核验** —— `content_count` 的变化如果能用"这轮的新增/删除"
-   完全解释，就不会去消耗登录身份的预算
-3. **数字对不上才定向核验，且核验结果正确分类** —— 从没见过的 id 归 `new_post`，
-   tombstone 里的 id 归 `revived`（并打上 `source=hidden_check`）
-4. **`revived`（核验来源）绕开 6 小时抑制窗口**，跟 `new_post` 一样立刻发
-5. **核验层的失败不影响主判定** —— `author_profile` / 定向请求任何一个失败，
-   这一轮已经算好的结果原样返回，不抛异常
+1. **不是逐轮轮询** —— 只在账号初始化 / 本轮有新作品 / 有作品被确认消失 / 长期无更新
+   兜底触发这四种情况下才会调用 `/api/v1/douyin/user`
+2. **数字对得上就不定向核验** —— 差量能被"这轮的新增/删除"完全解释，就不消耗登录身份
+3. **对不上才定向核验，且按方向分流**：
+   - 总数比预期**多** ⇒ 有本地完全不知道的作品：它是**对访客不可见**的，
+     标记 `hidden_from_guest` 并发 `HIDDEN_FROM_GUEST`（不是 new_post / revived）
+   - 总数比预期**少** ⇒ 有作品真没了：用登录视角确认哪些不在了，报 `POST_REMOVED`
+4. **那个标记会阻止 `diff` 把它的缺席当成可疑信号** —— 这是停住"访客说没了、登录说还在"
+   死循环的关键（上线后真实发生过：同一条作品每 1~3 分钟"消失 → 核验 → 回来"）
+5. **核验层的失败不影响主判定** —— `author_profile` / 定向请求任何一个失败，这一轮已经
+   算好的结果原样返回，不抛异常
 6. **两个额外请求都过节奏器**，不会绕开限速突然发出去
 """
 
@@ -33,7 +34,6 @@ from dywatch.models import (
     EventKind,
     Page,
     PostState,
-    REVIVED_VIA_HIDDEN_CHECK,
     Tombstone,
 )
 from dywatch.pipeline import HiddenCheckConfig, run_author
@@ -140,6 +140,10 @@ def make_content(content_id: str, *, created_at: datetime | None = None, title: 
     )
 
 
+def _hidden_check(pin: PinClient) -> HiddenCheckConfig:
+    return HiddenCheckConfig(pinned_identity="identity-abc", pin_client=pin)
+
+
 async def _run(
     *,
     tmp_path: Any,
@@ -148,8 +152,10 @@ async def _run(
     hidden_check: HiddenCheckConfig | None,
     now: datetime | None = None,
     cfg: DiffConfig | None = None,
+    store: StateStore | None = None,
 ) -> tuple[Any, StateStore, Notifier, Pacer]:
-    store = StateStore(tmp_path / "db.sqlite")
+    """跑一轮。`store` 可以传进来复用，用于"连续几轮"的用例。"""
+    store = store or StateStore(tmp_path / "db.sqlite")
     store.migrate()
     store.ensure_author(author.sec_user_id, author.nickname, now or datetime.now(timezone.utc))
     notifier = Notifier()
@@ -180,60 +186,13 @@ def test_parse_author_profile_reads_content_count():
 
 
 def test_parse_author_profile_missing_field_is_none_not_zero():
-    """缺值和"确实是 0 条"是两件不同的事，不能悄悄当成 0。"""
-    assert parse_author_profile({"stats": {}}).content_count is None
+    """缺值和"确实是 0 条"是两件事：缺值必须是 None，不能当 0 参与比对。"""
     assert parse_author_profile({}).content_count is None
+    assert parse_author_profile({"stats": {}}).content_count is None
+    assert parse_author_profile({"stats": {"content_count": 0}}).content_count == 0
 
 
-# --------------------------------------------------------------------- 触发范围
-async def test_plain_round_with_only_new_posts_refreshes_baseline_but_does_not_verify(tmp_path):
-    """纯新作品的一轮：游客视角已经看到了，不需要定向核验，但要把 content_count
-    的基准值跟着刷新（P0-2 修复：不然跨轮之间的新增会在下次触发时被漏算，
-    导致 expected 公式失真）。"""
-    now = datetime.now(timezone.utc)
-    author = AuthorState(
-        sec_user_id="u1", nickname="示例", ever_had_posts=True, runs=5,
-        initialized_at=now - timedelta(days=10),
-        baseline_content_count=3, baseline_content_count_at=now - timedelta(hours=1),
-        posts=(PostState(content_id="old1", created_at=now - timedelta(days=1)),),
-    )
-    client = Client(posts_items=(
-        make_content("new1", created_at=now),
-        make_content("old1", created_at=now - timedelta(days=1)),
-    ), content_count=4)  # 3（基准） + 1（这条新作品）= 4，跟预期对得上
-    pin = PinClient()
-    hidden_check = HiddenCheckConfig(pinned_identity="identity-abc", pin_client=pin)
-
-    result, store, _notifier, _pacer = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=hidden_check, now=now
-    )
-
-    assert result.new_count == 1
-    assert client.profile_calls == 1, "纯新作品轮也要刷新基准值"
-    assert pin.calls == [], "对得上，不该触发定向核验"
-    assert store.load_authors()["u1"].baseline_content_count == 4
-
-
-async def test_initialization_round_establishes_baseline_without_verifying(tmp_path):
-    now = datetime.now(timezone.utc)
-    author = AuthorState(sec_user_id="u1", nickname="示例")  # 全新账号，ever_had_posts=False
-    client = Client(
-        posts_items=(make_content("p1", created_at=now), make_content("p2", created_at=now)),
-        content_count=2,
-    )
-    pin = PinClient()
-    hidden_check = HiddenCheckConfig(pinned_identity="identity-abc", pin_client=pin)
-
-    result, store, _notifier, _pacer = await _run(tmp_path=tmp_path, author=author, client=client, hidden_check=hidden_check, now=now)
-
-    assert result.status == "init"
-    assert client.profile_calls == 1
-    assert pin.calls == [], "第一次记录不该有基准可比，不触发定向核验"
-    state = store.load_authors()["u1"]
-    assert state.baseline_content_count == 2
-
-
-# --------------------------------------------------------------------- 消失确认时的比对
+# --------------------------------------------------------------------- 构造
 def _author_with_one_post_about_to_be_confirmed_removed(now: datetime) -> AuthorState:
     """构造一个"这一轮再缺席一次就确认删除"的账号——`absent_rounds` 差一轮到阈值。
 
@@ -263,362 +222,542 @@ def _staying_post(now: datetime) -> Content:
     return make_content("staying", created_at=now - timedelta(days=2))
 
 
-async def test_numbers_match_after_deletion_does_not_trigger_verification(tmp_path):
-    """基准值 5，这轮确认删了 1 条，预期变成 4；DTK 也说是 4——对得上，不用核验。"""
-    now = datetime.now(timezone.utc)
-    author = _author_with_one_post_about_to_be_confirmed_removed(now)
-    client = Client(posts_items=(_staying_post(now),), content_count=4)  # gone1 缺席 -> 确认删除
-    pin = PinClient()
-    hidden_check = HiddenCheckConfig(pinned_identity="identity-abc", pin_client=pin)
-
-    result, store, _notifier, _pacer = await _run(tmp_path=tmp_path, author=author, client=client, hidden_check=hidden_check, now=now)
-
-    assert result.deleted_count == 1
-    assert client.profile_calls == 1
-    assert pin.calls == [], "数字对得上，不该消耗登录身份的预算"
-    assert store.load_authors()["u1"].baseline_content_count == 4
-
-
-async def test_mismatch_triggers_verification_and_finds_the_hidden_post(tmp_path):
-    """预期是 4（5 - 1），DTK 却说 5——多出来的 1 条只能是核验才能找到的隐藏作品。"""
-    now = datetime.now(timezone.utc)
-    author = _author_with_one_post_about_to_be_confirmed_removed(now)
-    client = Client(posts_items=(_staying_post(now),), content_count=5)  # 对不上：预期 4，实际 5
-    hidden = make_content("hidden1", created_at=now, title="被隐藏的新作品")
-    pin = PinClient(posts_items=(hidden,))
-    hidden_check = HiddenCheckConfig(pinned_identity="identity-abc", pin_client=pin)
-
-    result, store, notifier, pacer = await _run(
-        tmp_path=tmp_path,
-        author=author, client=client, hidden_check=hidden_check, now=now
-    )
-
-    assert pin.calls == ["identity-abc"], "数字对不上才应该定向核验"
-    assert any(e.kind is EventKind.NEW_POST and e.content_id == "hidden1" for e in result.events)
-    # 找到的这条新作品要正常推送出去，不能被核验这条特殊路径漏掉
-    assert len(notifier.sent) >= 1
-    state = store.load_authors()["u1"]
-    assert state.baseline_content_count == 5
-    assert any(p.content_id == "hidden1" for p in state.posts)
-    # 主判定的 pacer 调用（抓列表一次）之外，核验层至少还应该再占两次（查总数 + 定向核验）
-    assert pacer.calls >= 3
-
-
-async def test_reappeared_tombstoned_post_is_tagged_revived_not_new_post(tmp_path):
-    """核验翻出来的 id 如果曾经被判定删除过（在 tombstone 里），该归 revived，不是 new_post。"""
-    now = datetime.now(timezone.utc)
-    author = _author_with_one_post_about_to_be_confirmed_removed(now)
-    author = author.with_updates(
-        tombstones=(Tombstone(content_id="tomb1", removed_at=now - timedelta(days=1)),)
-    )
-    client = Client(posts_items=(_staying_post(now),), content_count=5)
-    reappeared = make_content("tomb1", created_at=now - timedelta(days=3), title="其实一直都在")
-    pin = PinClient(posts_items=(reappeared,))
-    hidden_check = HiddenCheckConfig(pinned_identity="identity-abc", pin_client=pin)
-
-    result, store, notifier, _pacer = await _run(
-        tmp_path=tmp_path,
-        author=author, client=client, hidden_check=hidden_check, now=now
-    )
-
-    revived = [e for e in result.events if e.kind is EventKind.REVIVED and e.content_id == "tomb1"]
-    assert len(revived) == 1
-    assert revived[0].payload.get("source") == REVIVED_VIA_HIDDEN_CHECK
-    # 这类 revived 不该被 6 小时抑制窗口拦住——should_send 应该直接放行
-    allowed, _key = should_send(revived[0], Deduplicator())
-    assert allowed is True
-    assert len(notifier.sent) >= 1
-    state = store.load_authors()["u1"]
-    assert all(t.content_id != "tomb1" for t in state.tombstones), "回归了就不该再是 tombstone"
-
-
-async def test_mismatch_with_nothing_new_in_verification_page_is_not_an_error(tmp_path):
-    """数字对不上，但定向核验拿到的页面里也没有本地不认识的 id——不当成异常，只是记录一下。"""
-    now = datetime.now(timezone.utc)
-    author = _author_with_one_post_about_to_be_confirmed_removed(now)
-    client = Client(posts_items=(_staying_post(now),), content_count=5)  # 对不上
-    pin = PinClient(posts_items=())  # 核验页面也是空的——可能是别的置顶项被删了
-    hidden_check = HiddenCheckConfig(pinned_identity="identity-abc", pin_client=pin)
-
-    result, store, _notifier, _pacer = await _run(
-        tmp_path=tmp_path,
-        author=author, client=client, hidden_check=hidden_check, now=now
-    )
-
-    assert result.status == "ok"  # 不抛异常，主判定结果原样保留
-    assert store.load_authors()["u1"].baseline_content_count == 5  # 基准值照样刷新成实际值
-
-
-# --------------------------------------------------------------------- 失败容忍
-async def test_profile_fetch_failure_does_not_break_the_round(tmp_path):
-    now = datetime.now(timezone.utc)
-    author = _author_with_one_post_about_to_be_confirmed_removed(now)
-    client = Client(posts_items=(_staying_post(now),), profile_error=MonitorError("DTK_UNREACHABLE", "boom"))
-    pin = PinClient()
-    hidden_check = HiddenCheckConfig(pinned_identity="identity-abc", pin_client=pin)
-
-    result, store, _notifier, _pacer = await _run(
-        tmp_path=tmp_path,
-        author=author, client=client, hidden_check=hidden_check, now=now
-    )
-
-    assert result.status == "ok"
-    assert result.deleted_count == 1, "核验层挂了，主判定（确认删除）不受影响"
-    assert pin.calls == [], "拿不到实际值，无从比较，不该盲目触发定向核验"
-    # 基准值没能刷新（这次没拿到实际值），下次触发时用的还是旧基准
-    assert store.load_authors()["u1"].baseline_content_count == 5
-
-
-async def test_pinned_verification_failure_does_not_break_the_round(tmp_path):
-    """核验请求失败时：主判定结果不受影响，但**基准值不该推进**——这是 P0-3
-    修复的核心行为。用 actual(6) 明显不同于旧基准值(5)，才能真正区分出
-    "推进成了 6"（旧的错误行为）和"保留在 5"（修复后的正确行为），不然两个数字
-    刚好撞在一起，断言测不出差别。
-    """
-    now = datetime.now(timezone.utc)
-    author = _author_with_one_post_about_to_be_confirmed_removed(now)
-    # expected = 5(基准) + 0(新增) - 1(gone1 被确认删除) = 4；actual=6，缺口是 2
-    client = Client(posts_items=(_staying_post(now),), content_count=6)
-    pin = PinClient(error=MonitorError("IDENTITY_POOL_EXHAUSTED", "no identity"))
-    hidden_check = HiddenCheckConfig(pinned_identity="identity-abc", pin_client=pin)
-
-    result, store, _notifier, _pacer = await _run(
-        tmp_path=tmp_path,
-        author=author, client=client, hidden_check=hidden_check, now=now
-    )
-
-    assert result.status == "ok"
-    assert pin.calls == ["identity-abc"]
-    state = store.load_authors()["u1"]
-    # 核验没成功、缺口没被解释，基准值必须保留旧值——不能悄悄推进到 6，
-    # 不然这次没捞回来的差异就永久丢了，下次也不会再比对出同一个缺口
-    assert state.baseline_content_count == 5
-    assert state.content_count_drift_rounds == 1
-
-
-# --------------------------------------------------------------------- 不开启就完全不碰
-async def test_feature_disabled_never_touches_profile_endpoint(tmp_path):
-    now = datetime.now(timezone.utc)
-    author = _author_with_one_post_about_to_be_confirmed_removed(now)
-    client = Client(posts_items=(_staying_post(now),), content_count=999)  # 就算对不上，关着也不该管
-
-    result, _store, _notifier, _pacer = await _run(
-        tmp_path=tmp_path,
-        author=author, client=client, hidden_check=None, now=now
-    )
-
-    assert result.deleted_count == 1
-    assert client.profile_calls == 0
-
-
-# --------------------------------------------------------------------- P0-2：跨轮不失真
-async def test_baseline_stays_accurate_across_a_new_post_round_then_a_removal_round(tmp_path):
-    """P0-2 回归测试：如果"纯新作品轮"不刷新基准值，第二轮算 expected 时会用
-    过时的旧基准值，把一次正常的确认删除误判成"数字对不上"，白白触发一次
-    定向核验。这里手动串两轮，验证不会发生这种误触发。
-    """
-    now = datetime.now(timezone.utc)
-    store = StateStore(tmp_path / "db.sqlite")
-    store.migrate()
-    store.ensure_author("u1", "示例", now)
-    notifier = Notifier()
-    pacer = Pacer()
-    gate = GlobalGate(default_seconds=60, backoff_after=2, backoff_max=600)
-    cfg = DiffConfig()
-
-    # 第一轮：账号本来就有 staying，这轮多发一条 new1，游客视角正常看到 —— 基准值应该
-    # 从 3 刷新成 4
-    author = AuthorState(
+def _author_with_a_hidden_post(now: datetime, *, hidden_since: datetime | None = None) -> AuthorState:
+    """两条已知帖子：一条访客能看到的 `visible1`，一条**已标记为对访客不可见**的 `hidden1`。"""
+    return AuthorState(
         sec_user_id="u1", nickname="示例", ever_had_posts=True, runs=10,
         initialized_at=now - timedelta(days=30),
-        last_update_at=now - timedelta(days=1),
-        last_seen_at=now - timedelta(minutes=10),
-        baseline_content_count=3, baseline_content_count_at=now - timedelta(hours=2),
-        posts=(PostState(content_id="staying", created_at=now - timedelta(days=2)),),
-    )
-    client1 = Client(
-        posts_items=(
-            make_content("staying", created_at=now - timedelta(days=2)),
-            make_content("new1", created_at=now - timedelta(minutes=5)),
+        last_update_at=now - timedelta(minutes=2),
+        last_seen_at=now - timedelta(minutes=1),
+        baseline_content_count=2, baseline_content_count_at=now - timedelta(hours=2),
+        posts=(
+            PostState(content_id="visible1", created_at=now - timedelta(days=2)),
+            PostState(
+                content_id="hidden1", created_at=now - timedelta(days=1),
+                hidden_from_guest_at=hidden_since or now - timedelta(hours=1),
+            ),
         ),
-        content_count=4,
     )
-    pin1 = PinClient()
-    result1 = await run_author(
-        author=author, nickname="示例", client=client1, store=store, notifier=notifier,
-        dedup=Deduplicator(), pacer=pacer, gate=gate, cfg=cfg,
-        now=now - timedelta(minutes=5), archive_enabled=False,
-        hidden_check=HiddenCheckConfig(pinned_identity="identity-abc", pin_client=pin1),
-        logger=Logger(),
-    )
-    assert result1.new_count == 1
-    assert pin1.calls == [], "第一轮对得上，不该核验"
-    mid_state = store.load_authors()["u1"]
-    assert mid_state.baseline_content_count == 4, "基准值必须跟着新作品轮刷新"
 
-    # 第二轮：staying 缺席够轮数，正常确认删除一条；new1 照常还在（不然空列表会被
-    # diff() 判成 all_gone，走的是另一套账号级累计确认，不是这里要测的逐条路径）。
-    # 若基准值真的刷新成了 4，expected = 4 + 0 - 1 = 3，actual 也是 3，
-    # 天衣无缝，不该触发核验。
-    mid_state = mid_state.with_updates(
-        posts=tuple(
-            p.with_updates(absent_rounds=cfg.delete_rounds - 1) if p.content_id == "staying" else p
-            for p in mid_state.posts
-        )
+
+# ------------------------------------------------------------------ 触发时机
+async def test_initialization_round_establishes_baseline_without_verifying(tmp_path):
+    """账号第一次被记录：只立基准值，不做比较、不核验。"""
+    now = datetime.now(timezone.utc)
+    author = AuthorState(sec_user_id="u1", nickname="示例")
+    client = Client(posts_items=(make_content("p1", created_at=now),), content_count=3)
+    pin = PinClient()
+
+    _result, store, _notifier, _pacer = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
     )
-    client2 = Client(
-        posts_items=(make_content("new1", created_at=now - timedelta(minutes=5)),),
-        content_count=3,
-    )
-    pin2 = PinClient()
-    result2 = await run_author(
-        author=mid_state, nickname="示例", client=client2, store=store, notifier=notifier,
-        dedup=Deduplicator(), pacer=pacer, gate=gate, cfg=cfg,
-        now=now, archive_enabled=False,
-        hidden_check=HiddenCheckConfig(pinned_identity="identity-abc", pin_client=pin2),
-        logger=Logger(),
-    )
-    assert result2.deleted_count == 1
-    assert pin2.calls == [], "用刷新后的基准值算，数字对得上，不该误触发定向核验"
+
+    assert client.profile_calls == 1
+    assert pin.calls == [], "初始化那轮没有可比较的基准值，不该定向核验"
     assert store.load_authors()["u1"].baseline_content_count == 3
 
 
-# --------------------------------------------------------------------- 未解决缺口的上限
-async def test_unresolved_drift_gives_up_after_max_rounds(tmp_path):
-    """连续多轮都解释不了同一个缺口——不能无限期重试，达到上限后放弃追踪、
-    直接接受当下的实际值，drift 计数器归零。
-    """
-    from dywatch.pipeline import MAX_UNRESOLVED_DRIFT_ROUNDS
+async def test_plain_round_with_only_new_posts_refreshes_baseline_but_does_not_verify(tmp_path):
+    """纯新作品的一轮：刷新基准值（否则基准会漂移），但不定向核验。"""
+    now = datetime.now(timezone.utc)
+    author = AuthorState(
+        sec_user_id="u1", nickname="示例", ever_had_posts=True,
+        baseline_content_count=1, baseline_content_count_at=now - timedelta(hours=1),
+        posts=(PostState(content_id="old1", created_at=now - timedelta(days=1)),),
+    )
+    client = Client(
+        posts_items=(make_content("new1", created_at=now), make_content("old1", created_at=now - timedelta(days=1))),
+        content_count=2,
+    )
+    pin = PinClient()
 
+    result, store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+    )
+
+    assert any(e.kind is EventKind.NEW_POST for e in result.events)
+    assert pin.calls == [], "这一轮的新增能被数字解释，不需要核验"
+    assert store.load_authors()["u1"].baseline_content_count == 2
+
+
+async def test_numbers_match_after_deletion_does_not_trigger_verification(tmp_path):
+    """预期 4（5 − 1）、实际也是 4：账目对得上，不核验。"""
+    now = datetime.now(timezone.utc)
+    author = _author_with_one_post_about_to_be_confirmed_removed(now)
+    client = Client(posts_items=(_staying_post(now),), content_count=4)
+    pin = PinClient()
+
+    result, _store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+    )
+
+    assert any(e.kind is EventKind.POST_REMOVED for e in result.events)
+    assert pin.calls == []
+
+
+async def test_feature_disabled_never_touches_profile_endpoint(tmp_path):
+    """`HIDDEN_POST_CHECK_ENABLED=false`（`hidden_check=None`）：一次都不碰总数接口。"""
+    now = datetime.now(timezone.utc)
+    author = _author_with_one_post_about_to_be_confirmed_removed(now)
+    client = Client(posts_items=(_staying_post(now),), content_count=99)
+
+    _result, _store, _n, pacer = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=None, now=now
+    )
+
+    assert client.profile_calls == 0, "关掉功能就不该碰总数接口"
+    assert pacer.calls == 1, "只有主链路抓列表那一次（核验层不该多占）"
+
+
+# --------------------------------------------------- 总数偏多 ⇒ 标记"对访客不可见"
+async def test_mismatch_marks_the_post_hidden_from_guest(tmp_path):
+    """预期 4（5 − 1），DTK 说 5——多出来的 1 条只能是核验才能看到的隐藏作品。"""
+    now = datetime.now(timezone.utc)
+    author = _author_with_one_post_about_to_be_confirmed_removed(now)
+    client = Client(posts_items=(_staying_post(now),), content_count=5)
+    hidden = make_content("hidden1", created_at=now, title="被隐藏的新作品")
+    pin = PinClient(posts_items=(hidden,))
+
+    result, store, notifier, pacer = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+    )
+
+    assert pin.calls == ["identity-abc"], "数字对不上才应该定向核验"
+    kinds = [e.kind for e in result.events]
+    assert EventKind.HIDDEN_FROM_GUEST in kinds
+    assert EventKind.NEW_POST not in kinds, "被隐藏的作品不该报成新作品——用户该做的事不一样"
+    assert EventKind.REVIVED not in kinds
+    event = next(e for e in result.events if e.kind is EventKind.HIDDEN_FROM_GUEST)
+    assert [item["content_id"] for item in event.payload["hidden"]] == ["hidden1"]
+    assert len(notifier.sent) >= 1, "这条要推送出去（用户需要知道曝光被限制了）"
+
+    state = store.load_authors()["u1"]
+    assert state.baseline_content_count == 5
+    marked = next(p for p in state.posts if p.content_id == "hidden1")
+    assert marked.hidden_from_guest_at is not None, "要打上标记，否则下一轮又会判它消失"
+    # 主判定抓列表 + 查总数 + 定向核验
+    assert pacer.calls >= 3
+
+
+async def test_hidden_post_cancels_the_contradicting_removal_in_the_same_round(tmp_path):
+    """同一轮里 `diff` 刚确认 `gone1` 消失、核验又证明它只是对访客不可见：
+    那条"作品消失"必须被撤销，否则会同时推出两条互相打脸的通知。"""
+    now = datetime.now(timezone.utc)
+    author = _author_with_one_post_about_to_be_confirmed_removed(now)
+    client = Client(posts_items=(_staying_post(now),), content_count=5)
+    pin = PinClient(posts_items=(_staying_post(now), make_content("gone1", created_at=now - timedelta(days=5))))
+
+    result, store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+    )
+
+    assert EventKind.POST_REMOVED not in [e.kind for e in result.events]
+    assert any(e.kind is EventKind.HIDDEN_FROM_GUEST for e in result.events)
+    state = store.load_authors()["u1"]
+    assert any(p.content_id == "gone1" and p.hidden_from_guest_at is not None for p in state.posts)
+    assert all(t.content_id != "gone1" for t in state.tombstones), "它不是消失了，不该留墓碑"
+
+
+async def test_removal_kept_when_other_posts_in_the_same_event_are_real(tmp_path):
+    """同一批"消失"里只有一部分被核验推翻时：只摘掉那一条，其余原样保留。"""
+    now = datetime.now(timezone.utc)
+    cfg = DiffConfig()
+    author = _author_with_one_post_about_to_be_confirmed_removed(now).with_updates(
+        posts=(
+            PostState(content_id="staying", created_at=now - timedelta(days=2)),
+            PostState(content_id="hidden1", created_at=now - timedelta(days=3),
+                      absent_rounds=cfg.delete_rounds - 1),
+            PostState(content_id="gone2", created_at=now - timedelta(days=6),
+                      absent_rounds=cfg.delete_rounds - 1),
+        )
+    )
+    client = Client(posts_items=(_staying_post(now),), content_count=5)
+    pin = PinClient(posts_items=(_staying_post(now),
+                                 make_content("hidden1", created_at=now - timedelta(days=3))))
+
+    result, _store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+    )
+
+    removed_events = [e for e in result.events if e.kind is EventKind.POST_REMOVED]
+    assert len(removed_events) == 1
+    ids = [item["content_id"] for item in removed_events[0].payload["removed"]]
+    assert ids == ["gone2"], "只有没被核验推翻的那条才算真的消失"
+
+
+async def test_mismatch_with_nothing_new_in_verification_page_is_not_an_error(tmp_path):
+    """数字对不上、核验页里也没有本地不认识的 id：只记一条日志，不当异常、不吃掉基准值。"""
+    now = datetime.now(timezone.utc)
+    author = _author_with_one_post_about_to_be_confirmed_removed(now)
+    client = Client(posts_items=(_staying_post(now),), content_count=5)
+    pin = PinClient(posts_items=())  # 核验页面也是空的
+
+    result, store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+    )
+
+    assert not any(e.kind is EventKind.HIDDEN_FROM_GUEST for e in result.events)
+    state = store.load_authors()["u1"]
+    assert state.baseline_content_count == 5, "缺口没解释清楚，基准值不该被推进"
+    assert state.content_count_drift_rounds == 1
+
+
+# ------------------------------------- 标记之后：循环必须停（上线故障的回归测试）
+async def test_hidden_post_stops_accumulating_absences_across_rounds(tmp_path):
+    """**核心回归**：标记为"对访客不可见"之后，访客列表继续看不到它也不该再有任何动静。
+
+    上线后真实发生过的死循环：访客视角说"没了" → 判确认删除 → 核验说"还在" →
+    填回来 → 访客视角又说"没了"……每 1~3 分钟一条「作品回归」，每小时烧掉约 40 次
+    登录态请求。这条用例锁住"标记生效 ⇒ 缺席不再累计 ⇒ 不再核验"。
+    """
     now = datetime.now(timezone.utc)
     store = StateStore(tmp_path / "db.sqlite")
     store.migrate()
+    # 基准值刚核对过（低频保底不该在这几轮里插进来）——这里要测的是"标记生效后
+    # 一轮接一轮都安静"，不是保底本身
+    author = _author_with_a_hidden_post(now).with_updates(
+        baseline_content_count_at=now - timedelta(minutes=1)
+    )
     store.ensure_author("u1", "示例", now)
-    notifier = Notifier()
-    pacer = Pacer()
-    gate = GlobalGate(default_seconds=60, backoff_after=2, backoff_max=600)
-    cfg = DiffConfig()
+    client = Client(posts_items=(make_content("visible1", created_at=now - timedelta(days=2)),), content_count=2)
+    pin = PinClient(posts_items=())
 
-    author = _author_with_one_post_about_to_be_confirmed_removed(now)
-    hidden_check = HiddenCheckConfig(
-        pinned_identity="identity-abc", pin_client=PinClient(posts_items=())
-    )
-    # 触发一轮 removed 确认后，接下来连续多轮都是"没有新变化"的普通轮次——drift 只在
-    # 触发轮里累积，所以直接连续跑同样的"removed 确认"场景，模拟"问题一直没解决"
-    for round_no in range(1, MAX_UNRESOLVED_DRIFT_ROUNDS + 1):
-        state = store.load_authors().get("u1", author)
-        if round_no == 1:
-            state = author  # 第一轮用带 gone1 的初始状态
-        else:
-            # 后续几轮：重新造一个"又有一条新的缺席帖子"的状态，让 removed_count>0
-            # 继续触发比对（用不同 id 避免跟上一轮的 tombstone 冲突）
-            state = state.with_updates(
-                posts=state.posts + (
-                    PostState(
-                        content_id=f"gone{round_no}", created_at=now - timedelta(days=1),
-                        absent_rounds=cfg.delete_rounds - 1,
-                    ),
-                )
-            )
-        client = Client(posts_items=(_staying_post(now),), content_count=99)  # 永远解释不了的缺口
-        result = await run_author(
-            author=state, nickname="示例", client=client, store=store, notifier=notifier,
-            dedup=Deduplicator(), pacer=pacer, gate=gate, cfg=cfg,
-            now=now, archive_enabled=False, hidden_check=hidden_check, logger=Logger(),
+    for round_no in range(3):
+        # 第 1 轮用构造好的状态（库里那行是 `ensure_author` 刚建的空壳），之后从库里读
+        state = author if round_no == 0 else store.load_authors()["u1"]
+        result, store, _n, _p = await _run(
+            tmp_path=tmp_path, author=state, client=client, hidden_check=_hidden_check(pin),
+            now=now + timedelta(minutes=round_no), store=store,
         )
-        assert result.status == "ok"
+        assert not any(e.kind in (EventKind.POST_REMOVED, EventKind.ALL_GONE) for e in result.events), (
+            f"第 {round_no + 1} 轮又把它判成消失了 —— 死循环回来了"
+        )
+        assert not any(e.kind is EventKind.HIDDEN_FROM_GUEST for e in result.events), "只该标记一次"
 
-    final = store.load_authors()["u1"]
-    assert final.content_count_drift_rounds == 0, "到上限后应该清零，不是继续累积"
-    assert final.baseline_content_count == 99, "放弃追踪后要接受当下的实际值，不能悬空"
+    assert client.profile_calls == 0, "没有新作品也没有消失，不该去查总数"
+    assert pin.calls == [], "更不该动用登录身份"
+    state = store.load_authors()["u1"]
+    hidden = next(p for p in state.posts if p.content_id == "hidden1")
+    assert hidden.absent_rounds == 0, "已知对访客不可见的作品不该累计缺席轮数"
+    assert all(t.content_id != "hidden1" for t in state.tombstones)
 
 
-# --------------------------------------------------------------------- P0-5：同轮矛盾撤销
-async def test_recovered_post_cancels_the_contradicting_removal_in_the_same_round(tmp_path):
-    """同一轮内：gone1 被确认删除（产生 POST_REMOVED），核验又在同一轮发现 gone1
-    其实还在（产生 REVIVED）——不该同批发出"作品消失"+"其实还在"两条自相矛盾的
-    通知。gone1 是这一批消失里唯一的一条，所以 POST_REMOVED 应该被整条撤销。
-    """
+async def test_hidden_post_reappearing_clears_the_marker_silently(tmp_path):
+    """它重新出现在访客列表里 ⇒ 清掉标记；刻意不发事件（我们从没报过它消失）。"""
     now = datetime.now(timezone.utc)
-    author = _author_with_one_post_about_to_be_confirmed_removed(now)  # 有 staying + gone1(缺席)
-    client = Client(posts_items=(_staying_post(now),), content_count=5)  # 触发核验
-    # 定向核验拿到的页面里，gone1 其实还在（游客隐藏了它，不是真删除）
-    recovered = make_content("gone1", created_at=now - timedelta(days=5), title="其实还在")
-    pin = PinClient(posts_items=(_staying_post(now), recovered))
-    hidden_check = HiddenCheckConfig(pinned_identity="identity-abc", pin_client=pin)
-
-    result, store, notifier, _pacer = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=hidden_check, now=now
+    author = _author_with_a_hidden_post(now)
+    client = Client(
+        posts_items=(make_content("visible1", created_at=now - timedelta(days=2)),
+                     make_content("hidden1", created_at=now - timedelta(days=1))),
+        content_count=2,
     )
 
-    kinds_with_gone1 = [
-        (e.kind, e.payload) for e in result.events
-        if e.kind is EventKind.POST_REMOVED
-        and any(item.get("content_id") == "gone1" for item in (e.payload.get("removed") or []))
-    ]
-    assert kinds_with_gone1 == [], "gone1 不该再出现在任何 POST_REMOVED 的 removed 列表里"
-    revived = [e for e in result.events if e.kind is EventKind.REVIVED and e.content_id == "gone1"]
-    assert len(revived) == 1
-    # 通知里不该同时出现"消失"和"回归"两条自相矛盾的消息
-    subjects = [getattr(m, "subject", str(m)) for m in notifier.sent]
-    assert not any("消失" in s for s in subjects), f"不该有矛盾的消失通知：{subjects}"
+    result, store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=None, now=now
+    )
+
     state = store.load_authors()["u1"]
-    assert any(p.content_id == "gone1" for p in state.posts)
-    assert all(t.content_id != "gone1" for t in state.tombstones)
+    assert all(p.hidden_from_guest_at is None for p in state.posts if p.content_id == "hidden1")
+    assert not any(e.kind in (EventKind.REVIVED, EventKind.POST_REMOVED) for e in result.events)
 
 
-async def test_recovered_post_is_only_stripped_from_removed_list_when_others_remain(tmp_path):
-    """如果这一批消失里除了核验找回的那条，还有别的确实删除的，POST_REMOVED
-    事件本身不该被整条撤销——只摘掉被推翻的那一条，其余照常报。
+# ------------------------------------------------- 总数偏少 ⇒ 有一条真被删了
+async def test_total_drop_reports_the_hidden_post_as_removed(tmp_path):
+    """基准 2、实际 1：少的那条正是"对访客不可见"的——它的消失不会让访客列表少任何东西，
+    只有用登录视角核对才能发现，而且必须报出来。"""
+    now = datetime.now(timezone.utc)
+    author = _author_with_a_hidden_post(now)
+    client = Client(posts_items=(make_content("visible1", created_at=now - timedelta(days=2)),), content_count=1)
+    # 登录视角里只剩 visible1：hidden1 确实被作者删了
+    pin = PinClient(posts_items=(make_content("visible1", created_at=now - timedelta(days=2)),))
+
+    result, store, notifier, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+    )
+
+    assert pin.calls == ["identity-abc"]
+    removed = [e for e in result.events if e.kind is EventKind.POST_REMOVED]
+    assert len(removed) == 1
+    assert [item["content_id"] for item in removed[0].payload["removed"]] == ["hidden1"]
+    assert len(notifier.sent) >= 1
+    state = store.load_authors()["u1"]
+    assert all(p.content_id != "hidden1" for p in state.posts)
+    assert any(t.content_id == "hidden1" and t.reason == "confirmed" for t in state.tombstones)
+    assert state.baseline_content_count == 1
+
+
+async def test_total_drop_keeps_the_hidden_post_when_login_still_sees_it(tmp_path):
+    """总数少了，但那条隐藏作品在登录视角里还在 ⇒ 少的是别的（本工具看不到的），不动它。"""
+    now = datetime.now(timezone.utc)
+    author = _author_with_a_hidden_post(now)
+    client = Client(posts_items=(make_content("visible1", created_at=now - timedelta(days=2)),), content_count=1)
+    pin = PinClient(posts_items=(
+        make_content("visible1", created_at=now - timedelta(days=2)),
+        make_content("hidden1", created_at=now - timedelta(days=1)),
+    ))
+
+    result, _store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+    )
+
+    assert not any(e.kind is EventKind.POST_REMOVED for e in result.events)
+
+
+async def test_total_drop_ignores_hidden_post_outside_the_login_window(tmp_path):
+    """隐藏作品比登录页最旧那条还旧 ⇒ 它可能只是没出现在这一页，不能据此判删除。"""
+    now = datetime.now(timezone.utc)
+    author = _author_with_a_hidden_post(now).with_updates(
+        posts=(
+            PostState(content_id="visible1", created_at=now - timedelta(days=1)),
+            PostState(content_id="hidden1", created_at=now - timedelta(days=400),
+                      hidden_from_guest_at=now - timedelta(days=390)),
+        )
+    )
+    client = Client(posts_items=(make_content("visible1", created_at=now - timedelta(days=1)),), content_count=1)
+    pin = PinClient(posts_items=(make_content("visible1", created_at=now - timedelta(days=1)),))
+
+    result, _store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+    )
+
+    assert not any(e.kind is EventKind.POST_REMOVED for e in result.events), (
+        "窗口外的作品与已删除在单页响应里无法区分，不能判删除"
+    )
+
+
+# ----------------------------------------------------------------- 降级
+async def test_profile_fetch_failure_does_not_break_the_round(tmp_path):
+    """查总数失败：这一轮已经算好的结果原样返回，不抛异常、不浪费一次定向核验。
+
+    基准值按**本地已知的增量**推进（这轮确认删了 1 条 → 5 折成 4）：删除已经确认过了，
+    没有理由因为"总数读不到"就把这 1 条再从账上撤回来——撤回来只会让下一次触发时
+    出现一个根本没发生的缺口，白烧一轮定向核验。
     """
     now = datetime.now(timezone.utc)
-    cfg = DiffConfig()
-    author = AuthorState(
-        sec_user_id="u1", nickname="示例", ever_had_posts=True, runs=10,
-        initialized_at=now - timedelta(days=30),
-        last_update_at=now - timedelta(days=1),
-        last_seen_at=now - timedelta(minutes=1),
-        baseline_content_count=6, baseline_content_count_at=now - timedelta(hours=2),
+    author = _author_with_one_post_about_to_be_confirmed_removed(now)
+    client = Client(
+        posts_items=(_staying_post(now),),
+        profile_error=MonitorError("upstream_unreachable", "boom"),
+    )
+    pin = PinClient()
+
+    result, store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+    )
+
+    assert any(e.kind is EventKind.POST_REMOVED for e in result.events), "主判定不受影响"
+    assert pin.calls == [], "总数都读不到，不该再花一次定向核验"
+    assert store.load_authors()["u1"].baseline_content_count == 4
+
+
+async def test_profile_fetch_failure_backs_off_instead_of_polling_every_round(tmp_path):
+    """读总数失败后必须退避：否则低频保底每轮都判"该核对了"，退化成逐轮轮询上游。
+
+    低频保底靠 `baseline_content_count_at` 计时。失败时若不把它推到现在，每一轮都会
+    再次满足"超过 interval 没核对过"，于是每轮都去敲一次总数接口——正是这套机制
+    声称要避免的事（`HIDDEN_CHECK_INTERVAL_MINUTES` 的意义就没了）。
+    """
+    now = datetime.now(timezone.utc)
+    store = StateStore(tmp_path / "db.sqlite")
+    store.migrate()
+    # 基准值是 2 小时前核对的 → 第一次调用时就该触发保底
+    author = _author_with_a_hidden_post(now).with_updates(
+        baseline_content_count_at=now - timedelta(hours=2)
+    )
+    store.ensure_author("u1", "示例", now)
+    client = Client(
+        posts_items=(_staying_post(now),),
+        profile_error=MonitorError("upstream_unreachable", "boom"),
+    )
+    # 关掉逐条缺席确认：这几轮里 `visible1` 一直在缺席，默认阈值（2 轮）会让它在这一轮
+    # 被确认删除，那条事件自己就会触发核验，测不出"保底有没有退避"
+    cfg = DiffConfig(delete_rounds=99)
+
+    _r1, store, _n, _p = await _run(
+        tmp_path=tmp_path, store=store, author=author, client=client, cfg=cfg,
+        hidden_check=_hidden_check(PinClient()), now=now,
+    )
+    assert client.profile_calls == 1, "保底触发，试了一次"
+    attempted_at = store.load_authors()["u1"].baseline_content_count_at
+    assert attempted_at is not None and attempted_at >= now, (
+        "失败也要把'上次核对'推到现在，作为退避计时"
+    )
+
+    # 紧接着的下一轮：还在退避窗口内，不该再敲总数接口
+    later = now + timedelta(minutes=1)
+    _r2, store, _n, _p = await _run(
+        tmp_path=tmp_path, store=store, author=store.load_authors()["u1"], client=client,
+        cfg=cfg, hidden_check=_hidden_check(PinClient()), now=later,
+    )
+    assert client.profile_calls == 1, "同一 interval 内失败一次就够了，不能每轮重试"
+
+    # 但退避不是永久放弃：越过 interval 之后要重新试
+    after_interval = now + timedelta(minutes=31)
+    _r3, _s, _n, _p = await _run(
+        tmp_path=tmp_path, store=store, author=store.load_authors()["u1"], client=client,
+        cfg=cfg, hidden_check=_hidden_check(PinClient()), now=after_interval,
+    )
+    assert client.profile_calls == 2, "越过保底间隔应当重试"
+
+
+async def test_profile_fetch_failure_still_folds_new_posts_into_the_baseline(tmp_path):
+    """读失败那轮的新作品已经进了 `known_ids`，不会再产出 `NEW_POST`。
+
+    如果这时不把 +1 折进基准值，这个增量就永久丢了：基准值偏低，下一次触发时表现为
+    `实际 > 预期` 的**假缺口**，白白消耗一轮定向核验（还要等 5 轮 drift 才放弃）。
+    """
+    now = datetime.now(timezone.utc)
+    author = _author_with_one_post_about_to_be_confirmed_removed(now).with_updates(
         posts=(
             PostState(content_id="staying", created_at=now - timedelta(days=2)),
             PostState(
                 content_id="gone1", created_at=now - timedelta(days=5),
-                absent_rounds=cfg.delete_rounds - 1,
-            ),
-            PostState(
-                content_id="really_gone", created_at=now - timedelta(days=6),
-                absent_rounds=cfg.delete_rounds - 1,
+                absent_rounds=0, absent_is_top=False,
             ),
         ),
+        baseline_content_count=5,
+        baseline_content_count_at=now - timedelta(hours=2),
     )
-    # expected = 6 + 0 - 2(gone1 + really_gone 都被确认删除) = 4；actual=5，缺口是 1
+    client = Client(
+        posts_items=(_staying_post(now), make_content("brand_new", created_at=now)),
+        profile_error=MonitorError("upstream_unreachable", "boom"),
+    )
+
+    result, store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client,
+        hidden_check=_hidden_check(PinClient()), now=now,
+    )
+
+    assert any(e.kind is EventKind.NEW_POST for e in result.events)
+    state = store.load_authors()["u1"]
+    assert state.baseline_content_count == 6, "5 + 新增 1 条（没有任何删除）"
+    assert state.content_count_drift_rounds == 0, "这是'读不到'，不是'对不上'"
+
+
+async def test_pinned_verification_failure_does_not_break_the_round(tmp_path):
+    """定向核验失败：记警告，缺口留给下一次触发，不推进基准值。"""
+    now = datetime.now(timezone.utc)
+    author = _author_with_one_post_about_to_be_confirmed_removed(now)
     client = Client(posts_items=(_staying_post(now),), content_count=5)
-    recovered = make_content("gone1", created_at=now - timedelta(days=5), title="其实还在")
-    pin = PinClient(posts_items=(_staying_post(now), recovered))
-    hidden_check = HiddenCheckConfig(pinned_identity="identity-abc", pin_client=pin)
+    pin = PinClient(error=MonitorError("PINNED_UNAVAILABLE", "identity retired"))
 
-    result, _store, _notifier, _pacer = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=hidden_check, now=now
+    result, store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
     )
 
-    removed_events = [e for e in result.events if e.kind is EventKind.POST_REMOVED]
-    assert len(removed_events) == 1, "really_gone 是真删除，POST_REMOVED 不该被整条撤销"
-    removed_ids = {item["content_id"] for item in removed_events[0].payload["removed"]}
-    assert removed_ids == {"really_gone"}, "gone1 应该被摘掉，really_gone 照常保留"
+    assert any(e.kind is EventKind.POST_REMOVED for e in result.events)
+    state = store.load_authors()["u1"]
+    assert state.baseline_content_count == 5, "缺口没解释清楚，基准值不该被推进"
+    assert state.content_count_drift_rounds == 1
 
 
-# --------------------------------------------------------------------- P1-4：有界抑制窗口
-def test_hidden_check_revived_is_rate_limited_not_unconditional():
-    """核验来源的 revived 不该完全绕开抑制——同一账号短时间内第二次应该被压住，
-    不然一旦游客隐藏问题持续存在（确认删除 -> 核验找回反复发生），会变成通知风暴。
+async def test_baseline_stays_accurate_across_a_new_post_round_then_a_removal_round(tmp_path):
+    """跨轮：新作品轮刷新基准 → 删除轮的预期值仍然算得对（这是"基准值漂移"那个 bug 的回归）。"""
+    now = datetime.now(timezone.utc)
+    store = StateStore(tmp_path / "db.sqlite")
+    store.migrate()
+    author = AuthorState(
+        sec_user_id="u1", nickname="示例", ever_had_posts=True,
+        baseline_content_count=2, baseline_content_count_at=now - timedelta(hours=2),
+        posts=(PostState(content_id="p1", created_at=now - timedelta(days=3)),),
+    )
+    store.ensure_author("u1", "示例", now)
+    cfg = DiffConfig()
+
+    # 第 1 轮：新作品 p2 出现（访客可见），总数 3
+    round1_client = Client(
+        posts_items=(make_content("p2", created_at=now), make_content("p1", created_at=now - timedelta(days=3))),
+        content_count=3,
+    )
+    result1, store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=round1_client,
+        hidden_check=_hidden_check(PinClient(posts_items=())), now=now, store=store,
+    )
+    assert any(e.kind is EventKind.NEW_POST for e in result1.events)
+    assert store.load_authors()["u1"].baseline_content_count == 3
+
+    # 第 2 轮：p1 连续第 2 轮缺席 → 确认删除，预期 3 − 1 = 2，实际也是 2 → 不该核验
+    state = store.load_authors()["u1"].with_updates(
+        posts=tuple(
+            p.with_updates(absent_rounds=cfg.delete_rounds - 1) if p.content_id == "p1" else p
+            for p in store.load_authors()["u1"].posts
+        )
+    )
+    pin2 = PinClient(posts_items=())
+    round2_client = Client(posts_items=(make_content("p2", created_at=now),), content_count=2)
+    result2, store, _n, _p = await _run(
+        tmp_path=tmp_path, author=state, client=round2_client,
+        hidden_check=_hidden_check(pin2), now=now + timedelta(minutes=1), store=store,
+    )
+    assert any(e.kind is EventKind.POST_REMOVED for e in result2.events)
+    assert pin2.calls == [], "账目对得上，不该白跑一次定向核验"
+
+
+async def test_unresolved_drift_gives_up_after_max_rounds(tmp_path):
+    """连续解释不了的缺口：达到上限后放弃追踪、接受实际值，不会无限重试。"""
+    now = datetime.now(timezone.utc)
+    from dywatch.pipeline import MAX_UNRESOLVED_DRIFT_ROUNDS
+
+    store = StateStore(tmp_path / "db.sqlite")
+    store.migrate()
+    author = _author_with_one_post_about_to_be_confirmed_removed(now).with_updates(
+        content_count_drift_rounds=MAX_UNRESOLVED_DRIFT_ROUNDS - 1
+    )
+    store.ensure_author("u1", "示例", now)
+    client = Client(posts_items=(_staying_post(now),), content_count=5)
+    pin = PinClient(posts_items=())  # 解释不了
+
+    _result, store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+    )
+
+    state = store.load_authors()["u1"]
+    assert state.content_count_drift_rounds == 0
+    assert state.baseline_content_count == 5, "放弃追踪后接受当下的实际值"
+
+
+# ----------------------------------------------------------------- 抑制窗口
+def test_strip_from_removals_never_breaks_an_event_with_a_hostile_payload():
+    """`removed` 不是列表时原样放行——它在通知路径上，抛异常等于这一轮通知全丢。
+
+    逐字符迭代一个字符串会把它拆成**字列表**再写回 payload，也就是把这条通知弄坏；
+    只认字典条目（其余原样留着）同理：不能靠"上游一定给字典"来省这个判断。
     """
-    dedup = Deduplicator()
+    from dywatch.models import Event, EventKind
+    from dywatch.pipeline import _strip_from_removals
+
+    def ev(payload):
+        return Event(EventKind.POST_REMOVED, sec_user_id="u1", nickname="n", payload=payload)
+
+    malformed = ev({"removed": "字符串不是列表"})
+    assert _strip_from_removals((malformed,), {"h1"}) == (malformed,), "畸形载荷原样放行"
+    assert _strip_from_removals((ev({}),), {"h1"})[0].payload == {}, "缺 removed 也要放行"
+
+    mixed = ev({"removed": [None, 1, {"content_id": "h1"}]})
+    kept = _strip_from_removals((mixed,), {"h1"})[0].payload["removed"]
+    assert kept == [None, 1], "只摘掉真正的字典条目，其它原样留着"
+
+    untouched = ev({"removed": [{"content_id": "real"}]})
+    assert _strip_from_removals((untouched,), {"h1"})[0] is untouched, "没摘到东西就不该重建事件"
+
+    all_hidden = ev({"removed": [{"content_id": "h1"}]})
+    assert _strip_from_removals((all_hidden,), {"h1"}) == (), "整条都是假象时撤销这条事件"
+
+
+def test_hidden_from_guest_event_is_windowed_per_author():
+    """同一账号 6 小时内只推一次（一批作品被藏 → 一条通知），而不是无条件放行。"""
+    now = datetime.now(timezone.utc)
     event = Event(
-        EventKind.REVIVED, sec_user_id="u1", nickname="示例", content_id="p1",
-        payload={"title": "t", "source": REVIVED_VIA_HIDDEN_CHECK},
+        EventKind.HIDDEN_FROM_GUEST,
+        sec_user_id="u1", nickname="示例",
+        payload={"hidden": [{"content_id": "hidden1", "title": "x", "created_at": now.isoformat()}]},
     )
-    allowed1, key1 = should_send(event, dedup)
-    assert allowed1 is True
-    allowed2, _key2 = should_send(event, dedup)  # 紧接着同账号又来一条
-    assert allowed2 is False, "窗口内应该被压住，不能完全不设限"
-    assert key1 != ""
+    dedup = Deduplicator()
+    first, key = should_send(event, dedup)
+    assert first is True
+    assert key, "有窗口的事件必须返回 key，投递失败时才好还回去"
+    second, _key2 = should_send(event, dedup)
+    assert second is False, "同一账号 6 小时窗口内不该重复推送"
+    # new_post 那类无窗口事件不受影响
+    fresh = Deduplicator()
+    assert should_send(event, fresh)[0] is True

@@ -285,6 +285,24 @@ def test_migrate_upgrades_a_v1_database_without_losing_data(tmp_path):
           'old_user', '老账号', '2026-01-01T00:00:00+00:00', 1, 42,
           '2026-01-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00'
         );
+
+        -- 同理：posts 写成 v3 的形状（没有 hidden_from_guest_at），
+        -- 好让 `_migrate_3_to_4` 的 ALTER 真的被执行到
+        CREATE TABLE posts (
+          sec_user_id     TEXT NOT NULL,
+          content_id      TEXT NOT NULL,
+          kind            TEXT NOT NULL DEFAULT 'unknown',
+          title           TEXT NOT NULL DEFAULT '',
+          created_at      TEXT,
+          is_top          INTEGER NOT NULL DEFAULT 0,
+          first_seen_at   TEXT,
+          last_seen_at    TEXT,
+          absent_rounds   INTEGER NOT NULL DEFAULT 0,
+          absent_is_top   INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (sec_user_id, content_id)
+        );
+        INSERT INTO posts (sec_user_id, content_id, title, created_at, absent_rounds)
+        VALUES ('old_user', 'old_post', '老作品', '2026-01-02T00:00:00+00:00', 1);
         """
     )
     conn.commit()
@@ -295,11 +313,19 @@ def test_migrate_upgrades_a_v1_database_without_losing_data(tmp_path):
 
     with store._tx() as tx:  # noqa: SLF001 —— 就是要验证迁移后的原始表结构
         version = tx.execute("SELECT version FROM schema_version").fetchone()[0]
-        assert version == 3
+        assert version == 4
         columns = {row[1] for row in tx.execute("PRAGMA table_info(authors)")}
         assert "baseline_content_count" in columns
         assert "baseline_content_count_at" in columns
         assert "content_count_drift_rounds" in columns
+        post_columns = {row[1] for row in tx.execute("PRAGMA table_info(posts)")}
+        assert "hidden_from_guest_at" in post_columns
+        # 老行要原样留下，新列是 NULL（"没有这个已知情况"），不能变成别的值
+        old_post = tx.execute(
+            "SELECT absent_rounds, hidden_from_guest_at FROM posts WHERE content_id = 'old_post'"
+        ).fetchone()
+        assert old_post[0] == 1
+        assert old_post[1] is None
 
     authors = store.load_authors()
     assert "old_user" in authors
@@ -313,9 +339,18 @@ def test_migrate_upgrades_a_v1_database_without_losing_data(tmp_path):
     assert old.baseline_content_count_at is None
     # drift 计数器默认应该是 0（"目前没有未解决的缺口"），不是 NULL
     assert old.content_count_drift_rounds == 0
+    # 老作品同样：没被核验标记过，所以是 None
+    assert [p.hidden_from_guest_at for p in old.posts] == [None]
 
     # 迁移之后新列要能正常读写，不是只加了个空壳
     updated = old.with_updates(baseline_content_count=7, baseline_content_count_at=NOW)
     store.save_round("old_user", updated, events=[], now=NOW)
     reloaded = store.load_authors()["old_user"]
     assert reloaded.baseline_content_count == 7
+
+    # 新列（posts.hidden_from_guest_at）也要能往返
+    marked = reloaded.with_updates(
+        posts=tuple(p.with_updates(hidden_from_guest_at=NOW) for p in reloaded.posts)
+    )
+    store.save_round("old_user", marked, events=[], now=NOW)
+    assert store.load_authors()["old_user"].posts[0].hidden_from_guest_at == NOW

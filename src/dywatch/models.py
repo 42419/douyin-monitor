@@ -54,12 +54,17 @@ class EventKind(StrEnum):
     UPSTREAM_DEGRADED = "upstream_degraded"
     INITIALIZED = "initialized"
     SELF_DEGRADED = "self_degraded"
+    #: 核验（登录身份定向查证）发现这条作品**对未登录访客不可见**：它在登录视角里存在，
+    #: 但访客列表从来不给它。与 `NEW_POST` 分开报，是因为这两件事的"用户该做什么"不同：
+    #: 新作品什么都不用做，而对访客不可见意味着曝光被平台限制住了。
+    HIDDEN_FROM_GUEST = "hidden_from_guest"
 
 
 #: 通知类事件（会真的推送）。其余只落库 / 只记日志。
 NOTIFY_KINDS: frozenset[EventKind] = frozenset(
     {
         EventKind.NEW_POST,
+        EventKind.HIDDEN_FROM_GUEST,
         EventKind.POST_REMOVED,
         EventKind.ALL_GONE,
         EventKind.REVIVED,
@@ -78,12 +83,6 @@ NOTIFY_KINDS: frozenset[EventKind] = frozenset(
 SILENT_KINDS: frozenset[EventKind] = frozenset(
     {EventKind.SCROLLED_OUT, EventKind.TRIMMED, EventKind.INITIALIZED}
 )
-
-#: `Event.payload["source"]` 的一个取值——标记这条 `REVIVED` 事件不是本轮列表里
-#: 自己看到的回归，而是隐藏作品核验（登录身份定向查证）翻出来的。三处要认得这个值：
-#: `alerts.should_send`（不吃 REVIVED 的 6 小时抑制窗口）、`render`（换一套文案）、
-#: `pipeline`（写这个标记的地方）。见 DESIGN.md「隐藏作品核验」一节。
-REVIVED_VIA_HIDDEN_CHECK: str = "hidden_check"
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +153,13 @@ class PostState:
     absent_rounds: int = 0
     #: 计数开始时的置顶状态，决定确认阈值是 2 还是 3
     absent_is_top: bool = False
+    #: 核验确认过"这条对未登录访客不可见"的时间（`None` = 没有这个已知情况）。
+    #:
+    #: **这个标记不是给人看的标签，而是缺席判定的口径**：在访客视角下，"真的被删了"
+    #: 和"只是访客看不到"这两种情况的表现完全一样（列表里都没有），所以必须把核验的
+    #: 结论记下来，否则每一轮都会把它重新判成"确认消失"、再被核验填回来，来回横跳。
+    #: 非空时 `diff` **不计算它的缺席**；它重新出现在访客列表里就清回 `None`。
+    hidden_from_guest_at: datetime | None = None
 
     def with_updates(self, **changes: Any) -> "PostState":
         return replace(self, **changes)
@@ -295,6 +301,14 @@ class DiffConfig:
     #: 置顶标志的获取策略与"最多隔多少轮带一次 raw"
     include_raw: str = "auto"
     raw_refresh_rounds: int = 20
+    #: 隐藏作品核验的**低频保底**间隔（秒）：不管这一轮有没有事件，基准值超过它就重新
+    #: 核对一次发布总数。0 = 关闭保底（只靠事件触发）。
+    #:
+    #: 这条保底不是优化，是**必需**：有两类变化在访客视角完全不留痕迹，事件驱动的触发
+    #: 永远等不到它们——① 新作品从发布起就对访客不可见；② 已知"对访客不可见"的作品
+    #: 被作者删掉（它本来就不在访客列表里）。没有它，这两件事都只能等 `STALE_FALLBACK_DAYS`
+    #: 那 14 天的兜底（甚至更久）。
+    hidden_check_interval_seconds: int = 1800
 
     @classmethod
     def from_settings(cls, settings: Any) -> "DiffConfig":
@@ -312,4 +326,5 @@ class DiffConfig:
             stale_fallback_days=int(settings["STALE_FALLBACK_DAYS"]),
             include_raw=str(settings["INCLUDE_RAW"]),
             raw_refresh_rounds=int(settings["RAW_REFRESH_ROUNDS"]),
+            hidden_check_interval_seconds=int(settings["HIDDEN_CHECK_INTERVAL_MINUTES"]) * 60,
         )

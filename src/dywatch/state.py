@@ -29,7 +29,7 @@ from .models import (
     Tombstone,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS posts (
   last_seen_at    TEXT,
   absent_rounds   INTEGER NOT NULL DEFAULT 0,
   absent_is_top   INTEGER NOT NULL DEFAULT 0,
+  hidden_from_guest_at TEXT,
   PRIMARY KEY (sec_user_id, content_id)
 );
 
@@ -134,11 +135,23 @@ def _migrate_2_to_3(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_3_to_4(conn: sqlite3.Connection) -> None:
+    """给 `posts` 加"核验确认过对访客不可见"的时间列。
+
+    NULL == `None` == "没有这个已知情况"，正是老账号该有的初始值：它们升级之前
+    从没做过核验，所有作品都还是"按访客视角正常判定"。
+    """
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(posts)")}
+    if "hidden_from_guest_at" not in existing:
+        conn.execute("ALTER TABLE posts ADD COLUMN hidden_from_guest_at TEXT")
+
+
 #: 版本号 -> "从这个版本升到下一个版本"的步骤。新增迁移时按顺序追加，
 #: 键是**升级前**的版本号（比如从 2 升到 3 的步骤，键是 2）。
 _MIGRATIONS: Final[Mapping[int, Callable[[sqlite3.Connection], None]]] = {
     1: _migrate_1_to_2,
     2: _migrate_2_to_3,
+    3: _migrate_3_to_4,
 }
 
 
@@ -396,8 +409,8 @@ class StateStore:
             conn.execute("DELETE FROM posts WHERE sec_user_id = ?", (sec_user_id,))
             conn.executemany(
                 "INSERT INTO posts (sec_user_id, content_id, kind, title, created_at, is_top,"
-                " first_seen_at, last_seen_at, absent_rounds, absent_is_top)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                " first_seen_at, last_seen_at, absent_rounds, absent_is_top, hidden_from_guest_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 [
                     (
                         sec_user_id,
@@ -410,6 +423,7 @@ class StateStore:
                         _iso(post.last_seen_at),
                         post.absent_rounds,
                         1 if post.absent_is_top else 0,
+                        _iso(post.hidden_from_guest_at),
                     )
                     for post in state.posts
                 ],
@@ -546,6 +560,11 @@ def _row_to_state(
                 last_seen_at=_dt(p["last_seen_at"]),
                 absent_rounds=int(p["absent_rounds"]),
                 absent_is_top=bool(p["absent_is_top"]),
+                # 旧库在迁移前没有这一列；`migrate()` 会补上，但读一条还没迁移的行时
+                # 不该炸——按"没有这个已知情况"处理（`None`）
+                hidden_from_guest_at=(
+                    _dt(p["hidden_from_guest_at"]) if "hidden_from_guest_at" in p.keys() else None
+                ),
             )
             for p in posts
         ),
