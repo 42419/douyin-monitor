@@ -61,6 +61,7 @@ def test_defaults_validate_once_a_key_and_channel_are_given():
         ({"WEB_PORT": "70000"}, "1..65535"),
         ({"NOTIFY_CHANNELS": "telegram"}, "TELEGRAM_BOT_TOKEN"),
         ({"NOTIFY_CHANNELS": "qq"}, "未知渠道"),
+        ({"HIDDEN_CHECK_INTERVAL_MINUTES": "-1"}, "不能为负"),
     ],
 )
 def test_cross_field_validation_catches_the_mistakes_people_actually_make(overrides, fragment):
@@ -87,6 +88,41 @@ def test_silent_mode_does_not_require_a_channel():
         environ={"DTK_API_KEY": "dtk_x", "SILENT_MODE": "true", "NOTIFY_CHANNELS": ""},
     )
     assert settings.validate() == []
+
+
+def test_disabling_the_hidden_check_fallback_says_what_it_costs():
+    """`HIDDEN_CHECK_INTERVAL_MINUTES=0` 是合法配置，但代价必须说出来。
+
+    它关掉的是唯一能发现那两类"游客视角不留痕迹"的变化的时机（新作品从发布起就不可见、
+    对访客不可见的作品被删）——静默接受会让人以为功能还完整。
+    """
+    settings = load_settings(
+        None,
+        environ={"DTK_API_KEY": "dtk_x", "DINGTALK_TOKEN": "t", "DINGTALK_SECRET": "s",
+                 "HIDDEN_POST_CHECK_ENABLED": "true", "PINNED_IDENTITY_ID": "uuid-1",
+                 "HIDDEN_CHECK_INTERVAL_MINUTES": "0"},
+    )
+    assert settings.validate() == [], "0 是合法值，不该当成错误"
+    assert any("低频保底" in note and "不留痕迹" in note for note in settings.warnings()), (
+        settings.warnings()
+    )
+
+
+def test_negative_fallback_interval_is_refused_rather_than_read_as_off():
+    """负数会被 `interval > 0` 的守卫读成"关掉保底"——静默失效，所以必须是硬错误。"""
+    settings = load_settings(
+        None,
+        environ={"DTK_API_KEY": "dtk_x", "DINGTALK_TOKEN": "t", "DINGTALK_SECRET": "s",
+                 "HIDDEN_CHECK_INTERVAL_MINUTES": "-5"},
+    )
+    assert settings["HIDDEN_CHECK_INTERVAL_MINUTES"] == -5, "值如实保留，由校验负责拒绝"
+    assert any("不能为负" in error for error in settings.validate())
+
+    # 功能关着时不唠叨这两条
+    quiet = load_settings(None, environ={"DTK_API_KEY": "dtk_x", "DINGTALK_TOKEN": "t",
+                                         "DINGTALK_SECRET": "s",
+                                         "HIDDEN_CHECK_INTERVAL_MINUTES": "0"})
+    assert not any("低频保底" in note for note in quiet.warnings())
 
 
 def test_env_overrides_file_and_file_overrides_default(tmp_path):

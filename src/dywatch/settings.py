@@ -317,6 +317,10 @@ class Settings:
                 "核验时不知道该定向到哪个身份，去 DTK 控制台 Identities 页面复制一个"
                 "登录态身份的 UUID 填进来"
             )
+        if v["HIDDEN_CHECK_INTERVAL_MINUTES"] < 0:
+            # 负数会被 `interval > 0` 的守卫当成"关闭保底"——静默失效是最坏的一种，
+            # 因为读配置的人会以为自己配了个值（跟 POLL_INTERVAL_MIN 那条同一个道理）
+            errors.append("HIDDEN_CHECK_INTERVAL_MINUTES 不能为负（0 = 关闭保底）")
 
         return errors
 
@@ -344,6 +348,13 @@ class Settings:
                     "速率偏高：请调大 REQUEST_INTERVAL_MIN/MAX，"
                     "或提高该 API Key 的 rate_limit"
                 )
+        if v["HIDDEN_POST_CHECK_ENABLED"] and v["HIDDEN_CHECK_INTERVAL_MINUTES"] == 0:
+            out.append(
+                "HIDDEN_CHECK_INTERVAL_MINUTES=0 关掉了低频保底：有两类变化在游客视角"
+                "完全不留痕迹（新作品从发布起就不可见、已标记为对访客不可见的作品被删），"
+                "事件驱动的触发永远等不到它们——它们只会在 STALE_FALLBACK_DAYS"
+                f"（{v['STALE_FALLBACK_DAYS']} 天）那次兜底时被顺带发现，甚至更久"
+            )
         if v["INCLUDE_RAW"] == "always":
             out.append(
                 f"INCLUDE_RAW=always：每轮响应体积约为 {v['FETCH_COUNT']} × 109 KB"
