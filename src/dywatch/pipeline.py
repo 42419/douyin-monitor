@@ -286,6 +286,11 @@ async def _check_hidden_posts(
     if not (initialized or new_count > 0 or removed_count > 0 or stale_triggered or due_for_sample):
         return next_state, events
 
+    if due_for_sample and not (initialized or new_count > 0 or removed_count > 0 or stale_triggered):
+        # 只有保底能解释这次调用（那种"访客视角不留痕迹"的变化就靠它），记一条便于排障
+        _log(logger, "debug", "hidden_check.sample_due",
+             sec_user_id=prev.sec_user_id, baseline=prev.baseline_content_count)
+
     try:
         await pacer.wait_for_turn()
         profile = await client.author_profile(prev.sec_user_id)
@@ -364,8 +369,12 @@ async def _check_hidden_posts(
     if verified_events:
         # 缺口被解释清楚了：基准值推进、未解决计数清零
         events = events + verified_events
+        # 记**条数**而不是事件数：两个分支都只产出一条聚合事件（`count=len(events)` 恒为 1，
+        # 是个骗人的字段），真正有用的是"这次标记/确认了几条作品"以及方向
         _log(logger, "info", "hidden_check.verified",
-             sec_user_id=prev.sec_user_id, count=len(verified_events),
+             sec_user_id=prev.sec_user_id,
+             posts=sum(_items_in(ev, "hidden") + _items_in(ev, "removed") for ev in verified_events),
+             kind=verified_events[0].kind.value,
              expected=expected, actual=actual)
         next_state = next_state.with_updates(
             baseline_content_count=actual, baseline_content_count_at=now,
@@ -392,6 +401,12 @@ async def _check_hidden_posts(
              rounds=drift_rounds)
         next_state = next_state.with_updates(content_count_drift_rounds=drift_rounds)
     return next_state, events
+
+
+def _items_in(event: Event, key: str) -> int:
+    """事件载荷里那个键的条目数（不是列表就当 0：日志路径也不该因为畸形载荷而抛）。"""
+    items = (event.payload or {}).get(key)
+    return len(items) if isinstance(items, list) else 0
 
 
 def _strip_from_removals(

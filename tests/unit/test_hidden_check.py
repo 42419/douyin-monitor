@@ -140,6 +140,14 @@ def make_content(content_id: str, *, created_at: datetime | None = None, title: 
     )
 
 
+def _store(tmp_path: Any, sec_user_id: str = "u1") -> StateStore:
+    """建一个已迁移、且已有账号行的库（`run_author` 依赖它）。"""
+    store = StateStore(tmp_path / "db.sqlite")
+    store.migrate()
+    store.ensure_author(sec_user_id, "示例", datetime.now(timezone.utc))
+    return store
+
+
 def _hidden_check(pin: PinClient) -> HiddenCheckConfig:
     return HiddenCheckConfig(pinned_identity="identity-abc", pin_client=pin)
 
@@ -329,7 +337,11 @@ async def test_mismatch_marks_the_post_hidden_from_guest(tmp_path):
     assert EventKind.REVIVED not in kinds
     event = next(e for e in result.events if e.kind is EventKind.HIDDEN_FROM_GUEST)
     assert [item["content_id"] for item in event.payload["hidden"]] == ["hidden1"]
-    assert len(notifier.sent) >= 1, "这条要推送出去（用户需要知道曝光被限制了）"
+    # 这个事件**不推送**（`SILENT_KINDS`）：平台对访客的展示限制不是账号故障。上面那句
+    # `notifier.sent >= 1` 曾经是靠同轮的 `post_removed` 蒙对的，注释则说成"这条要推送出去"
+    assert notifier.sent, "本轮应该有别的推送（确认消失那条）"
+    assert all(m.event is not EventKind.HIDDEN_FROM_GUEST for m in notifier.sent), \
+        "静默事件不该出现在投递记录里"
 
     state = store.load_authors()["u1"]
     assert state.baseline_content_count == 5
@@ -742,6 +754,55 @@ def test_strip_from_removals_never_breaks_an_event_with_a_hostile_payload():
 
     all_hidden = ev({"removed": [{"content_id": "h1"}]})
     assert _strip_from_removals((all_hidden,), {"h1"}) == (), "整条都是假象时撤销这条事件"
+
+
+async def test_verified_log_records_post_count_and_direction(tmp_path):
+    """`hidden_check.verified` 记的是**条数**和方向，不是事件数。
+
+    两个分支都只产出一条聚合事件，所以曾经那个 `count=len(events)` 恒为 1、没有信息量。
+    """
+    now = datetime.now(timezone.utc)
+    author = _author_with_one_post_about_to_be_confirmed_removed(now)
+    client = Client(posts_items=(_staying_post(now),), content_count=5)
+    pin = PinClient(posts_items=(
+        make_content("hidden1", created_at=now, title="看不见 A"),
+        make_content("hidden2", created_at=now, title="看不见 B"),
+    ))
+    logger = Logger()
+    await run_author(
+        author=author, nickname=author.nickname, client=client,
+        store=_store(tmp_path), notifier=Notifier(), dedup=Deduplicator(),
+        pacer=Pacer(), gate=GlobalGate(), cfg=DiffConfig(), now=now, archive_enabled=False,
+        hidden_check=_hidden_check(pin), logger=logger,
+    )
+    verified = logger.events("hidden_check.verified")
+    assert len(verified) == 1
+    assert verified[0]["posts"] == 2, "两条未知作品 → posts=2"
+    assert verified[0]["kind"] == "hidden_from_guest", "方向也要能看出来"
+    assert verified[0]["expected"] == 4 and verified[0]["actual"] == 5
+
+
+async def test_sample_due_is_logged_when_only_the_fallback_triggers(tmp_path):
+    """只有低频保底能解释这次核对时，记一条 debug —— 排障时要能回答"这轮为什么去查总数"。"""
+    now = datetime.now(timezone.utc)
+    author = _author_with_a_hidden_post(now).with_updates(
+        baseline_content_count_at=now - timedelta(hours=2)   # 保底到期
+    )
+    client = Client(
+        posts_items=(make_content("visible1", created_at=now - timedelta(days=2), title="标题visible1"),
+                     make_content("hidden1", created_at=now - timedelta(days=1), title="标题hidden1")),
+        content_count=2,
+    )
+    logger = Logger()
+    await run_author(
+        author=author, nickname=author.nickname, client=client,
+        store=_store(tmp_path), notifier=Notifier(), dedup=Deduplicator(),
+        pacer=Pacer(), gate=GlobalGate(), cfg=DiffConfig(), now=now, archive_enabled=False,
+        hidden_check=_hidden_check(PinClient()), logger=logger,
+    )
+    assert client.profile_calls == 1, "保底到期 → 查一次总数"
+    assert logger.events("hidden_check.sample_due"), "只有保底触发时要留下痕迹"
+    assert not logger.events("hidden_check.verified"), "账目对得上，没有要解释的缺口"
 
 
 def test_hidden_from_guest_has_no_suppression_window():
