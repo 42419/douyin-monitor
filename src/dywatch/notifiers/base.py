@@ -174,18 +174,13 @@ class Notifier:
         return "exhausted attempts"  # pragma: no cover
 
     async def send_test(self) -> Delivery:
-        """A deliberately un-deduplicated message, to prove a channel is reachable."""
-        from ..models import EventKind
-        from ..render import Message as M
+        """A deliberately un-deduplicated message, to prove a channel is reachable.
 
-        probe = M(
-            event=EventKind.INITIALIZED,
-            severity="info",
-            subject="【测试】dywatch 通知渠道自检",
-            markdown="### dywatch 通知渠道自检\n\n如果你看到这条消息，说明该渠道可用。",
-            text="dywatch 通知渠道自检：如果你看到这条消息，说明该渠道可用。",
-        )
-        return await self.send(probe)
+        文案与版式都从渲染层取（`render_probe`），免得通知正文有第二个出处。
+        """
+        from ..render import render_probe
+
+        return await self.send(render_probe())
 
 
 _URL_RE = re.compile(r"https?://\S+")

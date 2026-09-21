@@ -397,6 +397,23 @@ def _build(
     return subject, _card(heading, [_item(f"载荷：{_val(payload, 200) if payload else '（无额外字段）'}")])
 
 
+def render_probe() -> Message:
+    """渠道自测消息（`dywatch test-notify`）。
+
+    走**同一套版式**：以前这段 markdown 是写在 `notifiers/base.py` 里的裸段落行，既不满足
+    "每行都是块级元素"，也让版式有了第二个出处。
+    """
+    subject = msg.T_PROBE
+    markdown = _card(subject, [_item(msg.PROBE_NOTE)])
+    return Message(
+        event=EventKind.INITIALIZED,
+        severity="info",
+        subject=subject,
+        markdown=markdown,
+        text=_to_text(markdown),
+    )
+
+
 def _parse(raw: Any) -> datetime | None:
     if isinstance(raw, datetime):
         return raw
@@ -409,4 +426,11 @@ def _parse(raw: Any) -> datetime | None:
         return None
 
 
-__all__ = ["MAX_BODY_BYTES", "Message", "SEVERITY", "TITLE_CLIP", "render_event"]
+__all__ = [
+    "MAX_BODY_BYTES",
+    "Message",
+    "SEVERITY",
+    "TITLE_CLIP",
+    "render_event",
+    "render_probe",
+]

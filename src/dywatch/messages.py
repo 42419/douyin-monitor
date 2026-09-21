@@ -26,6 +26,7 @@ T_ACCOUNT_RECOVERED = "【已恢复】{nickname} 的监控恢复正常"
 T_STALE = "【长期无更新】{nickname} 已 {days} 天没有新作品"
 T_UPSTREAM = "【上游异常】DTK 实例需要处理"
 T_SELF = "【自身降级】dywatch 已暂停推送"
+T_PROBE = "【测试】dywatch 通知渠道自检"
 
 KIND_VIDEO = "视频"
 KIND_ALBUM = "图文"
@@ -54,6 +55,9 @@ ROW_OLDEST = "本页最旧作品"
 ROW_PREVIOUS = "上轮见到的最新作品"
 GAP_NOTE = "距上次发布 {gap}"
 STATS_SEP = " · "
+
+#: 渠道自测（`dywatch test-notify`）那一句正文
+PROBE_NOTE = "如果你看到这条消息，说明该渠道可用。"
 
 #: 值缺失时的占位、以及列表类文案里的固定词
 PLACEHOLDER_NO_TITLE = "(无标题)"

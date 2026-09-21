@@ -114,6 +114,18 @@ def test_blocks_are_separated_by_a_blank_line(kind):
             previous = kind_of_block
 
 
+def test_channel_probe_uses_the_same_layout():
+    """`dywatch test-notify` 的自检消息也走同一套版式（它曾经是手写的裸段落行）。"""
+    from dywatch.render import render_probe
+
+    probe = render_probe()
+    assert probe.markdown.startswith("### ")
+    for line in probe.markdown.splitlines():
+        if line.strip():
+            assert line.startswith(ALLOWED_PREFIX), f"自检消息出现裸段落行：{line!r}"
+    assert "**" not in probe.text and "](" not in probe.text
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_only_constructs_both_channels_support(kind):
     """只用钉钉与企业微信都支持的语法；钉钉不支持的（行内代码）一律不出现。"""
