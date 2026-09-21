@@ -2,7 +2,7 @@
 
 这里的每一件事都只在"进程"这个尺度上发生一次：
 
-* **结构化日志**。事件名 + 键值对（`round.done checked=3 new=2 duration_ms=1400`），
+* **结构化日志**。事件名 + 键值对（`round.start round=7 users=3` / `round.done round=7 checked=3 new=2 duration_ms=1400`），
   而不是拼好的句子——这样 `grep round.done` 和 `grep author.crashed` 都能用。
   应用只负责**分级写入**，轮转与压缩交给 logrotate（Linux 的标准分工）。
 * **单实例锁**。两个实例同时跑会把同一批账号查两遍，请求速率翻倍，

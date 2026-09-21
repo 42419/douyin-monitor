@@ -121,20 +121,25 @@ class MonitorLoop:
             self.archive_trigger.start_round()
 
         if not self._users:
-            self.log.warning("round.skipped", reason="no users configured")
+            self.log.warning("round.skipped", round=self._rounds, reason="no users configured")
             return {"checked": 0, "initialized": 0, "new": 0, "deleted": 0,
                     "title_changed": 0, "failed": 0}
 
         if not self.gate.is_open():
             remaining = round(self.gate.remaining(), 1)
             self.log.warning(
-                "round.skipped", reason="gate closed", code=self.gate.reason, remaining=remaining
+                "round.skipped", round=self._rounds, reason="gate closed",
+                code=self.gate.reason, remaining=remaining,
             )
             self.store.record_round(
                 now=started, results=[], gate_state=f"closed:{self.gate.reason}", duration_ms=0
             )
             return {"checked": 0, "initialized": 0, "new": 0, "deleted": 0,
                     "title_changed": 0, "failed": 0}
+
+        # 这一轮真的开始跑了（被跳过的轮次只会记 `round.skipped`，不会到这里）。
+        # 带上轮次号：和 `round.done` 配对看，也能对上面板里的"本次运行第 N 轮"。
+        self.log.info("round.start", round=self._rounds, users=len(self._users))
 
         states = self.store.load_authors()
         semaphore = asyncio.Semaphore(max(1, int(self.settings["MAX_CONCURRENT"])))
@@ -216,6 +221,7 @@ class MonitorLoop:
             parts.append("均无变化")
         self.log.info(
             "round.done",
+            round=self._rounds,
             summary="，".join(parts),
             duration_ms=duration_ms,
             gate="open" if self.gate.is_open() else self.gate.reason,
