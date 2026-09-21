@@ -80,9 +80,6 @@ NO_WINDOW_EVENTS: Final[frozenset[EventKind]] = frozenset(
 #: 而且它们的"过期成本"远低于漏掉一条作品的成本。
 NOTIFY_PRIORITY: Final[tuple[EventKind, ...]] = (
     EventKind.NEW_POST,
-    # 与 new_post 同理：它只在核验那一刻被发现一次，错过就补不回来。而且它同时
-    # 承载"作者发了新东西"这层信息（只是访客看不到），排在作品类里最靠前的位置
-    EventKind.HIDDEN_FROM_GUEST,
     EventKind.ALL_GONE,
     EventKind.POST_REMOVED,
     EventKind.REVIVED,

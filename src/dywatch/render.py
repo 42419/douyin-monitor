@@ -1,26 +1,52 @@
 """事件 → 消息。纯函数，不发送。
 
 一条 `Message` 同时带三种形态，因为不同渠道能吃的东西不同：
-Markdown（钉钉/企业微信）、纯文本（Telegram/邮件/webhook）、短标题（通知栏/Bark）。
+Markdown（钉钉/企业微信/Server 酱）、纯文本（Telegram/Bark/webhook）、短标题（通知栏/Bark）。
 渲染一次、各渠道各取所需，比每个渠道自己拼一遍要少一半不一致。
 
-版式沿用旧项目已经验证过的高信息密度写法：一屏之内把"谁、发了什么、什么时候、
-数据怎么样、去哪儿看"说全，且**缺值不显示该行**——抖音的 `stats.play_count`
-实测恒为 `null`，所以"播放"这一项根本不出现。
+## 版式只用三种块级元素
+
+钉钉与企业微信**共用同一个 `markdown` 字段**，所以版式取两者的交集
+（钉钉：[消息发送与接收类型]；企业微信：[群机器人消息推送配置]）：
+
+| 元素 | 钉钉 | 企业微信 markdown |
+| ---------------- | -- | ------------------------------- |
+| `###` 标题 | ✅ | ✅（`#` 与文字之间要有空格） |
+| `**加粗**` | ✅ | ✅ |
+| `[文字](链接)` | ✅ | ✅ |
+| `>` 引用 | ✅ | ✅ |
+| `- ` 无序列表 | ✅ | ✗（原样显示 `- `，仍可读） |
+| 表格 / 代码块 / 行内代码 / 分隔线 / 斜体 | ✗ | ✗ |
+
+于是**每一行都必须是块级元素**：`### 标题`、`- 列表项`、`> 引用`，块与块之间空一行。
+**不允许裸段落行**：钉钉把单个换行当软换行折叠成一整行（官方建议 `\\n` 前后各加两个空格
+才有硬换行），所以靠 `\\n` 拼出来的 `**标签**：值` 会全部挤成一坨——那正是第一版
+"推送内容太乱"的根因。用块级元素 + 空行则两边都能正确分行，且不依赖行尾那些不可见的空格。
+
+## 两个长度约束
+
+- **正文**：企业微信 markdown 上限 **4096 字节**（UTF-8，中文 3 字节/字），钉钉 5000 字符。
+  取更严的那个再留余量 → `MAX_BODY_BYTES`，超了在**行边界**截断并附一句说明。
+- **单条作品标题**：抖音标题可以很长，整段塞进通知会淹掉其它字段 → `_title()` 截断。
+  截断发生在**转义之前**：先转义再截断会把 `\\*` 切成落单的反斜杠，通知里就留下一个坏掉的
+  转义序列（`webui._label` 踩过同一个坑）。
+
+[消息发送与接收类型]: https://open.dingtalk.com/document/development/robot-message-type
+[群机器人消息推送配置]: https://developer.work.weixin.qq.com/document/path/91770
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Final, Mapping
+from typing import Any, Final, Mapping, Sequence
 
 from . import messages as msg
 from .models import Content, Event, EventKind, Kind
 
 SEVERITY: Final[Mapping[EventKind, str]] = {
     EventKind.NEW_POST: "info",
-    # 不是故障，是曝光被平台限制住了——比 info 稍需注意，但远不到 warning
     EventKind.HIDDEN_FROM_GUEST: "info",
     EventKind.POST_REMOVED: "warning",
     EventKind.ALL_GONE: "error",
@@ -37,6 +63,16 @@ SEVERITY: Final[Mapping[EventKind, str]] = {
     EventKind.TRIMMED: "info",
     EventKind.INITIALIZED: "info",
 }
+
+#: 正文上限（UTF-8 字节）。企业微信 4096 是硬上限，留 500+ 字节余量给各家客户端
+#: 对换行/表情的差异；超了按行边界截断（见 `_cap`）。
+MAX_BODY_BYTES: Final[int] = 3500
+#: 单条作品标题的展示上限（字符）。面板与事件表里仍是全文。
+TITLE_CLIP: Final[int] = 80
+#: 列表类事件一次最多列几条（其余折成一句"另有 N 条"）
+MAX_LIST_ITEMS: Final[int] = 10
+
+_URL_OK = re.compile(r"^https?://[^\s()<>\"']+$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,8 +100,68 @@ class Message:
         }
 
 
-def _join(*lines: str | None) -> str:
-    return "\n".join(line for line in lines if line)
+# --------------------------------------------------------------- 版式基础件
+def _clip(raw: Any, limit: int = TITLE_CLIP) -> str:
+    """把**原始值**截断（转义之前）。见模块头注释：顺序反了会切坏转义序列。"""
+    # 只有 None 算"没有值"：0 / False / {} 都是有效值，`raw or ""` 会把它们吞成空串
+    text = "" if raw is None else str(raw)
+    return text[: limit - 1] + "…" if len(text) > limit else text
+
+
+def _val(raw: Any, limit: int = 120) -> str:
+    """字段值：**压成一行**（控制字符与换行换空格）**再转义**。
+
+    外部字符串（标题、上游报错、账号 ID）都可能带换行；带进 `- **标签**：值` 这种一行式
+    字段里，换行就会撑出一个裸段落行——而钉钉会把裸行折叠进上一行，整段就花了。
+    """
+    return msg.md_escape(msg.one_line(_clip(raw, limit)))
+
+
+def _title(value: Any, limit: int = TITLE_CLIP) -> str:
+    return _val(value, limit) or msg.PLACEHOLDER_NO_TITLE
+
+
+def _field(label: str, value: Any) -> str:
+    """一个字段行：`- **标签**：值`。**必须是列表项**——裸文本行会被钉钉折叠掉。"""
+    return f"- **{label}**：{value}"
+
+
+def _item(text: str) -> str:
+    """列表项（多条目事件用：一条作品一行）。"""
+    return f"- {text}"
+
+
+def _link(label: str, url: Any) -> str | None:
+    """可点链接。URL 不合法（含空格/括号/引号，或不是 http(s)）就**不放**这一行——
+    放进去只会把整行的 markdown 链接语法弄坏，不如不给。"""
+    target = str(url or "").strip()
+    return _item(f"[{label}]({target})") if _URL_OK.match(target) else None
+
+
+def _titles(template: str, plain_name: str, md_name: str, **fields: Any) -> tuple[str, str]:
+    """同一句话的两种形态：
+
+    - **subject**：进通知栏、Bark 标题、Server 酱标题，必须是**纯文本**（不能有 `\\*` 这种
+      转义残留，那边不做 markdown 解析，会原样显示）；
+    - **heading**：放进 `### ` 的那一份，昵称要转义（否则昵称里的 `*` / `#` 会改版式）。
+    """
+    return (
+        template.format(nickname=plain_name, **fields),
+        template.format(nickname=md_name, **fields),
+    )
+
+
+def _card(heading: str, rows: Sequence[str], note: str = "") -> str:
+    """统一版式：`### 标题` + 空行 + 列表 + 空行 + 引用。
+
+    每一行都是块级元素；块之间空行。这是"各家客户端都能正确分行"的唯一稳妥写法。
+    """
+    blocks = [f"### {heading}"]
+    if rows:
+        blocks.append("\n".join(rows))
+    if note:
+        blocks.append(f"> {note}")
+    return "\n\n".join(blocks)
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -73,19 +169,76 @@ def _as_list(value: Any) -> list[Any]:
     return list(value) if isinstance(value, (list, tuple)) else []
 
 
-def _title(value: Any) -> str:
-    return msg.md_escape(str(value or "")) or "(无标题)"
+def _entries(payload: Mapping[str, Any], key: str) -> list[Mapping[str, Any]]:
+    """取列表里的**字典**条目：这条路径上抛异常等于"这条通知永远发不出去"。"""
+    return [item for item in _as_list(payload.get(key)) if isinstance(item, Mapping)]
+
+
+def _list_rows(items: Sequence[Mapping[str, Any]]) -> list[str]:
+    """多条目事件的列表：`- 标题 · 时间（置顶）`。"""
+    rows = []
+    for item in items[:MAX_LIST_ITEMS]:
+        when = msg.fmt_time(_parse(item.get("created_at")))
+        mark = f"（{msg.MARK_TOP}）" if item.get("is_top") else ""
+        rows.append(_item(f"{_title(item.get('title'))}{mark} · {when}"))
+    if len(items) > MAX_LIST_ITEMS:
+        rows.append(_item(msg.MORE_ITEMS.format(count=len(items) - MAX_LIST_ITEMS)))
+    return rows
 
 
 def _context_rows(payload: Mapping[str, Any]) -> list[str]:
-    """`revived` / `title_changed` 共用的补充行：类型与链接（`diff` 顺手带上的）。"""
+    """`revived` / `title_changed` 共用的补充行：类型与作品页链接（`diff` 顺手带上的）。"""
     rows: list[str] = []
     raw_kind = payload.get("kind")
     if raw_kind:
-        rows.append(f"**{msg.ROW_TYPE}**：{msg.kind_label(Kind.parse(raw_kind))}")
-    if payload.get("web_url"):
-        rows.append(f"**{msg.ROW_LINK}**：{payload['web_url']}")
+        rows.append(_field(msg.ROW_TYPE, msg.kind_label(Kind.parse(raw_kind))))
+    link = _link(msg.LINK_POST, payload.get("web_url"))
+    if link:
+        rows.append(link)
     return rows
+
+
+def _cap(markdown: str, limit: int = MAX_BODY_BYTES) -> str:
+    """超长正文在**行边界**截断，并附一句说明。
+
+    只按整行保留：切在行中间会切坏 `**`、`](` 这些成对语法，通知看起来就是坏的。
+    """
+    if len(markdown.encode("utf-8")) <= limit:
+        return markdown
+    marker = f"> {msg.NOTE_TRUNCATED}"
+    budget = limit - len((marker + "\n\n").encode("utf-8"))
+    kept: list[str] = []
+    used = 0
+    for line in markdown.split("\n"):
+        size = len(line.encode("utf-8")) + 1
+        if used + size > budget:
+            break
+        kept.append(line)
+        used += size
+    return "\n".join(kept).rstrip() + "\n\n" + marker
+
+
+_ESCAPE_INVERSE = re.compile(r"\\(.)")
+_MD_LINK = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
+
+
+def _to_text(markdown: str) -> str:
+    """纯文本形态（Telegram/Bark/webhook）：去掉只对 markdown 有意义的东西。
+
+    三件事：`### ` 标题前缀、`**加粗**`、`[文字](url)` → `文字 <url>`（纯文本里点不开，
+    所以把地址显式写出来），以及 `md_escape` 加的那些反斜杠转义（单遍替换正好是它的逆）。
+    """
+    lines = []
+    for line in markdown.split("\n"):
+        if line.startswith("### "):
+            lines.append(line[4:])
+        elif line.startswith("> "):
+            lines.append("  " + line[2:])
+        else:
+            lines.append(line)
+    text = _MD_LINK.sub(lambda m: f"{m.group(1)} <{m.group(2)}>", "\n".join(lines))
+    text = _ESCAPE_INVERSE.sub(r"\1", text)
+    return text.replace("**", "").replace("\u200b", "")
 
 
 def render_event(event: Event, *, now: datetime | None = None) -> Message:
@@ -94,159 +247,154 @@ def render_event(event: Event, *, now: datetime | None = None) -> Message:
     severity = SEVERITY.get(event.kind, "info")
 
     subject, markdown = _build(event, payload, nickname, now)
-    # 纯文本版：去掉 Markdown 加粗与引用符号，保留结构
-    text = markdown.replace("\u200b", "").replace("**", "").replace("\n> ", "\n  ")
+    markdown = _cap(markdown)
     return Message(
         event=event.kind,
         severity=severity,
         subject=subject,
         markdown=markdown,
-        text=text,
+        text=_to_text(markdown),
         sec_user_id=event.sec_user_id or None,
         content_id=event.content_id,
     )
 
 
+# ------------------------------------------------------------------- 各事件
 def _build(
     event: Event, payload: Mapping[str, Any], nickname: str, now: datetime | None
 ) -> tuple[str, str]:
     kind = event.kind
-    safe_name = msg.md_escape(nickname)
+    # 昵称两态：纯文本版进通知栏，转义版进 `### ` 标题（见 `_titles`）
+    plain_name = msg.one_line(_clip(nickname, 40))
+    md_name = msg.md_escape(plain_name)
 
     if kind is EventKind.NEW_POST:
         content: Content | None = payload.get("content")
-        if content is None:  # pragma: no cover - 防御
-            return msg.T_NEW_POST.format(nickname=safe_name, kind_label=msg.KIND_UNKNOWN), safe_name
-        kind_label = msg.kind_label(content.kind, content.image_count)
-        subject = msg.T_NEW_POST.format(nickname=safe_name, kind_label=kind_label)
+        if content is None:
+            # 防御：没有 content 也要给一条**结构完整**的通知（曾经这里直接返回昵称，
+            # 那是个裸段落行——钉钉会把它折叠掉，出来的通知等于没有正文）
+            subject, heading = _titles(msg.T_NEW_POST, plain_name, md_name,
+                                       kind_label=msg.KIND_UNKNOWN)
+            return subject, _card(heading, [_item("上游没有返回作品详情，这一轮只有事件记录")])
 
-        gap_days = payload.get("gap_days")
+        kind_label = msg.kind_label(content.kind, content.image_count)
+        subject, heading = _titles(msg.T_NEW_POST, plain_name, md_name, kind_label=kind_label)
+
         published = msg.fmt_time(content.created_at)
-        if gap_days is not None:
+        if payload.get("gap_days") is not None:
             published = f"{published}（{msg.GAP_NOTE.format(gap=msg.fmt_gap(content.created_at, now))}）"
 
         rows = [
-            f"**{msg.ROW_TITLE}**：{msg.md_escape(content.title) or '(无标题)'}",
-            f"**{msg.ROW_TYPE}**：{kind_label}",
-            f"**{msg.ROW_PUBLISHED}**：{published}",
+            _field(msg.ROW_TITLE, _title(content.title)),
+            _field(msg.ROW_TYPE, kind_label),
+            _field(msg.ROW_PUBLISHED, published),
         ]
         duration = msg.fmt_duration(content.duration_ms)
         if duration and content.has_video:
-            rows.append(f"**{msg.ROW_DURATION}**：{duration}")
+            rows.append(_field(msg.ROW_DURATION, duration))
         stats = msg.fmt_stats(content)
         if stats:
-            rows.append(f"**{msg.ROW_STATS}**：{stats}")
+            rows.append(_field(msg.ROW_STATS, stats))
         tags = msg.fmt_tags(content.tags)
         if tags:
-            rows.append(f"**{msg.ROW_TAGS}**：{tags}")
-        if content.cover_url:
-            rows.append(f"**{msg.ROW_COVER}**：{content.cover_url}")
-        if content.web_url:
-            rows.append(f"**{msg.ROW_LINK}**：{content.web_url}")
-        return subject, _join(f"### {subject}", "", *rows)
+            rows.append(_field(msg.ROW_TAGS, tags))
+        for link in (_link(msg.LINK_COVER, content.cover_url), _link(msg.LINK_POST, content.web_url)):
+            if link:
+                rows.append(link)
+        return subject, _card(heading, rows)
 
     if kind in (EventKind.POST_REMOVED, EventKind.ALL_GONE):
-        # 只认字典条目：这条路径上抛异常等于"这条通知永远发不出去"，而畸形条目本身
-        # 不是需要报告的事情（`diff` 只会给字典，这里是纵深防御）
-        removed = [item for item in _as_list(payload.get("removed")) if isinstance(item, Mapping)]
+        removed = _entries(payload, "removed")
         all_gone = bool(payload.get("all_gone")) or kind is EventKind.ALL_GONE
         template = msg.T_ALL_GONE if all_gone else msg.T_POST_REMOVED
-        subject = template.format(nickname=safe_name, count=len(removed))
-        rows = []
-        for item in removed[:10]:
-            when = msg.fmt_time(_parse(item.get("created_at")))
-            mark = "（置顶）" if item.get("is_top") else ""
-            rows.append(f"- {msg.md_escape(str(item.get('title') or '(无标题)'))}{mark} · {when}")
-        if len(removed) > 10:
-            rows.append(f"- …另有 {len(removed) - 10} 条")
+        subject, heading = _titles(template, plain_name, md_name, count=len(removed))
         note = msg.NOTE_ALL_GONE if all_gone else ""
-        return subject, _join(f"### {subject}", "", *rows, note)
+        return subject, _card(heading, _list_rows(removed), note)
 
     if kind is EventKind.REVIVED:
-        subject = msg.T_REVIVED.format(nickname=safe_name)
-        rows = [f"**{msg.ROW_TITLE}**：{_title(payload.get('title'))}"]
-        rows.extend(_context_rows(payload))
-        return subject, _join(f"### {subject}", "", *rows)
+        subject, heading = _titles(msg.T_REVIVED, plain_name, md_name)
+        rows = [_field(msg.ROW_TITLE, _title(payload.get("title"))), *_context_rows(payload)]
+        return subject, _card(heading, rows)
 
     if kind is EventKind.HIDDEN_FROM_GUEST:
-        # 同一轮可能有多条：和 POST_REMOVED 一样按列表渲染，只认字典条目
-        hidden = [item for item in _as_list(payload.get("hidden")) if isinstance(item, Mapping)]
-        subject = msg.T_HIDDEN_FROM_GUEST.format(nickname=safe_name, count=len(hidden))
-        rows = []
-        for item in hidden[:10]:
-            when = msg.fmt_time(_parse(item.get("created_at")))
-            rows.append(f"- {msg.md_escape(str(item.get('title') or '(无标题)'))} · {when}")
-        if len(hidden) > 10:
-            rows.append(f"- …另有 {len(hidden) - 10} 条")
-        return subject, _join(f"### {subject}", "", *rows, msg.NOTE_HIDDEN_FROM_GUEST)
+        # 静默事件（只落库 + 面板可见）：这里保留可读形态是为了日志与排障
+        hidden = _entries(payload, "hidden")
+        subject, heading = _titles(msg.T_HIDDEN_FROM_GUEST, plain_name, md_name, count=len(hidden))
+        return subject, _card(heading, _list_rows(hidden), msg.NOTE_HIDDEN_FROM_GUEST)
 
     if kind is EventKind.TITLE_CHANGED:
-        subject = msg.T_TITLE_CHANGED.format(nickname=safe_name)
+        subject, heading = _titles(msg.T_TITLE_CHANGED, plain_name, md_name)
         rows = [
-            f"**{msg.ROW_TITLE_OLD}**：{_title(payload.get('old'))}",
-            f"**{msg.ROW_TITLE_NEW}**：{_title(payload.get('new'))}",
+            _field(msg.ROW_TITLE_OLD, _title(payload.get("old"))),
+            _field(msg.ROW_TITLE_NEW, _title(payload.get("new"))),
+            *_context_rows(payload),
         ]
-        rows.extend(_context_rows(payload))
-        return subject, _join(f"### {subject}", "", *rows)
+        return subject, _card(heading, rows)
 
     if kind is EventKind.GAP_DETECTED:
-        subject = msg.T_GAP.format(nickname=safe_name)
-        note = msg.NOTE_GAP.format(fetch_count=payload.get("fetch_count"))
+        subject, heading = _titles(msg.T_GAP, plain_name, md_name)
         rows = [
-            f"- 本页最旧作品的发布时间：{msg.fmt_time(_parse(payload.get('oldest_in_page')))}",
-            f"- 上一轮见到的最新作品：{msg.fmt_time(_parse(payload.get('previous_newest')))}",
+            _field(msg.ROW_OLDEST, msg.fmt_time(_parse(payload.get("oldest_in_page")))),
+            _field(msg.ROW_PREVIOUS, msg.fmt_time(_parse(payload.get("previous_newest")))),
         ]
-        return subject, _join(f"### {subject}", "", *rows, note)
+        note = msg.NOTE_GAP.format(fetch_count=payload.get("fetch_count"))
+        return subject, _card(heading, rows, note)
 
     if kind is EventKind.NEVER_SEEN:
-        subject = msg.T_NEVER_SEEN.format(nickname=safe_name)
+        subject, heading = _titles(msg.T_NEVER_SEEN, plain_name, md_name)
         rows = [
-            f"- 账号：`{event.sec_user_id}`",
-            f"- 已连续 {payload.get('rounds', '?')} 轮返回空列表",
+            _field(msg.ROW_ACCOUNT, _val(event.sec_user_id)),
+            _field(msg.ROW_ROUNDS, _val(payload.get("rounds") or "?", 20)),
         ]
-        return subject, _join(f"### {subject}", "", *rows, msg.NOTE_NEVER_SEEN)
+        return subject, _card(heading, rows, msg.NOTE_NEVER_SEEN)
 
     if kind is EventKind.ACCOUNT_FAILED:
-        fails = payload.get("fails")
-        subject = msg.T_ACCOUNT_FAILED.format(nickname=safe_name, fails=fails)
+        subject, heading = _titles(msg.T_ACCOUNT_FAILED, plain_name, md_name,
+                                   fails=_val(payload.get("fails") or "?", 10))
         rows = [
-            f"- 错误码：`{payload.get('code')}`",
-            f"- 详情：{msg.md_escape(str(payload.get('message') or ''))}",
+            _field(msg.ROW_FAILS, _val(payload.get("fails") or "?", 10)),
+            _field(msg.ROW_CODE, _val(payload.get("code") or "?", 40)),
+            _field(msg.ROW_DETAIL, _val(payload.get("message") or "（上游没有给出详情）")),
         ]
-        note = msg.NOTE_CONFIG.format(code=payload.get("code")) if payload.get("config") else ""
-        return subject, _join(f"### {subject}", "", *rows, note)
+        note = msg.NOTE_CONFIG.format(code=_val(payload.get("code"), 40)) if payload.get("config") else ""
+        return subject, _card(heading, rows, note)
 
     if kind is EventKind.ACCOUNT_RECOVERED:
-        subject = msg.T_ACCOUNT_RECOVERED.format(nickname=safe_name)
-        rows = [f"- 此前连续失败 {payload.get('fails')} 次，本轮已成功读取"]
-        return subject, _join(f"### {subject}", "", *rows)
+        subject, heading = _titles(msg.T_ACCOUNT_RECOVERED, plain_name, md_name)
+        rows = [_item(f"此前连续失败 {_val(payload.get('fails') or "?", 10)} 次，本轮已成功读取")]
+        return subject, _card(heading, rows)
 
     if kind is EventKind.STALE_NO_UPDATE:
-        days = payload.get("days")
-        subject = msg.T_STALE.format(nickname=safe_name, days=days)
+        days = _val(payload.get("days") or "?", 10)
+        subject, heading = _titles(msg.T_STALE, plain_name, md_name, days=days)
+        # 这两行是"陈述"而不是"字段"，所以不套 `**标签**：`：套上去会读成
+        # "发布：已 14 天没有新作品"（标签和值在说两件事）
         rows = [
-            f"- 已 {days} 天没有新作品",
-            "- 这条提醒只会发一次，该账号发布新作品后会重新计时",
+            _item(f"已 {days} 天没有新作品"),
+            _item("只提醒一次，该账号发布新作品后重新计时"),
         ]
-        return subject, _join(f"### {subject}", "", *rows)
+        return subject, _card(heading, rows)
 
     if kind is EventKind.UPSTREAM_DEGRADED:
-        subject = msg.T_UPSTREAM
+        subject = heading = msg.T_UPSTREAM
         rows = [
-            f"- 错误码：`{payload.get('code')}`",
-            f"- 已出现的轮次：{payload.get('rounds', 1)}",
-            f"- 影响：全局闸门已关闭 {payload.get('gate_seconds', '?')} 秒，本轮整体跳过",
+            _field(msg.ROW_CODE, _val(payload.get("code") or "?", 40)),
+            _field(msg.ROW_ROUNDS, _val(payload.get("rounds") or "?", 10)),
+            _field(msg.ROW_IMPACT,
+                   f"全局闸门关闭 {_val(payload.get('gate_seconds') or "?", 10)} 秒，本轮整体跳过"),
         ]
-        return subject, _join(f"### {subject}", "", *rows, msg.NOTE_GATE)
+        return subject, _card(heading, rows, msg.NOTE_GATE)
 
     if kind is EventKind.SELF_DEGRADED:
-        subject = msg.T_SELF
-        rows = [f"- 原因：{msg.md_escape(str(payload.get('reason') or '未知'))}"]
-        return subject, _join(f"### {subject}", "", *rows)
+        subject = heading = msg.T_SELF
+        rows = [_field(msg.ROW_REASON, _val(payload.get("reason") or "未知"))]
+        return subject, _card(heading, rows)
 
-    # 静默事件（不推送）也留一个可读形态，便于写日志
-    subject = f"[{kind.value}] {safe_name}"
-    return subject, _join(f"### {subject}", "", f"- {payload}")
+    # 其余静默事件（不推送）也留一个可读形态，便于写日志；载荷是外部数据，同样要压成
+    # 一行并转义，否则标题里的反引号/竖线会直接改写这条日志的 markdown
+    subject = f"[{kind.value}] {plain_name}"
+    heading = f"[{kind.value}] {md_name}"
+    return subject, _card(heading, [_item(f"载荷：{_val(payload, 200) if payload else '（无额外字段）'}")])
 
 
 def _parse(raw: Any) -> datetime | None:
@@ -261,4 +409,4 @@ def _parse(raw: Any) -> datetime | None:
         return None
 
 
-__all__ = ["Message", "SEVERITY", "render_event"]
+__all__ = ["MAX_BODY_BYTES", "Message", "SEVERITY", "TITLE_CLIP", "render_event"]

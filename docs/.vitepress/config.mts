@@ -78,6 +78,7 @@ export default defineConfig({
           text: '参考',
           items: [
             { text: '事件类型', link: '/reference/events' },
+            { text: '通知文案', link: '/reference/message-templates' },
             { text: '权限 / API Key', link: '/reference/permissions' },
           ],
         },

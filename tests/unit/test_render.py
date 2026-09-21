@@ -51,8 +51,11 @@ def test_new_post_message_carries_the_useful_fields():
 
     assert "示例账号" in message.subject
     assert "视频" in message.subject
-    for fragment in ("标题", "类型", "发布", "时长", "数据", "话题", "封面", "链接"):
+    for fragment in ("标题", "类型", "发布", "时长", "数据", "话题"):
         assert fragment in message.markdown
+    # 两处链接要写成可点的 markdown 链接（纯 URL 在钉钉里点不开）
+    assert "[查看封面图](https://" in message.markdown
+    assert "[打开作品](https://www.douyin.com/video/7496063824002403638)" in message.markdown
     assert "1 天" in message.markdown or "3 天" in message.markdown
     assert "46.3万" in message.markdown  # 点赞数按中文习惯缩写
 
@@ -194,20 +197,6 @@ def test_newest_post_at_takes_the_latest_and_ignores_missing_dates():
     assert newest_post_at(posts) == NOW - timedelta(days=1)
     assert newest_post_at((PostState(content_id="c"),)) is None
     assert newest_post_at(()) is None
-
-
-def test_newest_post_at_takes_the_latest_and_ignores_missing_dates():
-    """置顶也算：它的发布时间是真的，只是被作者置顶了；缺时间的那条不参与比较。"""
-    posts = (
-        PostState(content_id="a", created_at=NOW - timedelta(days=30), is_top=True),
-        PostState(content_id="b", created_at=NOW - timedelta(days=1)),
-        PostState(content_id="c"),  # 抖音偶尔不返回 created_at
-    )
-    assert newest_post_at(posts) == NOW - timedelta(days=1)
-    assert newest_post_at((PostState(content_id="c"),)) is None
-    assert newest_post_at(()) is None
-
-
 def test_one_line_strips_control_characters_and_truncates():
     """昵称/标题来自上游，进日志这类"一行一条"的出口前必须压平。
 
@@ -243,7 +232,7 @@ def test_revived_and_title_changed_render_with_context():
     assert "旧标题" in changed.markdown and "新标题" in changed.markdown
     assert "图文" in changed.markdown
     # 没有链接就不该凭空造一个
-    assert "链接" not in changed.markdown
+    assert "[打开作品]" not in changed.markdown
 
 
 def test_revived_without_context_still_renders():
@@ -253,62 +242,6 @@ def test_revived_without_context_still_renders():
     )
     assert "作品回归" in message.subject
     assert "(无标题)" in message.markdown
-
-
-def test_revived_and_title_changed_render_with_context():
-    """这两个事件现在会推送，因此必须有像样的文案（种类 + 链接来自 diff 带上的 payload）。"""
-    revived = render_event(
-        Event(
-            EventKind.REVIVED, sec_user_id="u1", nickname="阿直", content_id="p1",
-            payload={"title": "老作品", "kind": "video", "web_url": "https://www.douyin.com/video/1"},
-        )
-    )
-    assert "作品回归" in revived.subject and "阿直" in revived.subject
-    assert "老作品" in revived.markdown and "视频" in revived.markdown
-    assert "https://www.douyin.com/video/1" in revived.markdown
-
-    changed = render_event(
-        Event(
-            EventKind.TITLE_CHANGED, sec_user_id="u1", nickname="阿直", content_id="p1",
-            payload={"old": "旧标题", "new": "新标题", "kind": "image_album", "web_url": ""},
-        )
-    )
-    assert "标题变更" in changed.subject
-    assert "旧标题" in changed.markdown and "新标题" in changed.markdown
-    assert "图文" in changed.markdown
-    # 没有链接就不该凭空造一个
-    assert "链接" not in changed.markdown
-
-
-def test_revived_without_context_still_renders():
-    """payload 缺字段（老数据、上游没给）时也不能炸，只是少几行。"""
-    message = render_event(
-        Event(EventKind.REVIVED, sec_user_id="u1", nickname="阿直", content_id="p1", payload={})
-    )
-    assert "作品回归" in message.subject
-    assert "(无标题)" in message.markdown
-
-
-def test_removed_payload_of_the_wrong_shape_still_renders():
-    """`removed` 不是列表或夹着非字典条目时也不能抛——渲染路径抛异常等于通知发不出去。"""
-    for payload in ({"removed": None}, {"removed": "不是列表"}, {"removed": [None, 1, "x"]},
-                    {"removed": [{"title": "正常一条"}]}):
-        for kind in (EventKind.POST_REMOVED, EventKind.ALL_GONE):
-            message = render_event(
-                Event(kind, sec_user_id="u1", nickname="阿直", content_id="1", payload=payload)
-            )
-            assert message.subject and message.markdown
-    # 正常条目照旧显示，畸形条目被跳过（计数也不含它们）
-    message = render_event(
-        Event(
-            EventKind.POST_REMOVED, sec_user_id="u1", nickname="阿直", content_id="1",
-            payload={"removed": [None, {"title": "正常一条"}]},
-        )
-    )
-    assert "有 1 条作品已确认消失" in message.subject
-    assert "正常一条" in message.markdown
-
-
 def test_removed_payload_of_the_wrong_shape_still_renders():
     """`removed` 不是列表或夹着非字典条目时也不能抛——渲染路径抛异常等于通知发不出去。"""
     for payload in ({"removed": None}, {"removed": "不是列表"}, {"removed": [None, 1, "x"]},

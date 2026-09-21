@@ -64,7 +64,6 @@ class EventKind(StrEnum):
 NOTIFY_KINDS: frozenset[EventKind] = frozenset(
     {
         EventKind.NEW_POST,
-        EventKind.HIDDEN_FROM_GUEST,
         EventKind.POST_REMOVED,
         EventKind.ALL_GONE,
         EventKind.REVIVED,
@@ -79,9 +78,19 @@ NOTIFY_KINDS: frozenset[EventKind] = frozenset(
     }
 )
 
-#: 静默事件（只改状态，不推送）：它们是"窗口挪动"的机械后果，报出来只会淹掉真正该看的东西
+#: 静默事件（只改状态，不推送）。两类：
+#:
+#: - `scrolled_out` / `trimmed` / `initialized` 是"窗口挪动"的机械后果；
+#: - `hidden_from_guest` 是**平台对访客的展示限制**，不是账号出了什么事、也不用用户做任何
+#:   动作。报出来只会淹掉真正该看的（新作品、作品消失），所以只落库 + 面板可见
+#:   （详情里能查到是哪几条、从什么时候起），不推送。
 SILENT_KINDS: frozenset[EventKind] = frozenset(
-    {EventKind.SCROLLED_OUT, EventKind.TRIMMED, EventKind.INITIALIZED}
+    {
+        EventKind.SCROLLED_OUT,
+        EventKind.TRIMMED,
+        EventKind.INITIALIZED,
+        EventKind.HIDDEN_FROM_GUEST,
+    }
 )
 
 
