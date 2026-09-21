@@ -809,6 +809,75 @@ def test_strip_from_removals_never_breaks_an_event_with_a_hostile_payload():
     assert _strip_from_removals((all_hidden,), {"h1"}) == (), "整条都是假象时撤销这条事件"
 
 
+async def test_fallback_engages_even_before_any_baseline_exists(tmp_path):
+    """功能是在账号**已经被监控很久之后**才打开的情况：`INITIALIZED` 早就发过了。
+
+    于是既没有基准值、也没有事件，保底如果被"必须已有基准时间戳"挡住，这个账号可能**永远**
+    等不到核验（DESIGN 修正 #20）。放开它最多多一次请求：成功就建立基准值，失败也会推时间戳。
+    """
+    now = datetime.now(timezone.utc)
+    author = AuthorState(
+        sec_user_id="u1", nickname="示例", ever_had_posts=True, runs=99,
+        initialized_at=now - timedelta(days=30),          # 早就初始化过，不会再发 INITIALIZED
+        last_update_at=now - timedelta(minutes=1), last_seen_at=now - timedelta(minutes=1),
+        baseline_content_count=None, baseline_content_count_at=None,   # 从没核验过
+        posts=(PostState(content_id="v1", title="标题v1", created_at=now - timedelta(days=2),
+                         last_seen_at=now),),
+    )
+    client = Client(posts_items=(make_content("v1", created_at=now - timedelta(days=2),
+                                              title="标题v1"),), content_count=1)
+
+    _result, store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client,
+        hidden_check=_hidden_check(PinClient()), now=now,
+    )
+
+    assert client.profile_calls == 1, "没有基准值也该被保底拉起来核对一次"
+    state = store.load_authors()["u1"]
+    assert state.baseline_content_count == 1, "这一轮只建立基准值"
+    assert state.baseline_content_count_at is not None, "时间戳要立起来，之后走正常间隔"
+
+
+async def test_emptied_account_clears_the_marked_records(tmp_path):
+    """账号被清空（Douyin 说 0 条、登录页也空）：带标记的记录必须一起清掉。
+
+    它们不参与缺席判定（`diff` 跳过），而反查路径又因为登录页为空算不出窗口 → 不特判的话
+    会**永久**卡在已知作品里，面板上永远挂着"对访客不可见"，而那几条作品其实早没了。
+    """
+    now = datetime.now(timezone.utc)
+    author = AuthorState(
+        sec_user_id="u1", nickname="示例", ever_had_posts=True, runs=5,
+        initialized_at=now - timedelta(days=30),
+        last_update_at=now - timedelta(minutes=1), last_seen_at=now - timedelta(minutes=1),
+        baseline_content_count=2, baseline_content_count_at=now - timedelta(minutes=1),
+        posts=(
+            PostState(content_id="v1", title="标题v1", created_at=now - timedelta(days=2),
+                      last_seen_at=now - timedelta(minutes=1)),
+            PostState(content_id="h2", title="标题h2", created_at=now - timedelta(days=1),
+                      last_seen_at=now - timedelta(minutes=1),
+                      hidden_from_guest_at=now - timedelta(hours=1)),
+        ),
+    )
+    client = Client(posts_items=(), content_count=0)      # 访客列表空 + Douyin 说 0 条
+    pin = PinClient(posts_items=())                       # 登录视角也是空页
+    # 让保底到期，这样这一轮就会去核对总数（否则要等"全体消失"确认出事件才触发）
+    author = author.with_updates(baseline_content_count_at=now - timedelta(hours=1))
+
+    result, store, _notifier, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client,
+        hidden_check=_hidden_check(pin), now=now,
+    )
+
+    state = store.load_authors()["u1"]
+    # 带标记的那条当场就清掉了；不带标记的 `v1` 走另一条路径（"全体消失"要等 3 轮），
+    # 这条测试只管带标记的
+    assert all(p.content_id != "h2" for p in state.posts), "带标记的记录不能永久留着"
+    assert "h2" in {t.content_id for t in state.tombstones}
+    removed = [item["content_id"] for e in result.events
+               if e.kind is EventKind.POST_REMOVED for item in (e.payload.get("removed") or [])]
+    assert "h2" in removed, "它确实没了，要报出来"
+
+
 async def test_verified_log_records_post_count_and_direction(tmp_path):
     """`hidden_check.verified` 记的是**条数**和方向，不是事件数。
 

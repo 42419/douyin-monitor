@@ -277,10 +277,17 @@ async def _check_hidden_posts(
     # 有两类变化在访客视角完全不留痕迹（新作品从发布起就不可见；已知对访客不可见的
     # 作品被删），上面那些事件驱动的条件永远等不到它们。
     interval = cfg.hidden_check_interval_seconds
+    # `baseline_content_count_at is None` 也算"该核对"：功能是在**账号已经被监控之后**才打开的
+    # 情况下（线上就是这么切换的），`INITIALIZED` 早就发过了，于是既没有基准值、也没有事件，
+    # 保底又被这个 `is not None` 挡住 → 这个账号可能**永远**等不到核验。
+    # 放开它是安全的：最多只多一次请求——成功就建立了基准值，失败也会把时间戳推到"现在"
+    # （见下面的失败分支），下一次就回到正常间隔。
     due_for_sample = bool(
         interval > 0
-        and prev.baseline_content_count_at is not None
-        and (now - prev.baseline_content_count_at).total_seconds() >= interval
+        and (
+            prev.baseline_content_count_at is None
+            or (now - prev.baseline_content_count_at).total_seconds() >= interval
+        )
     )
 
     if not (initialized or new_count > 0 or removed_count > 0 or stale_triggered or due_for_sample):
@@ -372,7 +379,9 @@ async def _check_hidden_posts(
                 _log(logger, "info", "hidden_check.removal_stripped",
                      sec_user_id=prev.sec_user_id, count=removed_before - removed_after)
         else:
-            verified_events, next_state = _confirm_hidden_removals(next_state, page, now)
+            verified_events, next_state = _confirm_hidden_removals(
+                next_state, page, now, account_total=actual
+            )
 
     if verified_events:
         # 缺口被解释清楚了：基准值推进、未解决计数清零
@@ -520,7 +529,7 @@ def _mark_hidden_from_guest(
 
 
 def _confirm_hidden_removals(
-    state: AuthorState, page: Any, now: datetime
+    state: AuthorState, page: Any, now: datetime, *, account_total: int | None = None
 ) -> tuple[tuple[Event, ...], AuthorState]:
     """总数比预期少：检查已知"对访客不可见"的作品在登录视角里还在不在。
 
@@ -529,16 +538,24 @@ def _confirm_hidden_removals(
 
     只判定**落在登录页窗口内**的那些作品：比窗口底部还旧的可能只是没出现在这一页，
     据此判删除会误报（窗口外与已删除，在单页响应里无法区分）。
+
+    **例外：账号被清空时窗口没有意义**。Douyin 自己说这个账号一条作品都没有（`account_total == 0`）、
+    登录页也空 ⇒ 没有"窗口外"这种解释，所有已知作品（含带标记的）都确实没了。不判这一条的话，
+    带标记的记录会**永久**卡在已知作品里：它们不参与缺席判定（`diff` 跳过），而这里又因为算不出
+    窗口而永远确认不了，谁也动不了它们（见 DESIGN 修正 #21）。
     """
     visible = {item.content_id for item in page.items}
     window_bottom = min((i.created_at for i in page.items if i.created_at), default=None)
+    account_empty = account_total == 0 and not page.items
     posts = {p.content_id: p for p in state.posts}
     tombstones = {t.content_id: t for t in state.tombstones}
     removed: list[dict[str, Any]] = []
     for content_id, entry in list(posts.items()):
         if entry.hidden_from_guest_at is None or content_id in visible:
             continue
-        if entry.created_at is None or window_bottom is None or entry.created_at < window_bottom:
+        if not account_empty and (
+            entry.created_at is None or window_bottom is None or entry.created_at < window_bottom
+        ):
             continue
         removed.append(
             {
