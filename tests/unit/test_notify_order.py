@@ -132,6 +132,28 @@ async def test_title_changed_is_windowed_but_new_post_is_not(tmp_path):
     assert should_send(fresh, dedup)[0] is True, "新作品没有窗口，不该被抑制"
 
 
+async def test_revived_window_is_per_post_not_per_author(tmp_path):
+    """"作品回归"的 6 小时窗口要按**作品**分桶，不是按账号。
+
+    线上踩过：一个账号的两条作品同时被恢复 → 第一条占了 `revived:作者` 这个桶，第二条被压掉，
+    且窗口不会补发（面板里两条"作品回归"、通知只来一条，等于永久丢一条）。
+    这个窗口本来要压的是"**同一条**作品反复出去又回来"，那就该按作品分桶。
+    """
+    dedup = Deduplicator()
+
+    def revived(content_id):
+        return Event(EventKind.REVIVED, sec_user_id=UID, content_id=content_id,
+                     payload={"title": f"标题{content_id}"})
+
+    first, key_a = should_send(revived("a"), dedup)
+    second, key_b = should_send(revived("b"), dedup)
+
+    assert first is True and key_a == f"revived:{UID}:a"
+    assert second is True, "同一个账号的另一条作品回归不该被连坐"
+    assert key_b == f"revived:{UID}:b"
+    assert should_send(revived("a"), dedup)[0] is False, "同一条作品 6 小时内重复才该压"
+
+
 @pytest.mark.parametrize(
     "kind",
     [EventKind.ALL_GONE, EventKind.POST_REMOVED, EventKind.REVIVED, EventKind.TITLE_CHANGED],

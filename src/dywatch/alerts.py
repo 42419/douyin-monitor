@@ -28,7 +28,12 @@ HOUR: Final[int] = 3600
 class TriggerSpec:
     severity: str
     window_seconds: int
-    #: global = 全实例一个桶；author = 每账号一个桶；none = 不抑制
+    #: 抑制窗口按什么分桶：
+    #:
+    #: - `global`：全实例一个桶（上游/自身的整体问题）
+    #: - `author`：每账号一个桶（账号级的故障与状态）
+    #: - `post`：**每条作品一个桶**（作品级的信息——同一条重复才该压，不同的两条是两件事）
+    #: - `none`：不抑制（窗口 0，靠状态里的"一次性"标记保证只报一次）
     scope: str = "global"
 
 
@@ -46,8 +51,11 @@ TRIGGERS: Final[Mapping[EventKind, TriggerSpec]] = {
     EventKind.SELF_DEGRADED: TriggerSpec("warning", 6 * HOUR, "global"),
     # 标题变更会连着来：作者发完作品再补话题标签是常态，1 小时内同一账号只报一次
     EventKind.TITLE_CHANGED: TriggerSpec("info", HOUR, "author"),
-    # 回归本身罕见，但窗口挪动可以让同一条作品反复"出去又回来"，给个宽窗口兜住这种抖动
-    EventKind.REVIVED: TriggerSpec("info", 6 * HOUR, "author"),
+    # 回归本身罕见，但窗口挪动可以让**同一条**作品反复"出去又回来"，所以给个宽窗口兜抖。
+    # 注意分桶是 `post` 而不是 `author`：这个窗口要压的是"同一条又回来了"，而不是"这个账号
+    # 又有人回归了"——线上踩过：两条作品同时被恢复，第二条被账号级窗口压掉、且不会补发，
+    # 面板里两条"作品回归"、通知只来一条（见 DESIGN 修正 #22）。
+    EventKind.REVIVED: TriggerSpec("info", 6 * HOUR, "post"),
     # `hidden_from_guest` 刻意**不在**这张表里，见下面 `NO_WINDOW_EVENTS` 里的理由
 }
 
@@ -107,6 +115,9 @@ def dedup_key(event: Event) -> str:
     spec = TRIGGERS.get(event.kind)
     if spec is None:
         return ""
+    if spec.scope == "post":
+        # 按作品分桶：同一条作品重复才压，同一个账号的**另一条**作品不该被连坐
+        return f"{event.kind.value}:{event.sec_user_id}:{event.content_id or '?'}"
     if spec.scope == "author":
         return f"{event.kind.value}:{event.sec_user_id}"
     return event.kind.value

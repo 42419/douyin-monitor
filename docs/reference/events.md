@@ -17,7 +17,7 @@
 | `stale_no_update`     | `STALE_FALLBACK_DAYS` 天没有新作品                 | ✅   | 一次性                                            |
 | `upstream_degraded`   | 上游 429/503/熔断 → 全局闸门关闭                   | ✅   | 1 小时 / 错误码                                   |
 | `self_degraded`       | 自身降级（磁盘/状态库超限）                        | ✅   | 6 小时 —— **目前没有产生点，不会出现**            |
-| `revived`             | 曾消失的作品又出现（按设计**不算**新作品）         | ✅   | 6 小时 / 账号                                     |
+| `revived`             | 曾消失的作品又出现（按设计**不算**新作品）         | ✅   | 6 小时 / 每条作品                                     |
 | `title_changed`       | 已知作品的标题变了                                 | ✅   | 1 小时 / 账号                                     |
 | `scrolled_out`        | 被新作品挤出窗口（静默清理并写 tombstone）         | —    |                                                    |
 | `trimmed`             | 超过 `KNOWN_IDS_MAX` 被裁剪（同时写 tombstone）    | —    |                                                    |
