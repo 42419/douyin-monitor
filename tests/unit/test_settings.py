@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from dywatch.targets import parse_targets
+from dywatch.targets import parse_targets
 from dywatch.settings import (
     CHANNEL_REQUIRED,
     SETTINGS,
@@ -123,6 +125,189 @@ def test_negative_fallback_interval_is_refused_rather_than_read_as_off():
                                          "DINGTALK_SECRET": "s",
                                          "HIDDEN_CHECK_INTERVAL_MINUTES": "0"})
     assert not any("低频保底" in note for note in quiet.warnings())
+
+
+def _targets_settings(raw: str, **extra):
+    env = {"DTK_API_KEY": "dtk_x", "NOTIFY_TARGETS": raw}
+    env.update(extra)
+    return load_settings(None, environ=env)
+
+
+def test_real_env_file_multi_line_targets_are_loaded(tmp_path):
+    """**从真实 `.env` 文件**走完整读取链路（python-dotenv → 解析 → 装配）。
+
+    这是之前整条链路**零覆盖**的地方：所有 `NOTIFY_TARGETS` 用例都直接把值塞进 `environ`，
+    于是没人发现"多行值里再用同一种引号 → dotenv 把整条语句丢掉 → 静默回落旧凭据"。
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DTK_API_KEY=dtk_x\n"
+        "DINGTALK_TOKEN=legacy-tok\n"
+        "DINGTALK_SECRET=SEClegacy\n"
+        'NOTIFY_TARGETS="\n'
+        "# 两个钉钉群\n"
+        "dingtalk name=市场部, token=tok-A, secret=SECa\n"
+        "dingtalk token=tok-B, secret=SECb\n"
+        "webhook url='https://example.com/a,b#frag'\n"
+        '"\n',
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file)
+    targets = settings["NOTIFY_TARGETS"]
+
+    assert settings.validate() == []
+    assert settings.sources["NOTIFY_TARGETS"] == ".env"
+    assert [t.name for t in targets.targets] == ["市场部", "dingtalk-2", "webhook"]
+    assert targets.targets[0].fields["token"] == "tok-A"
+    assert targets.targets[2].fields["url"] == "https://example.com/a,b#frag"
+
+
+def test_a_key_that_the_env_parser_dropped_is_a_startup_error(tmp_path):
+    """多行值里用了**同一种**引号 → python-dotenv 把整条语句丢掉。
+
+    丢掉之后那个键会退回默认值 —— `NOTIFY_TARGETS` 退回默认就意味着**静默回落到旧凭据**，
+    所以这里必须是启动错误（带改法），而不是"少配了一项"。
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DTK_API_KEY=dtk_x\n"
+        "DINGTALK_TOKEN=legacy-tok\n"
+        "DINGTALK_SECRET=SEClegacy\n"
+        'NOTIFY_TARGETS="\n'
+        'webhook url="https://example.com/a,b"\n'   # 外层也是双引号 → dotenv 解析不了
+        '"\n',
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file)
+    errors = settings.validate()
+
+    assert any("NOTIFY_TARGETS 没能被解析出来" in e for e in errors), errors
+    assert any("另一种" in e for e in errors), "错误里要给出改法"
+    assert not settings["NOTIFY_TARGETS"].configured, "读不出来就是没配 —— 所以必须报错拦住"
+
+
+def test_a_dropped_key_other_than_targets_is_also_reported(tmp_path):
+    """"写了却读不出来"这个检查对所有已注册的键都生效（例如引号写瘸的 WEB_PORT）。"""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        'DTK_API_KEY=dtk_x\nWEB_PORT="8080\nFETCH_COUNT=20\n',
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file)
+
+    assert any("WEB_PORT 没能被解析出来" in e for e in settings.validate()), settings.validate()
+
+
+
+    """新写法的错要指到具体哪一条，而不是含糊地说"配置有问题"。"""
+    mixed = _targets_settings("dingtalk token=x\ntelegrm bot_token=y\ntelegram chat_id=1")
+    errors = [e for e in mixed.validate() if "NOTIFY_TARGETS" in e]
+    assert any("未知渠道类型" in e for e in errors)
+    assert any("缺少必填字段" in e for e in errors)
+    assert not any("没有一个能用的目标" in e for e in errors), "第一条是好的，不该说没有渠道"
+
+    broken = _targets_settings("telegrm bot_token=y\ntelegram chat_id=1\ndingtalk secret=SECx")
+    assert any("没有一个能用的目标" in e for e in broken.validate()), "全写错时要明说没有渠道"
+
+
+def test_targets_configured_replaces_the_legacy_channel_checks():
+    """新写法生效时，`NOTIFY_CHANNELS` 那几项（含"为空"）都不该再报错。"""
+    settings = _targets_settings("telegram bot_token=1:x chat_id=-100", NOTIFY_CHANNELS="")
+
+    assert settings.validate() == []
+
+
+def test_legacy_checks_still_run_when_targets_are_not_configured():
+    settings = load_settings(None, environ={"DTK_API_KEY": "dtk_x", "NOTIFY_CHANNELS": "qq"})
+
+    assert any("未知渠道" in e for e in settings.validate())
+
+
+def test_both_writings_configured_warns_which_one_wins():
+    settings = _targets_settings(
+        "wecom key=new", NOTIFY_CHANNELS="dingtalk",
+        DINGTALK_TOKEN="old", DINGTALK_SECRET="SECold",
+    )
+
+    assert settings.validate() == []
+    assert any("新写法生效" in note for note in settings.warnings())
+
+
+def test_many_targets_warn_about_serial_sending():
+    """渠道是串行发的，目标一多会把排在后面的通知推得很晚——这件事要在启动时说清楚。"""
+    many = "\n".join(f"dingtalk token=t{i}" for i in range(4))
+    settings = _targets_settings(many)
+
+    assert any("串行" in note and "68 秒" in note for note in settings.warnings())
+
+    few = _targets_settings("dingtalk token=t0")
+    assert not any("串行" in note for note in few.warnings())
+
+
+def test_config_check_masks_target_credentials_but_shows_the_rest():
+    settings = _targets_settings("telegram bot_token=super-secret chat_id=-100 name=手机")
+
+    lines = settings.describe()
+    line = next(l for l in lines if l.startswith("NOTIFY_TARGETS"))
+    body = "\n".join(lines)
+    assert "super-secret" not in body, "凭据不能出现在 config-check 输出里"
+    assert "telegram:手机" in body and "chat_id=-100" in body, "非凭据字段要照实显示"
+    assert "1 个目标" in line, "目标数写在主行，明细一行一个"
+
+
+def test_fallback_env_reader_handles_a_quoted_multiline_value(tmp_path):
+    """python-dotenv 不在时用兜底解析器：它也必须认多行值。
+
+    不然 `NOTIFY_TARGETS` 那种写法只会读到一个孤零零的引号，**所有通知目标凭空消失**——
+    比报错难查得多。
+    """
+    from dywatch.settings import _parse_env_file
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        'DTK_API_KEY=dtk_x\n'
+        'NOTIFY_TARGETS="\n'
+        'dingtalk token=a secret=S\n'
+        'telegram bot_token=1:AA chat_id=-100\n'
+        '"\n'
+        'FETCH_COUNT=20\n',
+        encoding="utf-8",
+    )
+
+    values = _parse_env_file(env_file)
+    assert values["FETCH_COUNT"] == "20", "多行值后面的键还得读得到"
+    targets = parse_targets(values["NOTIFY_TARGETS"])
+    assert [t.kind for t in targets.targets] == ["dingtalk", "telegram"], values["NOTIFY_TARGETS"]
+    assert targets.targets[1].fields["chat_id"] == "-100"
+
+
+def test_fallback_env_reader_handles_a_quoted_multiline_value(tmp_path):
+    """python-dotenv 不在时用兜底解析器：它也必须认多行值。
+
+    不然 `NOTIFY_TARGETS` 那种写法只会读到一个孤零零的引号，**所有通知目标凭空消失**——
+    比报错难查得多。
+    """
+    from dywatch.settings import _parse_env_file
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DTK_API_KEY=dtk_x\n"
+        'NOTIFY_TARGETS="\n'
+        "dingtalk token=a secret=S\n"
+        "telegram bot_token=1:AA chat_id=-100\n"
+        '"\n'
+        "FETCH_COUNT=20\n",
+        encoding="utf-8",
+    )
+
+    values = _parse_env_file(env_file)
+    assert values["FETCH_COUNT"] == "20", "多行值后面的键还得读得到"
+    targets = parse_targets(values["NOTIFY_TARGETS"])
+    assert [t.kind for t in targets.targets] == ["dingtalk", "telegram"], values["NOTIFY_TARGETS"]
+    assert targets.targets[1].fields["chat_id"] == "-100"
 
 
 def test_env_overrides_file_and_file_overrides_default(tmp_path):

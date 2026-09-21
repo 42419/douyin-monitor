@@ -79,6 +79,7 @@
 | 键                                        | 默认                      | 说明                                                                   |
 | ------------------------------------------- | -------------------------- | -------------------------------------------------------------------------- |
 | `NOTIFY_CHANNELS`                          | `dingtalk`                 | 逗号分隔，可多开：`dingtalk,wecom,bark,serverchan,telegram,webhook`        |
+| `NOTIFY_TARGETS`                           | —                          | 通知目标（**可多实例**）：一行一个 `类型 字段=值, 字段=值`，见下面[通知目标语法](#通知目标语法) |
 | `SILENT_MODE`                              | `false`                    | 跳过全部推送，监控与面板照常                                              |
 | `NOTIFY_GAP`                               | `1.0`                      | 相邻两条通知的间隔（秒）                                                  |
 | `DINGTALK_TOKEN` / `DINGTALK_SECRET`       | —                          | 钉钉机器人（加签密钥以 `SEC` 开头）                                        |
@@ -90,6 +91,64 @@
 | `WEBHOOK_URL`                              | —                          | 通用 webhook，POST JSON                                                   |
 
 配好之后用 `dywatch test-notify` 逐渠道验证一遍。
+
+### 通知目标语法
+
+一个类型只能配一个实例时，`NOTIFY_CHANNELS` + 那一组单值键就够了；**要给同一个类型配多个**
+（两个钉钉群、两个 Telegram 会话）就用 `NOTIFY_TARGETS` —— **一行一个目标**：
+
+```bash
+NOTIFY_TARGETS="
+dingtalk name=市场部, token=xxx, secret=SECyyy
+dingtalk name=运营群, token=zzz
+# 想临时停掉某个渠道就注释掉这一行
+telegram bot_token=1:AA, chat_id=-100
+"
+```
+
+`.env` 支持带引号的多行值（记得首尾那对引号），所以读起来跟 `users.conf`（一行一个账号）是一个路子。
+
+- 每行**第一个词是类型**（后面跟不跟 `:` 都行），其余是 `key=value`，字段之间用
+  **空格或逗号**分隔（`name=市场部, token=xxx` 和空格版等价，混着写也行）
+- 也可以写成一行、用 `;` 分隔目标：`NOTIFY_TARGETS=dingtalk token=a;wecom key=k`
+- `#` 出现在一个字段的**开头**就是注释，直到行尾；**注释掉等于停用**，不用删配置
+- `key=value` 只按**第一个** `=` 切分，所以值里可以带 `=` 和 `:`（base64、Telegram 的 `123:AA` 都行）
+- 值里**不能有空格、逗号或 `;`**（都是分隔符）；要带它们（比如 URL 里就有逗号）就**加引号**：
+  `webhook url='https://x/a,b?q=1'`（**内层用单引号**，原因见下面那条）。引号没闭合会直接报错，
+  不会把后面的内容一起吞掉
+- 值里出现**没加引号**的 `#` 会报错：想写注释就在 `#` 前留一个空格，值里真要 `#`（URL 片段）
+  就加引号。这条是刻意的——不报错的话 `secret=SECx#备注` 会被当成完整密钥，加签失败、通知**静默**发不出去
+- 同一行里同一个字段写两遍（`token=A, token=B`）会报错，不静默取最后一个
+- `name=` 是**实例名**，会出现在投递记录与只读面板里，**必须全局唯一**（投递失败的记录是按名字存的
+  字典，同名会互相覆盖）。不写就按类型自动编号：`dingtalk`、`dingtalk-2`、`dingtalk-3`…
+- 写错的地方会**逐条**报错（未知类型 / 缺必填字段 / 不认识的字段 / 名字重复），启动时直接拒绝，
+  不会带着半份配置跑起来
+
+::: warning 多行值里的引号要换一种
+整个 `NOTIFY_TARGETS` 是多行值，外层已经是一对 `"`。里面的值要加引号时**必须用另一种引号**
+（`webhook url='https://x/a,b'`）：**内外同一种 `"` 会让 `.env` 解析器读不出整个键**。
+真出现这种情况时 dywatch 会直接报错、拒绝启动并提示换引号，**不会**悄悄改用旧写法。
+:::
+
+| 类型 | 必填字段 | 选填字段 |
+| --- | --- | --- |
+| `dingtalk` | `token` | `secret`（加签，以 `SEC` 开头） |
+| `wecom` | `key` | — |
+| `bark` | `device_key` | `server`（默认 `https://api.day.app`） |
+| `serverchan` | `sendkey` | — |
+| `telegram` | `bot_token`、`chat_id` | — |
+| `webhook` | `url` | — |
+
+::: tip 用 `dywatch config-check` 核对
+它会把目标**一行一个**列出来、凭据打码：`- dingtalk:市场部(secret=*** token=***)`。
+:::
+
+::: warning 目标越多，一条消息发得越久
+渠道是**串行**发送的：每个目标最坏 `2 次 × 8 秒超时 + 1 秒退避`。目标到 4 个时，一条消息最坏要
+68 秒才发完，而通知是按优先级排队发的（`新作品` 恒定最前），排在后面的会被推得更晚。
+:::
+
+配了 `NOTIFY_TARGETS` 之后，`NOTIFY_CHANNELS` 与 `DINGTALK_TOKEN` 这类单值凭据键会被忽略。
 
 ## 面板与其他
 
