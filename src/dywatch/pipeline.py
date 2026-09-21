@@ -362,7 +362,15 @@ async def _check_hidden_posts(
                 for event in verified_events
                 for item in (event.payload.get("hidden") or [])
             }
+            # 记一条：把"其实只是对访客不可见"的删除摘掉了。这一行是那种循环的显影剂——
+            # 一旦它和 `hidden_check.verified` 一起每隔几分钟出现一次，就说明标记被反复清掉
+            # 又重建（线上真发生过：访客视角会抖，见 DESIGN 修正 #19）
+            removed_before = sum(_items_in(ev, "removed") for ev in events)
             events = _strip_from_removals(events, {i for i in hidden_ids if i})
+            removed_after = sum(_items_in(ev, "removed") for ev in events)
+            if removed_after != removed_before:
+                _log(logger, "info", "hidden_check.removal_stripped",
+                     sec_user_id=prev.sec_user_id, count=removed_before - removed_after)
         else:
             verified_events, next_state = _confirm_hidden_removals(next_state, page, now)
 

@@ -182,9 +182,18 @@ def diff(
         entry = posts[content_id]
         changes: dict[str, Any] = {"last_seen_at": now, "absent_rounds": 0}
         if entry.hidden_from_guest_at is not None:
-            # 又能在访客列表里看到了 → 那个"已知不可见"的前提不成立了，清掉标记。
+            # 又能在访客列表里看到它了。**但清标记也要分级确认**：访客视角本身就会抖
+            # （这次看不到、下次看得到），见一次就清会跟下面的"缺席确认删除"来回横跳——
+            # 线上表现为同一条作品每几分钟被重新核验一次（标记清除 → 缺席 2 轮 → 确认删除
+            # → 总数出现缺口 → 定向核验 → 重新标记，闭环）。要连续 `delete_rounds` 轮都
+            # 看得到才认定"它真的又能被访客看到了"；中间有一轮看不到就归零（见下面的缺席段）。
             # 刻意不发事件：我们**从来没有报过它消失**，所以也没有"回归"可报。
-            changes["hidden_from_guest_at"] = None
+            streak = entry.hidden_seen_streak + 1
+            if streak >= cfg.delete_rounds:
+                changes["hidden_from_guest_at"] = None
+                changes["hidden_seen_streak"] = 0
+            else:
+                changes["hidden_seen_streak"] = streak
         if item.title != entry.title:
             title_changed += 1
             changes["title"] = item.title
@@ -248,7 +257,11 @@ def diff(
             # 核验确认过"这条对访客不可见"：它**缺席访客列表是预期内的**，不是可疑信号。
             # 既不计缺席、也不算被挤出窗口、更不判消失——否则每轮都会把它确认成
             # "已消失"，紧接着又被核验从登录视角填回来，两个视角来回横跳（曾经的真实故障）。
-            # 它重新出现在本页时标记会被清掉，见上面的标题同步段。
+            # 标记要连续 `delete_rounds` 轮都看得到才清（见上面的标题同步段）：所以这一轮
+            # 看不到就把"连续可见"归零——否则"看得见、看不到"交替的那种抖动会把计数慢慢
+            # 攒够，标记被清掉，循环又回来了。
+            if entry.hidden_seen_streak:
+                posts[content_id] = entry.with_updates(hidden_seen_streak=0)
             continue
         is_top = entry.is_top
 

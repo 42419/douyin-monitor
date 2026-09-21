@@ -347,11 +347,13 @@ def test_marked_post_does_not_consume_the_scroll_out_budget():
     assert {t.content_id for t in state.tombstones} == {"old"}, "预算只吸收了 old"
 
 
-def test_reappearing_marked_post_clears_the_marker_silently():
-    """它又出现在访客列表里 ⇒"对访客不可见"这个前提不成立了，静默清标记。
+def test_reappearing_marked_post_needs_consecutive_sightings_to_clear():
+    """清标记**要分级确认**：连续 `delete_rounds` 轮都能在访客列表里看到才清。
 
-    刻意不发事件：我们**从来没有报过它消失**，所以也没有"回归"可报——发「作品回归」
-    会暗示它曾经消失过，而事实是访客视角从头到尾没看到过它。
+    访客视角本身会抖（这次看不到、下次看得到）。见一次就清，会跟"缺席确认删除"来回横跳：
+    标记清掉 → 缺席 2 轮 → 确认删除 → 总数出现缺口 → 定向核验 → 重新标记，闭环——
+    线上就是这么每几分钟重核验一次的。刻意不发事件：我们**从来没有报过它消失**，
+    所以也没有"回归"可报（发「作品回归」会暗示它曾经消失过）。
     """
     prev = AuthorState(
         sec_user_id="u1",
@@ -366,11 +368,26 @@ def test_reappearing_marked_post_clears_the_marker_silently():
             ),
         ),
     )
+    seen = page(post("hidden", minutes_ago=120))
 
-    events, state = diff(prev, page=page(post("hidden", minutes_ago=120)), now=at(1), cfg=CFG)
-
+    events, first = diff(prev, page=seen, now=at(1), cfg=CFG)
     assert kinds(events) == [], "清标记是静默的，不发 REVIVED / NEW_POST"
-    assert state.post("hidden").hidden_from_guest_at is None
+    assert first.post("hidden").hidden_from_guest_at is not None, "只见到 1 轮还不够"
+    assert first.post("hidden").hidden_seen_streak == CFG.delete_rounds - 1
+
+    # 第二轮又看到了 → 够数了，清掉
+    events, second = diff(first, page=seen, now=at(2), cfg=CFG)
+    assert kinds(events) == []
+    assert second.post("hidden").hidden_from_guest_at is None
+    assert second.post("hidden").hidden_seen_streak == 0, "清掉之后计数归零"
+
+    # 反向：看得见一轮、又看不见一轮 → 计数归零，不许慢慢攒够
+    events, third = diff(prev, page=seen, now=at(1), cfg=CFG)
+    assert third.post("hidden").hidden_seen_streak == CFG.delete_rounds - 1
+    events, fourth = diff(third, page=page(), now=at(2), cfg=CFG)
+    assert fourth.post("hidden").hidden_from_guest_at is not None, "缺席不该清标记"
+    assert fourth.post("hidden").hidden_seen_streak == 0, "中间缺一轮就归零"
+    assert third.post("hidden").hidden_from_guest_at is not None
 
 
 def test_all_posts_marked_and_empty_page_is_not_all_gone():

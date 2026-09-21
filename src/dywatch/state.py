@@ -29,7 +29,7 @@ from .models import (
     Tombstone,
 )
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS posts (
   absent_rounds   INTEGER NOT NULL DEFAULT 0,
   absent_is_top   INTEGER NOT NULL DEFAULT 0,
   hidden_from_guest_at TEXT,
+  hidden_seen_streak  INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (sec_user_id, content_id)
 );
 
@@ -146,12 +147,25 @@ def _migrate_3_to_4(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE posts ADD COLUMN hidden_from_guest_at TEXT")
 
 
+def _migrate_4_to_5(conn: sqlite3.Connection) -> None:
+    """给 `posts` 加"带标记期间连续可见轮数"。
+
+    默认 0 == "还没有连续见到过"，正是老库该有的初始值。
+    """
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(posts)")}
+    if "hidden_seen_streak" not in existing:
+        conn.execute(
+            "ALTER TABLE posts ADD COLUMN hidden_seen_streak INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 #: 版本号 -> "从这个版本升到下一个版本"的步骤。新增迁移时按顺序追加，
 #: 键是**升级前**的版本号（比如从 2 升到 3 的步骤，键是 2）。
 _MIGRATIONS: Final[Mapping[int, Callable[[sqlite3.Connection], None]]] = {
     1: _migrate_1_to_2,
     2: _migrate_2_to_3,
     3: _migrate_3_to_4,
+    4: _migrate_4_to_5,
 }
 
 
@@ -409,8 +423,9 @@ class StateStore:
             conn.execute("DELETE FROM posts WHERE sec_user_id = ?", (sec_user_id,))
             conn.executemany(
                 "INSERT INTO posts (sec_user_id, content_id, kind, title, created_at, is_top,"
-                " first_seen_at, last_seen_at, absent_rounds, absent_is_top, hidden_from_guest_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                " first_seen_at, last_seen_at, absent_rounds, absent_is_top, hidden_from_guest_at,"
+                " hidden_seen_streak)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 [
                     (
                         sec_user_id,
@@ -424,6 +439,7 @@ class StateStore:
                         post.absent_rounds,
                         1 if post.absent_is_top else 0,
                         _iso(post.hidden_from_guest_at),
+                        post.hidden_seen_streak,
                     )
                     for post in state.posts
                 ],
@@ -564,6 +580,9 @@ def _row_to_state(
                 # 不该炸——按"没有这个已知情况"处理（`None`）
                 hidden_from_guest_at=(
                     _dt(p["hidden_from_guest_at"]) if "hidden_from_guest_at" in p.keys() else None
+                ),
+                hidden_seen_streak=(
+                    int(p["hidden_seen_streak"] or 0) if "hidden_seen_streak" in p.keys() else 0
                 ),
             )
             for p in posts

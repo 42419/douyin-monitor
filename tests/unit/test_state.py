@@ -313,13 +313,14 @@ def test_migrate_upgrades_a_v1_database_without_losing_data(tmp_path):
 
     with store._tx() as tx:  # noqa: SLF001 —— 就是要验证迁移后的原始表结构
         version = tx.execute("SELECT version FROM schema_version").fetchone()[0]
-        assert version == 4
+        assert version == 5
         columns = {row[1] for row in tx.execute("PRAGMA table_info(authors)")}
         assert "baseline_content_count" in columns
         assert "baseline_content_count_at" in columns
         assert "content_count_drift_rounds" in columns
         post_columns = {row[1] for row in tx.execute("PRAGMA table_info(posts)")}
         assert "hidden_from_guest_at" in post_columns
+        assert "hidden_seen_streak" in post_columns
         # 老行要原样留下，新列是 NULL（"没有这个已知情况"），不能变成别的值
         old_post = tx.execute(
             "SELECT absent_rounds, hidden_from_guest_at FROM posts WHERE content_id = 'old_post'"

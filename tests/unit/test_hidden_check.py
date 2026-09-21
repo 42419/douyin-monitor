@@ -454,23 +454,76 @@ async def test_hidden_post_stops_accumulating_absences_across_rounds(tmp_path):
     assert all(t.content_id != "hidden1" for t in state.tombstones)
 
 
-async def test_hidden_post_reappearing_clears_the_marker_silently(tmp_path):
-    """它重新出现在访客列表里 ⇒ 清掉标记；刻意不发事件（我们从没报过它消失）。"""
+async def test_hidden_post_reappearing_clears_the_marker_after_confirmation(tmp_path):
+    """重新出现在访客列表里要**连续两轮**才清标记（分级确认）；刻意不发事件。"""
     now = datetime.now(timezone.utc)
-    author = _author_with_a_hidden_post(now)
-    client = Client(
-        posts_items=(make_content("visible1", created_at=now - timedelta(days=2)),
-                     make_content("hidden1", created_at=now - timedelta(days=1))),
-        content_count=2,
-    )
+    seen = (make_content("visible1", created_at=now - timedelta(days=2)),
+            make_content("hidden1", created_at=now - timedelta(days=1)))
+    store = _store(tmp_path)
 
-    result, store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=None, now=now
-    )
+    first = await _run(tmp_path=tmp_path, store=store, author=_author_with_a_hidden_post(now),
+                       client=Client(posts_items=seen, content_count=2), hidden_check=None, now=now)
+    after_first = store.load_authors()["u1"]
+    assert all(p.hidden_from_guest_at is not None for p in after_first.posts
+               if p.content_id == "hidden1"), "只见到 1 轮还不清"
+    assert not any(e.kind in (EventKind.REVIVED, EventKind.POST_REMOVED)
+                   for e in first[0].events)
 
+    second = await _run(tmp_path=tmp_path, store=store, author=after_first,
+                        client=Client(posts_items=seen, content_count=2), hidden_check=None,
+                        now=now + timedelta(minutes=1))
     state = store.load_authors()["u1"]
     assert all(p.hidden_from_guest_at is None for p in state.posts if p.content_id == "hidden1")
-    assert not any(e.kind in (EventKind.REVIVED, EventKind.POST_REMOVED) for e in result.events)
+    assert not any(e.kind in (EventKind.REVIVED, EventKind.POST_REMOVED)
+                   for e in second[0].events)
+
+
+async def test_flapping_guest_view_does_not_restart_the_hidden_loop(tmp_path):
+    """访客视角"看得见 / 看不见"交替时，标记不能被清 → 否则每几分钟重核验一次。
+
+    线上真实发生过：`hidden_check.verified expected=3 actual=4` 每隔几分钟重复一次，
+    同一条作品被反复"重新发现"。机制是标记被清 → 缺席 2 轮 → 确认删除 → 总数出现缺口
+    → 定向核验 → 重新标记。这条用 [看得见, 看不见, 看不见] 的抖动模式把它钉住。
+    """
+    now = datetime.now(timezone.utc)
+    visible = (make_content("v1", created_at=now - timedelta(days=2)),
+               make_content("v2", created_at=now - timedelta(days=1)))
+    hidden = make_content("h4", created_at=now - timedelta(hours=1))
+    store = _store(tmp_path)
+    author = AuthorState(
+        sec_user_id="u1", nickname="示例", ever_had_posts=True, runs=1,
+        initialized_at=now - timedelta(days=30),
+        last_update_at=now - timedelta(minutes=1), last_seen_at=now - timedelta(minutes=1),
+        baseline_content_count=2, baseline_content_count_at=now - timedelta(minutes=1),
+        posts=tuple(PostState(content_id=c.content_id, title=c.title, created_at=c.created_at,
+                              last_seen_at=now) for c in visible),
+    )
+    pattern = [True, False, False]
+    profile_calls = pin_calls = 0
+    produced: list[EventKind] = []
+    for i in range(9):
+        state = author if i == 0 else store.load_authors()["u1"]
+        guest = visible + ((hidden,) if pattern[i % 3] else ())
+        client = Client(posts_items=guest, content_count=3)
+        pin = PinClient(posts_items=visible + (hidden,))
+        result, store, _n, _p = await _run(
+            tmp_path=tmp_path, store=store, author=state, client=client,
+            hidden_check=_hidden_check(pin), now=now + timedelta(minutes=i),
+        )
+        profile_calls += client.profile_calls
+        pin_calls += len(pin.calls)
+        produced.extend(e.kind for e in result.events)
+        st = store.load_authors()["u1"]
+        assert st.tombstones == (), f"第 {i + 1} 轮不该为它写墓碑：{st.tombstones}"
+
+    # 前 3 轮是"发现它"的正常过程（第 1 轮新作品、第 3 轮核验出它对访客不可见），
+    # 之后就该彻底安静：整场只准出现 1 次核验、0 次"作品消失"
+    assert produced.count(EventKind.HIDDEN_FROM_GUEST) == 1, f"只该发现一次：{produced}"
+    assert produced.count(EventKind.POST_REMOVED) == 0, f"不该报消失：{produced}"
+    assert pin_calls == 1, f"整场只该核验一次（实际 {pin_calls} 次）"
+    assert profile_calls <= 3, f"抖动不该反复触发查总数（实际 {profile_calls} 次）"
+    marked = [p for p in st.posts if p.hidden_from_guest_at is not None]
+    assert [p.content_id for p in marked] == ["h4"], "抖动期间标记要保持"
 
 
 # ------------------------------------------------- 总数偏少 ⇒ 有一条真被删了
