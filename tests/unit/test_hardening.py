@@ -106,6 +106,12 @@ def message() -> Any:
         (DingTalkChannel(token="t"), {"errcode": 310000}),
         (BarkChannel(device_key="d"), {"code": 400}),
         (ServerChanChannel(sendkey="s"), {"code": 40001}),
+        # Telegram 的官方判据是响应体的 `ok`。文档只说"请求不成功时 ok 为 False"，
+        # **没有规定 HTTP 状态码**（实测假 token 回 401），所以这里连 200 的形状一起钉住。
+        (TelegramChannel(bot_token="1:A"), {"ok": False, "error_code": 400,
+                                            "description": "chat not found"}),
+        (TelegramChannel(bot_token="1:A"), {"ok": False, "error_code": 401,
+                                            "description": "Unauthorized"}),
     ],
 )
 async def test_http_200_with_a_business_error_is_a_failure(channel: HttpChannel, body: dict) -> None:
