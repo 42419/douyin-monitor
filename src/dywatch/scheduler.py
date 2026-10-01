@@ -54,10 +54,17 @@ class GlobalGate:
         return self._closes
 
     def close(self, seconds: int, *, reason: str) -> int:
-        """Shut the gate for `seconds` (already-resolved, never negative)."""
+        """Shut the gate for `seconds` (already-resolved, never negative).
+
+        截止时间取更长的那个（`max`），**理由只跟着那个更长的截止时间走**。
+        早先 `_reason` 是无条件覆盖的：一个 600 秒的熔断之后又来一个 60 秒的限流，
+        倒计时显示 600 秒、横幅与日志里写的却是"限流"——看的人会以为再等一分钟就好。
+        """
         seconds = max(1, int(seconds))
-        self._until = max(self._until, time.monotonic() + seconds)
-        self._reason = reason
+        deadline = time.monotonic() + seconds
+        if deadline > self._until:
+            self._until = deadline
+            self._reason = reason
         self._closes += 1
         self._history.append((time.monotonic(), reason, seconds))
         del self._history[:-20]

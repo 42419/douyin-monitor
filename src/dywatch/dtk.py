@@ -41,9 +41,16 @@ GATE_CODES: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: 配置性问题，重试没有意义，应当直接告诉人
+#: 配置性问题，重试没有意义，应当直接告诉人。
+#:
+#: **`INVALID_PARAM` 刻意不在这里。** 它虽然也是"重试没有意义"，但它的作用域通常只有
+#: 一个账号（典型来源是 `users.conf` 里某一个 `sec_user_id` 写错，DTK 回 400），而
+#: `is_config` 的处理是"连坐所有账号：关闸一小时 + 一条全局告警"。把它放进来过一次，
+#: 结果是**一个坏 ID 让其余全部账号每小时停摆一小时**（那个账号每轮到期后又被撞一次，
+#: 闸门就再也开不回来），而该账号本该走的"连续失败 → 标记 ID 无效"告警被推迟到约 5 小时。
+#: 现在它按普通失败处理：`_on_failure` 照样累计失败次数并告警，只是不牵动全局。
 CONFIG_CODES: Final[frozenset[str]] = frozenset(
-    {"UNAUTHENTICATED", "FORBIDDEN_SCOPE", "INVALID_PARAM", "NOT_CONFIGURED"}
+    {"UNAUTHENTICATED", "FORBIDDEN_SCOPE", "NOT_CONFIGURED"}
 )
 
 #: 写请求（归档下载、pin）的超时。DTK 受理一个下载请求是本地操作，正常都在 1 秒内；
@@ -141,7 +148,11 @@ def parse_content(node: Mapping[str, Any], *, raw_included: bool = False) -> Con
     raw = node.get("raw") if raw_included else None
     is_top = bool(raw.get("is_top")) if isinstance(raw, Mapping) else False
 
-    media = node.get("media") or {}
+    # 逐层都要求"是个 Mapping/列表"，形状不对就当空值——**不能让它抛 AttributeError/
+    # TypeError**：`run_author` 只 catch `MonitorError`，别的异常会一路逃到 loop，
+    # 那个账号被记成 INTERNAL 失败且状态不落库，而 DESIGN 给这种情况留的信号
+    # （`CONTRACT_VIOLATION`＝"DTK 升级后响应形状变了"）永远不会出现。
+    media = node.get("media") if isinstance(node.get("media"), Mapping) else {}
     covers = media.get("covers") or []
     images = media.get("images") or []
     cover_url = None
@@ -150,8 +161,10 @@ def parse_content(node: Mapping[str, Any], *, raw_included: bool = False) -> Con
         if isinstance(first, Mapping):
             cover_url = first.get("url")
 
-    author = node.get("author") or {}
-    stats = node.get("stats") or {}
+    author = node.get("author") if isinstance(node.get("author"), Mapping) else {}
+    stats = node.get("stats") if isinstance(node.get("stats"), Mapping) else {}
+    raw_tags = node.get("tags")
+    tags = raw_tags if isinstance(raw_tags, Sequence) and not isinstance(raw_tags, (str, bytes)) else []
 
     return Content(
         content_id=str(node.get("content_id") or ""),
@@ -171,7 +184,7 @@ def parse_content(node: Mapping[str, Any], *, raw_included: bool = False) -> Con
         share_count=_int_or_none(stats.get("share_count")),
         collect_count=_int_or_none(stats.get("collect_count")),
         play_count=_int_or_none(stats.get("play_count")),
-        tags=tuple(str(t) for t in (node.get("tags") or [])),
+        tags=tuple(str(t) for t in tags),
         author_uid=str(author.get("sec_uid") or author.get("uid") or "") or None,
         author_nickname=str(author.get("nickname") or "") or None,
     )
@@ -186,7 +199,11 @@ def parse_page(payload: Mapping[str, Any], *, raw_included: bool, task_id: str |
             "载荷里没有 items 字段",
             details={"keys": sorted(payload)[:20]},
         )
-    if not isinstance(raw_items, Sequence):
+    if not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes)):
+        # `str` 也是 Sequence：漏掉这一条的话 `{"items": "abc"}` 会逐字符迭代，
+        # 而每个字符都不是 Mapping → 被跳过 → 返回一个**空列表的 Page**。
+        # 那与"这个作者没有作品"完全无法区分，会把一个曾有过作品的账号推进
+        # `all_gone` 三轮确认，报出"作者把作品删光了"。
         raise MonitorError(
             "CONTRACT_VIOLATION",
             f"items 不是数组，而是 {type(raw_items).__name__}",
@@ -510,8 +527,15 @@ class DtkClient:
                 "archive 返回的载荷里没有 items",
                 details={"keys": sorted(payload)[:20]},
             )
+        if not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes)):
+            # 这里抛 `MonitorError` 而不是放任 TypeError：调用点是
+            # `except MonitorError` 的守卫，别的异常会逃出整轮（见 `parse_content` 的注释）
+            raise MonitorError(
+                "CONTRACT_VIOLATION",
+                f"archive 的 items 不是数组，而是 {type(raw_items).__name__}",
+            )
         out: dict[str, ArchiveItem] = {}
-        for node in raw_items or []:
+        for node in raw_items:
             if isinstance(node, Mapping):
                 item = parse_archive_item(node)
                 if item.content_id:

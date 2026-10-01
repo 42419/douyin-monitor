@@ -117,7 +117,12 @@ async def run_author(
     except MonitorError as exc:
         error = exc
         if exc.is_gate:
-            seconds = gate.backoff_for(exc)
+            # 先真的把闸门关上，再报"闸门已关"。这里的顺序和措辞都踩过一次坑：
+            # 早先只算了 `backoff_for()` 的秒数就打 `gate.closed` 日志、发"全局闸门关闭"
+            # 通知，却没调用 `close()`，于是 `_until` 恒为 0、`is_open()` 恒真——
+            # 上游明明在限流，本工具照旧以约 11 次/分钟砸过去，`retry_after` 全被无视。
+            # 现场特征就是那条日志里的 `remaining=0.0`：自己说关了，余量却是零。
+            seconds = gate.close(gate.backoff_for(exc), reason=exc.code)
             _log(logger, "warn", "gate.closed", code=exc.code, seconds=seconds,
                  remaining=round(gate.remaining(), 1))
             await _notify_upstream(exc, seconds, notifier=notifier, dedup=dedup, logger=logger)
@@ -323,7 +328,12 @@ async def _check_hidden_posts(
 
     actual = profile.content_count
     if actual is None:
-        return next_state, events
+        # DTK 这次没给发布总数（字段缺失是它自己承认的合法情况）。不能就这么返回：
+        # `baseline_content_count_at` 不推进的话，下一次 `due_for_sample` 依然为真，
+        # **每一轮**都会再去请求一次作者信息、每轮烧一个身份——正是这套机制要避免的
+        # "逐轮轮询上游"。所以这里和上面那个失败分支一样，把"上次核对"推到现在，
+        # 相当于给它加一个 `interval` 的退避；基准值不动（没有新信息可折）。
+        return next_state.with_updates(baseline_content_count_at=now), events
 
     if prev.baseline_content_count is None:
         # 还没有基准值可比（通常是这个账号第一次被记录），这次先把它立起来，
@@ -545,7 +555,15 @@ def _confirm_hidden_removals(
     窗口而永远确认不了，谁也动不了它们（见 DESIGN 修正 #21）。
     """
     visible = {item.content_id for item in page.items}
-    window_bottom = min((i.created_at for i in page.items if i.created_at), default=None)
+    # 窗口底**只看非置顶项**。置顶项的发布时间是任意的（实测有 2024/2025 年的），
+    # 混进来会把窗口底拖到几年前，"比窗口还旧就不判删除"这道保护就形同虚设——
+    # 一条只是滑出窗口的隐藏作品会被报成"作者真把它删了"。本轮没带 raw 时
+    # `is_top` 恒为 False，所以还要用库里已知的置顶状态兜住（见 `known_top_ids`）。
+    window_bottom = min(
+        (i.created_at for i in page.items if i.created_at and not i.is_top
+         and i.content_id not in state.known_top_ids),
+        default=None,
+    )
     account_empty = account_total == 0 and not page.items
     posts = {p.content_id: p for p in state.posts}
     tombstones = {t.content_id: t for t in state.tombstones}
@@ -817,7 +835,17 @@ async def _notify_upstream(
     if not allowed:
         _log(logger, "debug", "notify.suppressed", kind=event.kind.value, key=key)
         return
-    result = await _deliver(notifier, event)
+    # 和主通知循环同一个纪律：**单条通知出意外不能逃出去**。这里曾经没有这层保护，
+    # 于是一次渲染/渠道异常会从 `run_author` 一路抛到 loop，本轮状态根本没落库
+    # （`save_round` 在通知之后调用），而且已经占用的抑制窗口不会释放——
+    # 那条上游告警被静默整整一个窗口。
+    try:
+        result = await _deliver(notifier, event)
+    except Exception as exc:  # noqa: BLE001 - 见上
+        _log(logger, "warning", "notify.crashed", kind=event.kind.value,
+             error=f"{type(exc).__name__}: {exc}"[:160])
+        dedup.release(key)
+        return
     if result.get("failed") and not result.get("sent"):
         dedup.release(key)
     _log(logger, "warning", "notify.upstream", code=error.code, sent=result.get("sent"),

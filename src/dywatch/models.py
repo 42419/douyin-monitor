@@ -242,6 +242,16 @@ class AuthorState:
         return frozenset(p.content_id for p in self.posts)
 
     @property
+    def known_top_ids(self) -> frozenset[str]:
+        """库里已知是置顶的那些 id。
+
+        存在的理由：置顶标志只有带了 `include_raw` 的轮次才是真值，其余轮次本页
+        `is_top` 恒为 False，而抖音会把置顶项**额外**塞进返回里。凡是需要"分辨置顶"
+        的地方（漏检判据、隐藏作品核验的窗口底）都得靠它兜住那几轮。
+        """
+        return frozenset(p.content_id for p in self.posts if p.is_top)
+
+    @property
     def tombstone_ids(self) -> frozenset[str]:
         return frozenset(t.content_id for t in self.tombstones)
 

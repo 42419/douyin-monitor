@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from .models import (
     AuthorState,
@@ -265,7 +265,11 @@ def diff(
             continue
         is_top = entry.is_top
 
-        if not is_top and budget > 0 and not all_gone:
+        if not is_top and budget > 0 and not all_gone and entry.absent_rounds == 0:
+            # 挤出预算只发给**这一轮才消失**的作品。已经在确认计数里的那些
+            # （`absent_rounds > 0`）在上一轮就已经在窗口之外了，**这一轮的新作品
+            # 解释不了它们**——再拿预算去销案，等于把一个真删除静默埋掉：它既不会
+            # 产出 `post_removed`，将来若因窗口回移重新出现，还会多一条假"作品回归"。
             budget -= 1
             scrolled_out.append(content_id)
             continue
@@ -337,8 +341,19 @@ def diff(
     )
 
     # ---- 漏检判定（时间连续性，非置顶项之间） ------------------------------
-    oldest_now = _oldest_non_top(items)
-    newest_now = _newest_non_top(items)
+    #
+    # 判据本身是"本页最旧的非置顶作品，比上轮最新还新"。它成立的前提是**真能分辨置顶项**，
+    # 而 `INCLUDE_RAW=auto`（默认）只有少数几轮带 raw：其余轮次 `is_top` 全是 False，
+    # 抖音额外塞进返回里的那几个置顶项（发布时间可能是几年前）就会混进"非置顶"里，
+    # 把 `oldest_now` 拉到远古，判据于是**永不成立**——而且同一轮还会把
+    # `newest_seen_created_at` 推到最新，后面带 raw 的那一轮也补不回来（永久漏判）。
+    #
+    # 所以这里用"库里的置顶状态"当补丁：库里已知是置顶的那些，不论本轮 raw 有没有带，
+    # 一律排除在时间比较之外。库里的信息可能不全（新置顶项在首次带 raw 之前不知道），
+    # 但**不会更差**——它只让"已知置顶"更准确，而不会把非置顶误排除。
+    pinned_known = {pid for pid, entry in posts.items() if entry.is_top}
+    oldest_now = _oldest_non_top(items, pinned=pinned_known)
+    newest_now = _newest_non_top(items, pinned=pinned_known)
     if (
         prev.newest_seen_created_at is not None
         and oldest_now is not None
@@ -431,7 +446,7 @@ def diff(
 
     next_state = prev.with_updates(
         ever_had_posts=True,
-        empty_rounds=0,
+        empty_rounds=empty_rounds,
         all_gone_rounds=all_gone_rounds,
         newest_seen_created_at=newest_seen,
         raw_refresh_round=0 if page.raw_included else prev.raw_refresh_round + 1,
@@ -538,23 +553,39 @@ def _gap_days(
     return max(0, int((now - baseline).total_seconds() // 86400))
 
 
-def _non_top_times(items: Sequence[Content]) -> list[datetime]:
-    return [c.created_at for c in items if not c.is_top and c.created_at is not None]
+def _non_top_times(
+    items: Sequence[Content], *, pinned: Iterable[str] = frozenset()
+) -> list[datetime]:
+    """本页"非置顶"项的发布时间。
+
+    `pinned` 是"库里已知的置顶 id"：本轮没带 raw 时 `item.is_top` 恒为 False，
+    只有靠它才能把抖音额外塞进来的置顶项排除掉（见 `diff` 里漏检那一段的注释）。
+    """
+    return [
+        c.created_at
+        for c in items
+        if not c.is_top and c.content_id not in pinned and c.created_at is not None
+    ]
 
 
-def _newest_non_top(items: Sequence[Content]) -> datetime | None:
-    times = _non_top_times(items)
+def _newest_non_top(
+    items: Sequence[Content], *, pinned: Iterable[str] = frozenset()
+) -> datetime | None:
+    times = _non_top_times(items, pinned=pinned)
     return max(times) if times else None
 
 
-def _oldest_non_top(items: Sequence[Content]) -> datetime | None:
-    times = _non_top_times(items)
+def _oldest_non_top(
+    items: Sequence[Content], *, pinned: Iterable[str] = frozenset()
+) -> datetime | None:
+    times = _non_top_times(items, pinned=pinned)
     return min(times) if times else None
 
 
 def gap_suspect(prev: AuthorState, page: Page) -> bool:
     """Exposed for tests and for the startup doctor's sanity check."""
-    oldest = _oldest_non_top(page.items)
+    pinned = prev.known_top_ids
+    oldest = _oldest_non_top(page.items, pinned=pinned)
     return bool(
         prev.newest_seen_created_at is not None
         and oldest is not None
