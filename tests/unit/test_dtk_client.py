@@ -271,6 +271,117 @@ async def test_task_failure_is_normalized_to_its_error_code():
     assert caught.value.is_gate is True
 
 
+# ------------------------------------------------ Retry-After 头（体里没有时的退路）
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("120", 120),
+        (" 120 ", 120),
+        (120, 120),
+        ("0", None),                       # 0 秒等于没等，当作没给
+        ("-5", None),
+        ("abc", None),                     # 认不出来宁可当作没给，不瞎猜
+        ("", None),
+        (None, None),
+        (True, None),
+        ("Wed, 21 Oct 2026 07:28:00 GMT", None),   # RFC 9110 的另一种形态：不支持，不猜
+        ("nan", None),
+        ("inf", None),
+        ("30.7", 30),                      # 小数向下取整（秒数语义）
+    ],
+)
+def test_retry_after_header_parsing(raw, expected):
+    from dywatch.dtk import retry_after_seconds
+
+    assert retry_after_seconds(raw) == expected
+
+
+async def test_the_retry_after_header_is_used_when_the_body_omits_it():
+    """响应体里没有 `error.retry_after` 时，回 `Retry-After` 头找。
+
+    DTK 用一个值同时写体和头，所以正常情况读哪个都一样；留这条退路是因为**头是 HTTP
+    语义、体是我们自己的信封**——体被改写/裁剪时，头还在。
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            json=envelope(None, success=False,
+                          error={"code": "RATE_LIMITED", "message": "too fast"}),
+            headers={"Retry-After": "42"},
+        )
+
+    async with make_client(handler) as client:
+        with pytest.raises(MonitorError) as caught:
+            await client.author_posts("u", 5)
+
+    assert caught.value.code == "RATE_LIMITED"
+    assert caught.value.retry_after == 42, "头里的秒数转成 int 带出来（体里没给）"
+
+
+async def test_the_body_retry_after_wins_over_the_header():
+    """两者都在时以**体**为准：它是"这个错误的重试时间"，语义比响应头更明确。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            json=envelope(None, success=False,
+                          error={"code": "RATE_LIMITED", "message": "too fast",
+                                 "retry_after": 7}),
+            headers={"Retry-After": "999"},
+        )
+
+    async with make_client(handler) as client:
+        with pytest.raises(MonitorError) as caught:
+            await client.author_posts("u", 5)
+
+    assert caught.value.retry_after == 7
+
+
+async def test_an_unparsable_header_does_not_invent_a_wait_time():
+    """头认不出来时当作没给（`None`），而不是塞一个猜出来的值：
+    猜错了就是把闸门关成错误的时长——比"退回我们自己的退避"更糟。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json=envelope(None, success=False,
+                          error={"code": "IDENTITY_POOL_EXHAUSTED", "message": "pool empty"}),
+            headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"},
+        )
+
+    async with make_client(handler) as client:
+        with pytest.raises(MonitorError) as caught:
+            await client.author_posts("u", 5)
+
+    assert caught.value.retry_after is None
+
+
+async def test_a_header_sourced_retry_after_actually_drives_the_gate():
+    """把这条链走完：头里的 `Retry-After` → `MonitorError` → 闸门时长。
+
+    分开测过"头能被读到"和"闸门会用它"，但**组合**没测过——而这条链正是决定
+    "上游说等多久"最终生效与否的地方。
+    """
+    from dywatch.scheduler import GlobalGate
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json=envelope(None, success=False,
+                          error={"code": "IDENTITY_POOL_EXHAUSTED", "message": "pool empty"}),
+            headers={"retry-after": "180"},      # 小写键，真实 httpx 头就是这样
+        )
+
+    gate = GlobalGate(default_seconds=60, backoff_max=600, retry_after_max=3600)
+    async with make_client(handler) as client:
+        with pytest.raises(MonitorError) as caught:
+            await client.author_posts("u", 5)
+
+        seconds = gate.trip(caught.value)
+
+    assert seconds == 180, "头里的 180 秒应当原样成为闸门时长，而不是退回默认的 60"
+    assert gate.is_open() is False
+    assert gate.reason == "IDENTITY_POOL_EXHAUSTED"
+
+
 async def test_terminal_never_reached_becomes_task_timeout():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.startswith("/api/v1/tasks/"):

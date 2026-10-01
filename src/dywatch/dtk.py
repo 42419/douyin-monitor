@@ -138,6 +138,60 @@ def _int_or_none(raw: Any) -> int | None:
         return None
 
 
+#: `Retry-After` 里不该出现、但真出现时说明这不是我们预期的秒数（HTTP-date 里全是这些）。
+_RETRY_AFTER_DATE_HINT: Final[tuple[str, ...]] = (" ", ",", "GMT", "Mon", "Tue", "Wed", "Thu",
+                                                  "Fri", "Sat", "Sun", "Jan", "Feb", "Mar", "Apr",
+                                                  "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def retry_after_seconds(raw: Any) -> int | None:
+    """`Retry-After` 头的值 → 秒；**认不出来就返回 `None`**（当作没给）。
+
+    只认"秒数"这一种形态（RFC 9110 的另一种是 HTTP-date）。DTK 发的就是秒数
+    （`envelope.py` 里 `str(retry_after)`，与响应体里的 `error.retry_after` 同源），
+    所以这是稳妥的：**认不出来宁可当作没给**，也不要瞎猜一个时间——猜错了就是
+    把闸门关成错误的时长。是否封顶由 `scheduler.GlobalGate` 负责，这里不掺和。
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    text = str(raw).strip()
+    if not text or any(hint in text for hint in _RETRY_AFTER_DATE_HINT):
+        return None
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0 or value != value or value in (float("inf"), float("-inf")):
+        return None
+    return int(value)
+
+
+def _retry_after_of(error: Mapping[str, Any], headers: Mapping[str, str] | None) -> Any:
+    """这次失败该等多——**体里的 `error.retry_after` 优先，没有才回头里找**。
+
+    两者在 DTK 里同源（`envelope.py` 用一个值同时写体和 `Retry-After` 头），所以
+    正常情况读哪个都一样。留这条退路的原因很实际：**头是 HTTP 语义、体是我们自己的
+    信封**——哪天响应体被改写/裁剪（反代、或 DTK 改了错误形状），头还在，我们就还能
+    拿到上游说的那个时间。反过来，体里的值语义更明确（它是"这个错误的重试时间"，
+    不是"某个响应头"），所以优先它。
+
+    体里的值**原样带出去**（信封给什么就是什么，归一化统一在
+    `scheduler.GlobalGate._retry_after` 那一处做）；头里的值在这里就转成秒数，因为
+    HTTP 头是字符串世界，`"Wed, 21 Oct 2026 07:28:00 GMT"` 这种形态**认不出来就当作
+    没给**——猜一个时间等于把闸门关成错误的时长。
+    """
+    body_value = error.get("retry_after")
+    if body_value is not None:
+        return body_value
+    if not headers:
+        return None
+    # 头名大小写不敏感：httpx 的 Headers 本身就是小写键，普通 dict 得自己兜一层
+    for key, value in headers.items():
+        if str(key).lower() == "retry-after":
+            return retry_after_seconds(value)
+    return None
+
+
 def parse_content(node: Mapping[str, Any], *, raw_included: bool = False) -> Content:
     """DTK 的归一化作品对象 → 我们的 `Content`。
 
@@ -315,8 +369,12 @@ class DtkClient:
         json_body: Mapping[str, Any] | None = None,
         timeout: float | None = None,
         attempts: int = 2,
-    ) -> tuple[int, dict[str, Any]]:
-        """One HTTP call. Returns `(status, envelope)`; raises on transport failure.
+    ) -> tuple[int, dict[str, Any], Mapping[str, str]]:
+        """One HTTP call. Returns `(status, envelope, headers)`; raises on transport failure.
+
+        响应头也返回，是因为 `Retry-After` 是**与响应体同源的第二份证据**：DTK 用它同时
+        写响应体和信头（`envelope.py`），所以体里的 `error.retry_after` 缺失时（反代改写、
+        上游改了错误形状），我们还能从头上拿到"上游说该等多久"。
 
         `timeout` / `attempts` 是给写操作留的口子：读可以慢慢等（`wait`→202→轮询本来就
         要等），而旁路上的写请求一慢就是整轮跟着慢。不传 `timeout` 时用客户端默认值
@@ -356,27 +414,33 @@ class DtkClient:
                     f"HTTP {response.status_code} 且响应不是 DTK 信封",
                     details={"url": url, "keys": sorted(body)[:10] if isinstance(body, dict) else None},
                 )
-            return response.status_code, body
+            return response.status_code, body, response.headers
         raise MonitorError("DTK_UNREACHABLE", str(last))  # pragma: no cover
 
     @staticmethod
-    def _raise_for_error(body: Mapping[str, Any]) -> None:
+    def _raise_for_error(body: Mapping[str, Any],
+                         headers: Mapping[str, str] | None = None) -> None:
+        """把一个失败信封变成 `MonitorError`。
+
+        `headers` 是可选的退路：`error.retry_after` 缺失时用 `Retry-After` 头
+        （见 `_retry_after_of`）。
+        """
         error = body.get("error") or {}
         code = str(error.get("code") or "INTERNAL")
         raise MonitorError(
             code,
             str(error.get("message") or ""),
             details=error.get("details") or {},
-            retry_after=error.get("retry_after"),
+            retry_after=_retry_after_of(error, headers),
         )
 
     async def _poll_task(self, task_id: str) -> dict[str, Any]:
         """`GET /tasks/{id}` until terminal. Returns the *second* level `data`."""
         for _ in range(self.max_polls):
             await asyncio.sleep(self.poll_interval)
-            _status, body = await self._request(f"/api/v1/tasks/{task_id}")
+            _status, body, headers = await self._request(f"/api/v1/tasks/{task_id}")
             if not body.get("success"):
-                self._raise_for_error(body)
+                self._raise_for_error(body, headers)
             view = body.get("data") or {}
             state = str(view.get("state") or "")
             if state == "failed":
@@ -415,9 +479,9 @@ class DtkClient:
         if self.refresh:
             query["refresh"] = "true"
 
-        status, body = await self._request(path, query)
+        status, body, headers = await self._request(path, query)
         if not body.get("success"):
-            self._raise_for_error(body)
+            self._raise_for_error(body, headers)
 
         data = body.get("data")
         meta = body.get("meta") or {}
@@ -486,9 +550,9 @@ class DtkClient:
 
     async def identify_url(self, url: str) -> dict[str, Any]:
         """Share link → `{platform, resource, resource_id, ...}`. Costs no identity."""
-        status, body = await self._request("/api/v1/tools/parse-url", {"url": url})
+        status, body, headers = await self._request("/api/v1/tools/parse-url", {"url": url})
         if not body.get("success"):
-            self._raise_for_error(body)
+            self._raise_for_error(body, headers)
         data = body.get("data")
         if not isinstance(data, Mapping):
             raise MonitorError("CONTRACT_VIOLATION", "parse-url 返回的 data 不是对象")
@@ -496,9 +560,9 @@ class DtkClient:
 
     async def me(self) -> dict[str, Any]:
         """Who this key is and what it may do. Needs no scope, only a valid key."""
-        status, body = await self._request("/api/v1/auth/me")
+        status, body, headers = await self._request("/api/v1/auth/me")
         if not body.get("success"):
-            self._raise_for_error(body)
+            self._raise_for_error(body, headers)
         data = body.get("data")
         if not isinstance(data, Mapping):
             raise MonitorError("CONTRACT_VIOLATION", "auth/me 返回的 data 不是对象")
@@ -506,9 +570,9 @@ class DtkClient:
 
     async def system_status(self) -> dict[str, Any]:
         """Version, component health, identity pool census. No scope required."""
-        status, body = await self._request("/api/v1/system/status")
+        status, body, headers = await self._request("/api/v1/system/status")
         if not body.get("success"):
-            self._raise_for_error(body)
+            self._raise_for_error(body, headers)
         data = body.get("data")
         if not isinstance(data, Mapping):
             raise MonitorError("CONTRACT_VIOLATION", "system/status 返回的 data 不是对象")
@@ -545,14 +609,14 @@ class DtkClient:
     async def archive_item(self, content_id: str) -> ArchiveItem | None:
         """One archived post, or None when this instance never saw it."""
         try:
-            status, body = await self._request(f"/api/v1/archive/douyin/{content_id}")
+            status, body, headers = await self._request(f"/api/v1/archive/douyin/{content_id}")
         except MonitorError:
             raise
         if not body.get("success"):
             error = body.get("error") or {}
             if str(error.get("code")) == "NOT_FOUND":
                 return None
-            self._raise_for_error(body)
+            self._raise_for_error(body, headers)
         data = body.get("data")
         if not isinstance(data, Mapping):
             return None
@@ -580,7 +644,7 @@ class DtkClient:
         需要 API Key 带 `media:write` scope——比监控本身用的 `douyin:read`/`archive:read`
         高一级的权限，是否开这个功能应该是使用方主动做的决定（见 ARCHIVE_DOWNLOAD_ENABLED）。
         """
-        _status, body = await self._request(
+        _status, body, headers = await self._request(
             "/api/v1/downloads",
             method="POST",
             json_body={
@@ -591,7 +655,7 @@ class DtkClient:
             timeout=WRITE_TIMEOUT,
         )
         if not body.get("success"):
-            self._raise_for_error(body)
+            self._raise_for_error(body, headers)
         data = body.get("data")
         if not isinstance(data, Mapping):
             raise MonitorError("CONTRACT_VIOLATION", "downloads 返回的 data 不是对象")
@@ -599,14 +663,14 @@ class DtkClient:
 
     async def pin_download(self, download_id: str, pinned: bool) -> dict[str, Any]:
         """把一条已发起的下载标记为（不）豁免容量淘汰。同样需要 `media:write`。"""
-        _status, body = await self._request(
+        _status, body, headers = await self._request(
             f"/api/v1/downloads/{download_id}/pin",
             method="POST",
             json_body={"pinned": pinned},
             timeout=WRITE_TIMEOUT,
         )
         if not body.get("success"):
-            self._raise_for_error(body)
+            self._raise_for_error(body, headers)
         data = body.get("data")
         if not isinstance(data, Mapping):
             raise MonitorError("CONTRACT_VIOLATION", "pin 返回的 data 不是对象")
@@ -618,9 +682,9 @@ class DtkClient:
         `doctor` 用它在真正下载之前先告诉你：2G 的默认上限还剩多少、下载器在不在线——
         比等到第一次下载失败才发现存储没配对要有用得多。
         """
-        _status, body = await self._request("/api/v1/downloads/storage")
+        _status, body, headers = await self._request("/api/v1/downloads/storage")
         if not body.get("success"):
-            self._raise_for_error(body)
+            self._raise_for_error(body, headers)
         data = body.get("data")
         if not isinstance(data, Mapping):
             raise MonitorError("CONTRACT_VIOLATION", "downloads/storage 返回的 data 不是对象")
