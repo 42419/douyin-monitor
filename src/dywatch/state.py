@@ -221,9 +221,14 @@ class StateStore:
         # 的**已提交数据**），面板读的 `status.json` 也在那儿——只把主库设成 0600，
         # 旁路文件照样按 umask（通常 0644）落盘，等于白设。`data/` 是本工具自己建的目录
         # （`settings.db_path` 恒为 `<MONITOR_HOME>/data/dywatch.db`），收它不影响别人。
+        #
+        # **两次 chmod 各自兜底，主库文件在前**：目录不归当前用户时 `chmod(目录)` 会失败，
+        # 放在同一个 `suppress` 里的话它一抛，后面的 `chmod(库文件, 0600)` 就被跳过了——
+        # 而文件本身明明改得动，白白少了最要紧的那一层。
+        with contextlib.suppress(OSError):
+            os.chmod(self.path, 0o600)
         with contextlib.suppress(OSError):
             os.chmod(self.path.parent, 0o700)
-            os.chmod(self.path, 0o600)
 
     # ---------------------------------------------------------------- 生命周期
     def migrate(self) -> None:

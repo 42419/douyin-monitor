@@ -265,6 +265,32 @@ def test_state_database_is_created_owner_only(tmp_path):
     assert dir_mode == 0o700, oct(dir_mode)
 
 
+@posix_only
+def test_a_failing_directory_chmod_does_not_skip_the_database_file_mode(tmp_path, monkeypatch):
+    """目录不归当前用户时 `chmod(目录)` 会失败；库文件那一层不能因此被连带跳过。
+
+    两次 chmod 以前放在同一个 `suppress` 里、目录在前：目录一抛，文件的 0600 就没人设了。
+    """
+    real_chmod = os.chmod
+
+    def flaky(path: Any, mode: int) -> None:
+        if os.path.isdir(path):
+            raise PermissionError(1, "Operation not permitted", str(path))
+        real_chmod(path, mode)
+
+    monkeypatch.setattr(os, "chmod", flaky)
+    old_umask = os.umask(0o022)
+    try:
+        store = StateStore(tmp_path / "data" / "dywatch.db")
+        store.migrate()
+        file_mode = stat.S_IMODE(os.stat(tmp_path / "data" / "dywatch.db").st_mode)
+        store.close()
+    finally:
+        os.umask(old_umask)
+
+    assert file_mode == 0o600, oct(file_mode)
+
+
 def test_the_store_asks_for_private_modes_even_where_they_are_not_enforced(tmp_path, monkeypatch):
     """上面那条在 Windows 上会被跳过（chmod 是空操作），但**请求**本身要一直在。
 
