@@ -284,32 +284,6 @@ def test_fallback_env_reader_handles_a_quoted_multiline_value(tmp_path):
     assert targets.targets[1].fields["chat_id"] == "-100"
 
 
-def test_fallback_env_reader_handles_a_quoted_multiline_value(tmp_path):
-    """python-dotenv 不在时用兜底解析器：它也必须认多行值。
-
-    不然 `NOTIFY_TARGETS` 那种写法只会读到一个孤零零的引号，**所有通知目标凭空消失**——
-    比报错难查得多。
-    """
-    from dywatch.settings import _parse_env_file
-
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "DTK_API_KEY=dtk_x\n"
-        'NOTIFY_TARGETS="\n'
-        "dingtalk token=a secret=S\n"
-        "telegram bot_token=1:AA chat_id=-100\n"
-        '"\n'
-        "FETCH_COUNT=20\n",
-        encoding="utf-8",
-    )
-
-    values = _parse_env_file(env_file)
-    assert values["FETCH_COUNT"] == "20", "多行值后面的键还得读得到"
-    targets = parse_targets(values["NOTIFY_TARGETS"])
-    assert [t.kind for t in targets.targets] == ["dingtalk", "telegram"], values["NOTIFY_TARGETS"]
-    assert targets.targets[1].fields["chat_id"] == "-100"
-
-
 def test_env_overrides_file_and_file_overrides_default(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("FETCH_COUNT=20\nWEB_PORT=9000\n", encoding="utf-8")
