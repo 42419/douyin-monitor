@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from dywatch.alerts import Deduplicator
+from dywatch.dtk import MonitorError
 from dywatch.loop import MonitorLoop
 from dywatch.models import Page
 from dywatch.pacer import RoundWaiter
@@ -47,6 +48,19 @@ class Client:
         return Page(items=(), raw_included=False)
 
 
+class GateFailingClient:
+    """上游在限流：每个账号都撞一次 429，带 `retry_after`。"""
+
+    def __init__(self, code: str = "RATE_LIMITED", retry_after: int | None = 30) -> None:
+        self.code = code
+        self.retry_after = retry_after
+        self.calls = 0
+
+    async def author_posts(self, sec_user_id: str, count: int, **kwargs: Any) -> Page:
+        self.calls += 1
+        raise MonitorError(self.code, "上游说现在别发请求", retry_after=self.retry_after)
+
+
 class Notifier:
     #: 面板快照会把它写进 status.json（`channels`）
     names = ("test",)
@@ -69,7 +83,13 @@ class Waiter:
         return None
 
 
-def make_loop(tmp_path: pathlib.Path, logger: Logger, *, users: str | None = None) -> MonitorLoop:
+def make_loop(
+    tmp_path: pathlib.Path,
+    logger: Logger,
+    *,
+    users: str | None = None,
+    client: Any = None,
+) -> MonitorLoop:
     settings = load_settings(None, environ={"MONITOR_HOME": str(tmp_path)})
     if users is not None:
         settings.users_conf.write_text(users, encoding="utf-8")
@@ -78,7 +98,7 @@ def make_loop(tmp_path: pathlib.Path, logger: Logger, *, users: str | None = Non
     return MonitorLoop(
         settings=settings,
         store=store,
-        client=Client(),
+        client=client if client is not None else Client(),
         notifier=Notifier(),
         pacer=Pacer(),  # type: ignore[arg-type]
         waiter=Waiter(),  # type: ignore[arg-type]
@@ -137,3 +157,71 @@ async def test_no_users_also_logs_the_round_number(tmp_path):
     assert skipped and skipped[0]["reason"] == "no users configured"
     assert skipped[0]["round"] == 1
     assert "round.start" not in logger.names()
+
+
+async def test_upstream_rate_limit_actually_closes_the_gate(tmp_path):
+    """上游限流 → 闸门必须真的关上。
+
+    曾经的形状是"算一下退避秒数、打一行 `gate.closed`、发一条全局告警"，
+    但**没有调用 `close()`**：`_until` 恒为 0，闸门永远是开的，被限流的上游继续
+    以约 11 次/分钟挨砸，`retry_after` 全被无视。这条测试钉的就是那一行调用。
+    """
+    logger = Logger()
+    client = GateFailingClient(retry_after=30)
+    loop = make_loop(tmp_path, logger, users=f"{UID}|示例账号\n", client=client)
+    loop.reload_users(force=True)
+
+    await loop.run_round()
+
+    assert logger.names().count("gate.closed") == 1
+    closed = logger.events("gate.closed")[0]
+    assert closed["remaining"] > 0, "自己说关了、余量却是 0，就是那个 bug 的现场特征"
+    assert loop.gate.is_open() is False, "关闸之后闸门必须处于关闭状态"
+    assert loop.gate.remaining() >= 29
+
+
+async def test_the_round_after_a_gate_close_is_skipped_without_touching_upstream(tmp_path):
+    """闸门关着的那一轮应当整轮跳过：不再向上游发请求，也不假装这一轮"开始跑过"。"""
+    logger = Logger()
+    client = GateFailingClient()
+    loop = make_loop(tmp_path, logger, users=f"{UID}|示例账号\n", client=client)
+    loop.reload_users(force=True)
+
+    await loop.run_round()
+    first_round_calls = client.calls
+    await loop.run_round()
+
+    assert client.calls == first_round_calls, "闸门关着还去打上游，等于没关"
+    assert logger.events("round.skipped")[-1]["reason"] == "gate closed"
+
+
+async def test_a_bad_sec_user_id_does_not_stop_the_other_accounts(tmp_path):
+    """`INVALID_PARAM` 是**单个账号**的问题，不能连坐全局。
+
+    DTK 对一个写错的 `sec_user_id` 回 400 `INVALID_PARAM`；它曾经被归进"配置类错误"，
+    于是一个坏 ID 让其余全部账号每小时停摆一小时（而且每轮到期后又被撞一次，
+    闸门再也开不回来）。现在它只按这个账号自己的失败计数处理。
+    """
+    logger = Logger()
+    client = GateFailingClient(code="INVALID_PARAM", retry_after=None)
+    loop = make_loop(tmp_path, logger, users=f"{UID}|示例账号\n", client=client)
+    loop.reload_users(force=True)
+
+    await loop.run_round()
+
+    assert loop.gate.is_open() is True, "一个账号的 ID 写错不该关掉全局闸门"
+    assert "gate.closed" not in logger.names()
+    assert "round.start" in logger.names(), "这一轮是真的跑了（只是那个账号失败了）"
+
+
+async def test_an_auth_failure_still_stops_everything(tmp_path):
+    """凭证错是**实例级**问题：所有账号都会 401，所以仍然要关闸并只告警一次。"""
+    logger = Logger()
+    client = GateFailingClient(code="UNAUTHENTICATED", retry_after=None)
+    loop = make_loop(tmp_path, logger, users=f"{UID}|示例账号\n", client=client)
+    loop.reload_users(force=True)
+
+    await loop.run_round()
+
+    assert loop.gate.is_open() is False
+    assert loop.gate.remaining() > 3000, "凭证类问题关得久一点（一小时），而不是 60 秒"

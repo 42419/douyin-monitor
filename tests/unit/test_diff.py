@@ -219,6 +219,107 @@ def test_deletion_is_not_hidden_by_scroll_out_budget():
     assert state.post("b").absent_rounds == 1
 
 
+def test_a_pending_deletion_is_not_absorbed_by_the_next_rounds_budget():
+    """**已经在确认计数里**的作品不该被下一轮的挤出预算销案。
+
+    它在上一轮（窗口没有变大时）就已经在窗口之外了，所以这一轮的新作品解释不了它。
+    以前预算对 `absent_rounds > 0` 的条目同样生效，于是这样一串很正常的序列：
+
+        第 1 轮：某作品缺席（计数 1，窗口没涨）
+        第 2 轮：作者发了 1 条新作品
+
+    会把那条静默埋成一个 `scrolled_out` 墓碑——`post_removed` 永远不会来，
+    而且它将来若因窗口回移重新出现，还会多推一条假的"作品回归"。
+    """
+    gone = PostState(
+        content_id="gone", title="G", created_at=T0 - timedelta(days=5), absent_rounds=1
+    )
+    keep = PostState(content_id="keep", title="K", created_at=T0 - timedelta(days=1))
+    prev = AuthorState(sec_user_id="u1", ever_had_posts=True, posts=(gone, keep))
+    # 确认轮数调到 3，好让"第 2 轮"停在中途：这一轮它既不该被销案，也不该已经确认，
+    # 唯一的正确结果是"继续累计"。
+    cfg = DiffConfig(fetch_count=15, delete_rounds=3)
+
+    # 第 2 轮：新作品出现，那条约 5 天前的作品仍然不在本页
+    events, state = diff(prev, page=page(post("keep", minutes_ago=60), post("new")), now=at(1), cfg=cfg)
+
+    assert ids_of(events, EventKind.SCROLLED_OUT) == [], "待确认的删除不该被挤出预算销案"
+    assert state.post("gone") is not None, "它应该继续走确认流程，而不是被静默埋掉"
+    assert state.post("gone").absent_rounds == 2
+    assert REASON_SCROLLED_OUT not in [t.reason for t in state.tombstones]
+    assert EventKind.POST_REMOVED not in kinds(events), "还没到阈值"
+
+    # 第 3 轮：仍然不在本页 → 正常确认并报出来
+    events2, state2 = diff(state, page=page(post("keep", minutes_ago=60), post("new")), now=at(2), cfg=cfg)
+
+    assert ids_of(events2, EventKind.POST_REMOVED) == [None] or EventKind.POST_REMOVED in kinds(events2)
+    assert state2.post("gone") is None
+    assert any(t.content_id == "gone" and t.reason == REASON_CONFIRMED for t in state2.tombstones)
+
+
+def test_the_budget_still_works_for_posts_missing_for_the_first_time():
+    """预算本身不能被上面那条修复弄坏：这一轮**才**消失的最旧非置顶仍然走静默清理。"""
+    a = PostState(content_id="a", title="A", created_at=T0 - timedelta(days=30))
+    b = PostState(content_id="b", title="B", created_at=T0 - timedelta(days=20))
+    prev = AuthorState(sec_user_id="u1", ever_had_posts=True, posts=(a, b))
+
+    events, state = diff(prev, page=page(post("new")), now=at(1), cfg=CFG)
+
+    assert ids_of(events, EventKind.SCROLLED_OUT) == ["a"]
+    assert state.tombstones[0].reason == REASON_SCROLLED_OUT
+
+
+# ---------------------------------------------------------------- 漏检（raw 轮次）
+def test_gap_is_detected_even_on_a_round_without_raw():
+    """漏检判据必须在本轮没带 `include_raw` 时也能成立。
+
+    `INCLUDE_RAW=auto`（默认）只有少数几轮带 raw，其余轮次本页 `is_top` 恒为 False；
+    而抖音会把置顶项**额外**塞进返回里。于是那几个发布时间可能是几年前的置顶项混进
+    "非置顶"里，把本页最旧时间拉到远古，判据永不成立——而且同一轮还会推进
+    `newest_seen_created_at`，后面带 raw 的那一轮也补不回来（永久漏判）。
+    """
+    fresh = [post(str(i), minutes_ago=10 * i) for i in range(1, 6)]
+    # 非 raw 轮：`is_top` 恒为 False，这正是要复现的条件
+    old_pinned = post("pinned", minutes_ago=400 * 24 * 60)
+    pinned_state = PostState(
+        content_id="pinned", title="P", created_at=old_pinned.created_at, is_top=True
+    )
+    prev = AuthorState(
+        sec_user_id="u1",
+        ever_had_posts=True,
+        newest_seen_created_at=T0 - timedelta(minutes=70),
+        posts=(pinned_state,),
+    )
+
+    # 本页最旧的**非置顶**作品是 45 分钟前，而上一轮最新的非置顶是 70 分钟前
+    # → 中间那段没采集到（漏检）。置顶项本身留在库里、也出现在本页，不产生别的噪声。
+    page_items = [post(str(i), minutes_ago=5 * i) for i in range(5, 10)]  # 25/30/35/40/45 分钟前
+    page_items.append(old_pinned)
+    events, _state = diff(prev, page=page(*page_items, raw_included=False), now=at(1), cfg=CFG)
+
+    assert EventKind.GAP_DETECTED in kinds(events), "置顶项不该把漏检判据拖死（非 raw 轮）"
+
+
+def test_a_known_pinned_post_is_excluded_from_the_gap_window_even_without_raw():
+    """同一件事的反面：库里已知是置顶的条目，即使本轮没带 raw 也要被排除在时间比较之外。"""
+    block = post("block", minutes_ago=10)
+    ancient = post("ancient", minutes_ago=400 * 24 * 60)
+    prev = AuthorState(
+        sec_user_id="u1",
+        ever_had_posts=True,
+        # 上轮最新的非置顶是 60 分钟前；本页最旧的非置顶是 10 分钟前 → 中间有缺口
+        newest_seen_created_at=T0 - timedelta(minutes=60),
+        posts=(
+            PostState(content_id="ancient", created_at=ancient.created_at, is_top=True),
+            PostState(content_id="block", created_at=block.created_at),
+        ),
+    )
+
+    events, _state = diff(prev, page=page(block, ancient, raw_included=False), now=at(1), cfg=CFG)
+
+    assert EventKind.GAP_DETECTED in kinds(events), "已知置顶项被算进窗口，判据就失效了"
+
+
 # ---------------------------------------------------------------- 窗口回移
 
 
