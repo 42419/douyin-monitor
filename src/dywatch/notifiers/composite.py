@@ -67,10 +67,10 @@ def _build_from_target(target: Any, at_mobiles: tuple[str, ...]) -> HttpChannel:
 def _build_legacy(settings: Any, at_mobiles: tuple[str, ...]) -> list[HttpChannel]:
     """旧写法：`NOTIFY_CHANNELS` + 单值凭据键。**保留是为了不破坏已有部署的 .env。**
 
-    旧写法一个类型只能有一个实例，但 `NOTIFY_CHANNELS=dingtalk,dingtalk` 这种写法是**能**
-    被写出来的：那会建出两个同名渠道，而 `Delivery.sent` / `failed` 是名字的列表与字典，
-    两个同名实例的结果会互相覆盖——"两个群只有一个收到了"在投递记录里看不出来。
-    所以第二个开始加 `-2` / `-3` 后缀，与 target 写法的编号规则一致。
+    旧写法一个类型只有**一份**凭据，但 `NOTIFY_CHANNELS=dingtalk,dingtalk` 这种写法是**能**
+    被写出来的：那会建出两个同名渠道（同一份凭据，同一条消息会往同一个群发两次），而
+    `Delivery.sent` / `failed` 是名字的列表与字典，两个同名实例的结果会互相覆盖——其中一次
+    失败了，投递记录里也看不出来。所以第二个开始加 `-2` / `-3` 后缀，与 target 写法的编号规则一致。
     """
     built: list[HttpChannel] = []
     counted: dict[str, int] = {}
