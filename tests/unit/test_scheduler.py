@@ -252,6 +252,79 @@ def test_a_straggler_with_a_shorter_retry_after_never_shortens_the_gate():
     assert g.times_closed == 1
 
 
+# ------------------------------------------------------------------ 同值 retry_after / 封顶只记一次
+class _Recorder:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def debug(self, event: str, **fields) -> None:
+        self.events.append((event, fields))
+
+    def names(self) -> list[str]:
+        return [name for name, _fields in self.events]
+
+
+def test_stragglers_with_the_same_retry_after_do_not_each_extend_the_gate():
+    """最常见的真实形状：5 个并发请求收到**同一个** 429 + `retry_after=30`。
+
+    第一个把闸门关到 30 秒；后到的那个一算 `wanted=30`、而浮点余量已经是 29.99——
+    按浮点比较它"更长"，于是每个后到者都"延长"一次，`times_closed` 记成 5、
+    `_history`（只留最近 20 条）被同一次事故灌满。
+    """
+    g = gate(default_seconds=60, backoff_max=600)
+
+    results = [g.trip(MonitorError("RATE_LIMITED", retry_after=30)) for _ in range(5)]
+
+    assert all(29 <= seconds <= 30 for seconds in results), results
+    assert g.times_closed == 1, "一次事故只记一次关闸"
+    assert len(g._history) == 1
+
+
+def test_one_capped_incident_is_counted_once_however_many_requests_hit_it():
+    """封顶计数的口径是"事故"，不是"撞上它的请求数"。
+
+    上游说等一天（86400），上限 3600：5 个并发请求都带着这个值。面板横幅会写
+    "已被封顶 N 次"，N 不该随并发数变化。
+    """
+    log = _Recorder()
+    g = gate(retry_after_max=3600, logger=log)
+
+    for _ in range(5):
+        g.trip(MonitorError("RATE_LIMITED", retry_after=86400))
+
+    assert g.snapshot()["retry_after_capped"] == 1
+    assert log.names().count("gate.retry_after_capped") == 1
+    assert g.times_closed == 1
+    assert 3599 <= g.remaining() <= 3600
+
+
+def test_a_straggler_that_really_extends_the_gate_to_the_cap_is_counted():
+    """后到者带着更长的值、**确实**把闸门延长了（而且延长到了上限）：这一次才算封顶。"""
+    log = _Recorder()
+    g = gate(retry_after_max=3600, logger=log)
+    g.trip(MonitorError("RATE_LIMITED", retry_after=300))
+
+    seconds = g.trip(MonitorError("RATE_LIMITED", retry_after=86400))
+
+    assert seconds == 3600
+    assert g.snapshot()["retry_after_capped"] == 1
+    assert g.times_closed == 2, "关了一次、延长了一次"
+
+
+def test_comparing_a_straggler_leaves_no_trace_when_it_does_not_extend():
+    """"只是比较一下要不要延长"不能产生任何副作用：无日志、无计数。"""
+    log = _Recorder()
+    g = gate(retry_after_max=3600, logger=log)
+    g.trip(MonitorError("RATE_LIMITED", retry_after=3600))
+    log.events.clear()
+
+    for _ in range(3):
+        g.trip(MonitorError("RATE_LIMITED", retry_after=999999))
+
+    assert log.events == []
+    assert g.snapshot()["retry_after_capped"] == 0, "第一次的 3600 恰好等于上限，没被封顶"
+
+
 # ------------------------------------------------------------------ 快照
 def test_snapshot_exposes_what_the_panel_and_logs_need():
     g = gate()
