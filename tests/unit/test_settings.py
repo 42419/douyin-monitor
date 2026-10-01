@@ -77,6 +77,71 @@ def test_cross_field_validation_catches_the_mistakes_people_actually_make(overri
     assert any(fragment in error for error in errors), errors
 
 
+# --------------------------------------------------- RETRY_AFTER_MAX_SECONDS 与升级兼容
+VALID_ENV = {
+    "DTK_API_KEY": "dtk_x",
+    "DINGTALK_TOKEN": "t",
+    "DINGTALK_SECRET": "SECxxx",
+}
+
+
+def test_an_old_env_with_a_large_backoff_cap_still_starts_after_upgrade():
+    """升级之前合法的 `.env`（`BACKOFF_MAX_SECONDS=7200`）没碰过新键，不能因此起不来。
+
+    新键默认 3600 < 7200：如果校验直接拿默认值去比，用户什么都没改、升级之后服务就报
+    启动错误。没显式配置时它**跟着退避上限走**。
+    """
+    settings = load_settings(None, environ={**VALID_ENV, "BACKOFF_MAX_SECONDS": "7200"})
+
+    assert settings.validate() == []
+    assert settings.retry_after_max == 7200
+
+
+def test_the_default_retry_after_cap_is_one_hour():
+    settings = load_settings(None, environ=VALID_ENV)
+
+    assert settings.validate() == []
+    assert settings.retry_after_max == 3600
+
+
+def test_an_explicit_retry_after_cap_below_the_backoff_cap_is_still_refused():
+    """"显式写了一个更小的值"才是配错：那会让闸门在上游要求等得更久时提前放开。"""
+    env = {**VALID_ENV, "RETRY_AFTER_MAX_SECONDS": "300"}
+
+    errors = load_settings(None, environ=env).validate()
+
+    assert any("不能小于 BACKOFF_MAX_SECONDS" in error for error in errors), errors
+
+
+def test_an_explicit_retry_after_cap_is_used_as_written():
+    env = {**VALID_ENV, "BACKOFF_MAX_SECONDS": "600", "RETRY_AFTER_MAX_SECONDS": "1800"}
+    settings = load_settings(None, environ=env)
+
+    assert settings.validate() == []
+    assert settings.retry_after_max == 1800
+
+
+def test_an_unreadable_retry_after_cap_counts_as_not_configured():
+    """写成 `abc` 会回退默认值（来源标成"非法,已回退默认"）——那不是"显式配置"，也要跟随。"""
+    env = {**VALID_ENV, "BACKOFF_MAX_SECONDS": "7200", "RETRY_AFTER_MAX_SECONDS": "abc"}
+    settings = load_settings(None, environ=env)
+
+    assert settings.retry_after_max == 7200
+    assert not any("RETRY_AFTER_MAX_SECONDS" in error for error in settings.validate())
+
+
+def test_config_check_shows_the_value_that_is_actually_in_effect():
+    """`config-check` 不能写 3600 而闸门实际用的是 7200。"""
+    following = load_settings(None, environ={**VALID_ENV, "BACKOFF_MAX_SECONDS": "7200"})
+    plain = load_settings(None, environ=VALID_ENV)
+
+    line_following = next(l for l in following.describe() if l.startswith("RETRY_AFTER_MAX_SECONDS"))
+    line_plain = next(l for l in plain.describe() if l.startswith("RETRY_AFTER_MAX_SECONDS"))
+
+    assert "7200" in line_following and "跟随退避上限" in line_following
+    assert "3600" in line_plain and "跟随" not in line_plain
+
+
 def test_low_poll_interval_is_refused_not_silently_raised():
     """配置成 5 秒要报错，而不是悄悄按 10 秒跑——后者会让人以为自己改生效了。"""
     settings = load_settings(None, environ={"POLL_INTERVAL_MIN": "5"})

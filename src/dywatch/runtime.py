@@ -242,7 +242,7 @@ def build_runtime(settings: Settings, *, logger: StructuredLogger) -> Runtime:
         backoff_after=int(settings["BACKOFF_AFTER"]),
         backoff_max=int(settings["BACKOFF_MAX_SECONDS"]),
         # 上游 `retry_after` 的封顶与"我们自己退避的封顶"是两件事，见 DESIGN 修正 #32
-        retry_after_max=int(settings["RETRY_AFTER_MAX_SECONDS"]),
+        retry_after_max=settings.retry_after_max,
         # 封顶要留痕（debug 日志），否则"闸门为什么每十分钟开一次"只能靠读代码查
         logger=logger,
     )

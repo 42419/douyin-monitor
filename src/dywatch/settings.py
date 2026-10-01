@@ -252,6 +252,24 @@ class Settings:
         return self.values[key]
 
     @property
+    def retry_after_max(self) -> int:
+        """闸门**实际用**的上游 `retry_after` 封顶（秒）。
+
+        显式配置了就用配置值；**没配置时取 `max(默认值, BACKOFF_MAX_SECONDS)`**。
+        不能直接用默认 3600：升级之前合法的 `.env`（比如 `BACKOFF_MAX_SECONDS=7200`）
+        没碰过这个新键，3600 < 7200 会让它在校验里变成启动错误——用户什么都没改，
+        升级之后服务起不来。"没配" 的意思就是"跟着退避上限走"，而不是"另有一个默认值要核对"。
+        """
+        configured = int(self.values["RETRY_AFTER_MAX_SECONDS"])
+        if self._is_explicit("RETRY_AFTER_MAX_SECONDS"):
+            return configured
+        return max(configured, int(self.values["BACKOFF_MAX_SECONDS"]))
+
+    def _is_explicit(self, key: str) -> bool:
+        """这个键是用户**写了且读得出来**的（环境变量或 `.env`），而不是默认值 / 非法回退。"""
+        return self.sources.get(key) in ("env", ".env")
+
+    @property
     def home(self) -> Path:
         raw = str(self.values.get("MONITOR_HOME") or "").strip()
         return Path(raw) if raw else Path.cwd()
@@ -305,9 +323,14 @@ class Settings:
 
         # 上游的 `retry_after` 封顶必须不低于我们自己的退避封顶：低于它意味着"上游要求等
         # 一小时、我们只等十分钟"，然后每十分钟放出一轮请求反复撞墙——等于自己制造循环。
+        # **只在用户显式配置了它时才报错**：没配置时它跟着 `BACKOFF_MAX_SECONDS` 走
+        # （见 `retry_after_max`），否则升级前合法的 `.env` 会在这里起不来。
         if v["RETRY_AFTER_MAX_SECONDS"] < 1:
             errors.append("RETRY_AFTER_MAX_SECONDS 必须大于 0（它是上游 retry_after 的封顶秒数）")
-        elif v["RETRY_AFTER_MAX_SECONDS"] < v["BACKOFF_MAX_SECONDS"]:
+        elif (
+            self._is_explicit("RETRY_AFTER_MAX_SECONDS")
+            and v["RETRY_AFTER_MAX_SECONDS"] < v["BACKOFF_MAX_SECONDS"]
+        ):
             errors.append(
                 f"RETRY_AFTER_MAX_SECONDS({v['RETRY_AFTER_MAX_SECONDS']}) 不能小于 "
                 f"BACKOFF_MAX_SECONDS({v['BACKOFF_MAX_SECONDS']})："
@@ -459,6 +482,9 @@ class Settings:
                 extra = [f"    - {target.masked()}" for target in value.targets]
             elif isinstance(value, list):
                 shown = ",".join(str(x) for x in value) or "(空)"
+            elif spec.key == "RETRY_AFTER_MAX_SECONDS" and self.retry_after_max != value:
+                # 没显式配置、且 BACKOFF_MAX_SECONDS 比默认值还大：实际生效的是后者
+                shown = f"{self.retry_after_max} (跟随退避上限)"
             else:
                 shown = str(value)
             lines.append(
