@@ -68,12 +68,35 @@ class Channel(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class HttpChannel:
-    """Common POST-with-JSON behaviour. Subclasses only build the payload."""
+    """Common POST-with-JSON behaviour. Subclasses only build the payload.
+
+    `error_field` / `error_ok` 是**"对方受理了没有"**的判据，不是 HTTP 状态码的替代：
+    这些渠道在业务失败时依然回 `200`（钉钉 `errcode:310000`、企业微信 `errcode:93000`、
+    Server 酱 `code` 非 0），只看状态码会把"根本没发出去"记成"已送达"——
+    而 `delivery_json`、`test-notify` 的 ✓ 和退出码都会跟着说谎。
+    只有**明确认出来是失败**才算失败（不含这些字段的 200 响应照旧算成功），
+    这样自建反代之类的自定义回包不会被误判。
+    """
 
     name: str
+    #: 响应体里表示业务错误的字段名；`None` = 这个渠道不用这个判据
+    error_field: str | None = None
+    #: 该字段等于什么才算成功（其余值都是失败）
+    error_ok: Any = 0
 
     def request(self, message: Message) -> tuple[str, dict[str, Any]]:  # pragma: no cover - abstract
         raise NotImplementedError
+
+    @staticmethod
+    def _parse_error_field(response: httpx.Response, field: str) -> Any | None:
+        """返回该字段的值；`None` 表示"这个响应里没有它，或者读不出来"。"""
+        try:
+            body = response.json()
+        except ValueError:
+            return None
+        if isinstance(body, Mapping):
+            return body.get(field)
+        return None
 
     async def send(self, message: Message, client: httpx.AsyncClient) -> None:
         url, payload = self.request(message)
@@ -82,6 +105,13 @@ class HttpChannel:
             raise RetryableDelivery(f"{self.name} returned {response.status_code}")
         if response.status_code >= 400:
             raise RuntimeError(f"{self.name} returned {response.status_code}")
+        if self.error_field is None:
+            return
+        value = self._parse_error_field(response, self.error_field)
+        if value is None:
+            return
+        if value != self.error_ok:
+            raise RuntimeError(f"{self.name} {self.error_field}={value}")
 
 
 class RetryableDelivery(RuntimeError):

@@ -65,8 +65,19 @@ def _build_from_target(target: Any, at_mobiles: tuple[str, ...]) -> HttpChannel:
 
 
 def _build_legacy(settings: Any, at_mobiles: tuple[str, ...]) -> list[HttpChannel]:
-    """旧写法：`NOTIFY_CHANNELS` + 单值凭据键。**保留是为了不破坏已有部署的 .env。**"""
+    """旧写法：`NOTIFY_CHANNELS` + 单值凭据键。**保留是为了不破坏已有部署的 .env。**
+
+    旧写法一个类型只能有一个实例，但 `NOTIFY_CHANNELS=dingtalk,dingtalk` 这种写法是**能**
+    被写出来的：那会建出两个同名渠道，而 `Delivery.sent` / `failed` 是名字的列表与字典，
+    两个同名实例的结果会互相覆盖——"两个群只有一个收到了"在投递记录里看不出来。
+    所以第二个开始加 `-2` / `-3` 后缀，与 target 写法的编号规则一致。
+    """
     built: list[HttpChannel] = []
+    counted: dict[str, int] = {}
+
+    def unique(name: str) -> str:
+        counted[name] = counted.get(name, 0) + 1
+        return name if counted[name] == 1 else f"{name}-{counted[name]}"
 
     for name in settings["NOTIFY_CHANNELS"]:
         if name == "dingtalk":
@@ -74,6 +85,7 @@ def _build_legacy(settings: Any, at_mobiles: tuple[str, ...]) -> list[HttpChanne
                 continue
             built.append(
                 DingTalkChannel(
+                    name=unique("dingtalk"),
                     token=settings["DINGTALK_TOKEN"],
                     secret=settings["DINGTALK_SECRET"],
                     at_mobiles=at_mobiles,
@@ -81,29 +93,33 @@ def _build_legacy(settings: Any, at_mobiles: tuple[str, ...]) -> list[HttpChanne
             )
         elif name == "wecom":
             if settings["WECOM_WEBHOOK_KEY"]:
-                built.append(WeComChannel(key=settings["WECOM_WEBHOOK_KEY"]))
+                built.append(WeComChannel(name=unique("wecom"), key=settings["WECOM_WEBHOOK_KEY"]))
         elif name == "bark":
             if settings["BARK_DEVICE_KEY"]:
                 built.append(
                     BarkChannel(
+                        name=unique("bark"),
                         server=settings["BARK_SERVER"],
                         device_key=settings["BARK_DEVICE_KEY"],
                     )
                 )
         elif name == "serverchan":
             if settings["SERVERCHAN_SENDKEY"]:
-                built.append(ServerChanChannel(sendkey=settings["SERVERCHAN_SENDKEY"]))
+                built.append(
+                    ServerChanChannel(name=unique("serverchan"), sendkey=settings["SERVERCHAN_SENDKEY"])
+                )
         elif name == "telegram":
             if settings["TELEGRAM_BOT_TOKEN"] and settings["TELEGRAM_CHAT_ID"]:
                 built.append(
                     TelegramChannel(
+                        name=unique("telegram"),
                         bot_token=settings["TELEGRAM_BOT_TOKEN"],
                         chat_id=settings["TELEGRAM_CHAT_ID"],
                     )
                 )
         elif name == "webhook":
             if settings["WEBHOOK_URL"]:
-                built.append(WebhookChannel(url=settings["WEBHOOK_URL"]))
+                built.append(WebhookChannel(name=unique("webhook"), url=settings["WEBHOOK_URL"]))
     return built
 
 

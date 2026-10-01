@@ -13,6 +13,8 @@ class WeComChannel(HttpChannel):
     name: str = "wecom"
     key: str = ""
     webhook: str = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send"
+    #: Key 写错时是 `200 {"errcode":93000}`——只看状态码会把"根本没发出去"记成已送达
+    error_field: str | None = "errcode"
 
     def request(self, message: Any) -> tuple[str, dict[str, Any]]:
         return (

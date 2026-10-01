@@ -99,8 +99,22 @@ def test_serverchan_truncates_the_title_to_32_bytes():
     url, body = ServerChanChannel(sendkey="SCT123").request(message)
 
     assert url == "https://sctapi.ftqq.com/SCT123.send"
-    assert len(body["title"]) <= 32, "Server 酱的标题上限"
+    assert len(body["title"].encode("utf-8")) <= 32, "Server 酱的标题上限是 **32 字节**，不是 32 个字符"
     assert body["desp"] == message.markdown
+
+
+def test_serverchan_byte_truncation_never_splits_a_character():
+    """按字节切时不能把一个多字节字符切成两半（那会变成替换字符，肉眼看着就是乱码）。"""
+    import dataclasses
+
+    message = make_message()
+    long_subject = "【新作品】" + "很长的中文昵称" * 3 + " 发布了新视频"
+    long_message = dataclasses.replace(message, subject=long_subject)
+    body = ServerChanChannel(sendkey="S").request(long_message)[1]
+
+    assert len(body["title"].encode("utf-8")) <= 32
+    body["title"].encode("utf-8").decode("utf-8")  # 切坏了这里就会抛 UnicodeDecodeError
+    assert "\ufffd" not in body["title"]
 
 
 def test_telegram_keeps_the_bot_token_in_the_path():
@@ -212,3 +226,74 @@ async def test_names_are_unique_so_failed_can_be_a_dict():
     names = [c.name for c in build_channels(settings)]
 
     assert len(names) == len(set(names)) == 2
+
+
+# ------------------------------------------------------------------ 200 但业务失败
+class _FakeResponse:
+    def __init__(self, status_code: int, payload: Any) -> None:
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self) -> Any:
+        if isinstance(self._payload, Exception):
+            raise self._payload
+        return self._payload
+
+
+class _FakeClient:
+    def __init__(self, response: _FakeResponse) -> None:
+        self.response = response
+        self.calls = 0
+
+    async def post(self, *args: Any, **kwargs: Any) -> _FakeResponse:
+        self.calls += 1
+        return self.response
+
+
+@pytest.mark.parametrize(
+    ("channel", "body"),
+    [
+        (WeComChannel(key="bad"), {"errcode": 93000, "errmsg": "invalid webhook key"}),
+        (DingTalkChannel(token="t"), {"errcode": 310000, "errmsg": "keywords not in content"}),
+        (BarkChannel(device_key="d"), {"code": 400, "message": "bad device token"}),
+        (ServerChanChannel(sendkey="s"), {"code": 40001, "message": "bad sendkey"}),
+    ],
+)
+async def test_a_200_with_a_business_error_is_a_failure_not_a_success(channel, body):
+    """这些渠道业务失败时**也回 200**，只看状态码会把"根本没发出去"记成已送达。
+
+    `delivery_json`、`test-notify` 的 ✓ 和退出码都会跟着说谎——正是这个模块声称要防的事。
+    """
+    client = _FakeClient(_FakeResponse(200, body))
+
+    with pytest.raises(RuntimeError) as caught:
+        await channel.send(make_message(), client)  # type: ignore[arg-type]
+
+    assert channel.error_field in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("channel", "body"),
+    [
+        (WeComChannel(key="k"), {"errcode": 0, "errmsg": "ok"}),
+        (DingTalkChannel(token="t"), {"errcode": 0, "errmsg": "ok"}),
+        (BarkChannel(device_key="d"), {"code": 200, "message": "success"}),
+        (ServerChanChannel(sendkey="s"), {"code": 0, "message": ""}),
+        # 自建反代之类可能回一个没有这些字段的 200：**不算失败**，否则会误判成故障
+        (WeComChannel(key="k"), {"ok": True}),
+        (WebhookChannel(url="https://x"), "not json at all"),
+        (TelegramChannel(bot_token="1:A"), {"ok": True, "result": {}}),
+    ],
+)
+async def test_a_healthy_200_is_still_a_success(channel, body):
+    client = _FakeClient(_FakeResponse(200, body))
+
+    await channel.send(make_message(), client)  # type: ignore[arg-type]
+
+    assert client.calls == 1
+
+
+async def test_a_non_json_200_body_does_not_break_a_channel_that_has_no_error_field():
+    """读不出 JSON 时不能把一条已经送达的消息判成失败。"""
+    client = _FakeClient(_FakeResponse(200, ValueError("no json")))
+    await DingTalkChannel(token="t").send(make_message(), client)  # type: ignore[arg-type]

@@ -20,6 +20,8 @@ class DingTalkChannel(HttpChannel):
     token: str = ""
     secret: str = ""
     at_mobiles: tuple[str, ...] = ()
+    #: 业务失败也回 200（关键词不匹配 `310000`、被限流 `130101` 等），必须读这个字段
+    error_field: str | None = "errcode"
 
     def request(self, message: Any) -> tuple[str, dict[str, Any]]:
         url = f"{self.webhook}?access_token={self.token}"

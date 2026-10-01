@@ -19,6 +19,9 @@ class BarkChannel(HttpChannel):
     server: str = "https://api.day.app"
     device_key: str = ""
     group: str = "dywatch"
+    #: Bark 失败也回 200（`{"code":400,"message":"bad device token"}`）
+    error_field: str | None = "code"
+    error_ok: Any = 200
 
     def request(self, message: Any) -> tuple[str, dict[str, Any]]:
         return (
