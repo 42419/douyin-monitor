@@ -89,6 +89,11 @@ def setup_logging(settings: Settings) -> tuple[StructuredLogger, logging.Logger]
     log_dir = settings.log_dir
     (log_dir / "info").mkdir(parents=True, exist_ok=True)
     (log_dir / "debug").mkdir(parents=True, exist_ok=True)
+    # DESIGN §1.1：日志目录 0700。日志里有账号 ID、昵称、作品标题与错误详情，
+    # 默认的 0755 让同机任何用户都能读。失败不致命，所以只试一次、不抛。
+    for directory in (log_dir, log_dir / "info", log_dir / "debug"):
+        with contextlib.suppress(OSError):
+            os.chmod(directory, 0o700)
 
     logger = logging.getLogger(LOGGER_NAME)
     logger.setLevel(logging.DEBUG)

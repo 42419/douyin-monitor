@@ -15,8 +15,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -82,7 +84,7 @@ class MonitorLoop:
         if not force and mtime is not None and mtime == self._users_mtime:
             return False
 
-        entries = load_users_conf(path)
+        entries = load_users_conf(path, logger=self.log)
         if entries:
             self.log.info("users.loaded", count=len(entries), path=str(path))
         else:
@@ -291,9 +293,22 @@ class MonitorLoop:
 
         path = self.settings.status_path
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        # 临时文件名**每个写者都不同**：`dywatch once` 与常驻进程并发是文档承认的正常用法
+        # （见 cli 里 once 的说明），而固定的 `status.json.tmp` 会让两个写者交错写同一个
+        # 文件，`os.replace` 上去的可能是一份两轮混在一起的快照——直接不可解析。
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+        )
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(snapshot, ensure_ascii=False, indent=2))
+            tmp.replace(path)
+        except BaseException:
+            # 失败时别把半个临时文件留在工作目录里（面板只读 data/，但垃圾会一直堆）
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+            raise
         return path
 
 

@@ -12,7 +12,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -210,6 +212,12 @@ class StateStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.execute("PRAGMA synchronous=NORMAL")
+        # 状态库里是"监控了谁 + 他们发了什么"，DESIGN §1.1 要求它 0600。
+        # systemd 单元的 `ProtectSystem=strict` + 单独账号不是同一件事：共享主机、
+        # 或者工作目录被别的东西挂在同一个 umask 下时，默认的 0644 就是"同机任何用户
+        # 都能读你的监控名单"。失败不致命（某些文件系统不支持 chmod），所以只试一次。
+        with contextlib.suppress(OSError):
+            os.chmod(self.path, 0o600)
 
     # ---------------------------------------------------------------- 生命周期
     def migrate(self) -> None:
