@@ -161,6 +161,26 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
 
 SPECS: Final[Mapping[str, SettingSpec]] = {spec.key: spec for spec in SETTINGS}
 
+#: `config-check`（`Settings.describe()`）里**必须打码**的键。
+#:
+#: 这份清单是"对外输出"的防线：`config-check` 的输出被排障文档鼓励贴进 issue，漏一个
+#: 就等于公开一把钥匙。曾经漏了两个：`PIN_DTK_API_KEY`——它带 `identity:manage`，
+#: 能解密任意身份的 cookie 明文，比主监控那把只读钥匙重得多——以及旧写法的
+#: `WEBHOOK_URL`（回调地址通常自带密钥）。新增凭据类配置时**必须同步加到这里**。
+MASKED_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "DTK_API_KEY",
+        "PIN_DTK_API_KEY",
+        "DINGTALK_TOKEN",
+        "DINGTALK_SECRET",
+        "WECOM_WEBHOOK_KEY",
+        "BARK_DEVICE_KEY",
+        "SERVERCHAN_SENDKEY",
+        "TELEGRAM_BOT_TOKEN",
+        "WEBHOOK_URL",
+    }
+)
+
 
 #: 布尔配置认哪些写法。**不收别的一律报错**：多认一种拼写，就多一次"以为生效了"的机会；
 #: 而这些已经是各服务配置里的常见写法，够用了。
@@ -412,8 +432,7 @@ class Settings:
         for spec in SETTINGS:
             value = self.values.get(spec.key, spec.default)
             extra: list[str] = []
-            if spec.key in ("DTK_API_KEY", "DINGTALK_TOKEN", "DINGTALK_SECRET", "WECOM_WEBHOOK_KEY",
-                            "BARK_DEVICE_KEY", "SERVERCHAN_SENDKEY", "TELEGRAM_BOT_TOKEN"):
+            if spec.key in MASKED_KEYS:
                 shown = "***" if value else "(空)"
             elif isinstance(value, TargetSet):
                 # 目标多的时候一行塞不下：每个目标单起一行，凭据由 `masked()` 打码

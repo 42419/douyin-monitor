@@ -759,12 +759,33 @@ def _gate_html(gate: Mapping[str, Any]) -> str:
 # =================== 页面渲染 ===================
 
 def read_status(settings: Settings) -> dict[str, Any]:
-    """读状态快照。文件不存在/损坏都返回 `{}`——面板不该因此 500。"""
+    """读状态快照。文件不存在/损坏都返回 `{}`——面板不该因此 500。
+
+    **顶层字段一律做类型归一化**：快照是个普通 JSON 文件，手工改坏（或旧版本写下的
+    另一种形状）都不该让 `/`、`/metrics`、`/api/health` 在写出任何响应**之前**抛异常——
+    那种情况下连接会被直接关掉，比返回 500 更难查。数值字段由 `_as_int` / `_as_number`
+    兜，这里负责那几个"当映射用"的字段。
+    """
     try:
         data = json.loads(settings.status_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    data["gate"] = _as_mapping(data.get("gate"))
+    data["upstream"] = _as_mapping(data.get("upstream"))
+    notify = _as_mapping(data.get("notify"))
+    channels = notify.get("channels")
+    notify["channels"] = [str(item) for item in channels] if isinstance(channels, (list, tuple)) else []
+    data["notify"] = notify
+    users = data.get("users")
+    data["users"] = [item for item in users if isinstance(item, dict)] if isinstance(users, (list, tuple)) else []
+    return data
+
+
+def _as_mapping(value: Any) -> dict[str, Any]:
+    """快照里"应当是个对象"的字段；不是就当成空对象，而不是让调用方 `AttributeError`。"""
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 def render_page(settings: Settings) -> str:
@@ -1082,6 +1103,21 @@ def _dtk_ok(base_url: str, timeout: float = 3.0) -> dict[str, Any]:
         return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
 
 
+def _metrics_label(user: Mapping[str, Any]) -> str:
+    """`/metrics` 的 `author=` label：**必须带上 `sec_user_id`**。
+
+    只用昵称曾经是个真故障：昵称允许重复（`users.conf` 明说"可以与别的账号重复"），
+    两个同名的账号会产出两行一模一样的样本，而 Prometheus 见到重复样本会把**整次抓取**
+    判为失败——丢的不是那两个账号的指标，是这个面板的全部指标。
+    label 里放 id 之后名称重复就不再冲突；昵称保留在后面，人看图表时还认得出是谁。
+    """
+    sec_uid = str(user.get("sec_user_id") or "").strip()
+    nickname = str(user.get("nickname") or "").strip()
+    if not sec_uid:
+        return nickname or "?"
+    return f"{sec_uid}|{nickname}" if nickname else sec_uid
+
+
 def _label(value: str) -> str:
     """Prometheus 的 label 值：`\\` `"` 换行回车按规范转义，其余控制字符换空格。
 
@@ -1092,7 +1128,9 @@ def _label(value: str) -> str:
     于是 label 以一个落单的转义符结尾，样本照样是坏的（等于没修）。截断原始值就没有这个问题——
     代价是转义后的长度可能超过 64，而 64 本来就只是我们自己定的显示长度，不是协议要求。
     """
-    text = str(value)[:64]
+    # 96：`sec_user_id`（约 55 字符）加一个昵称要放得下，不然 id 会被截掉、
+    # 同名账号又变回同一个 label（等于这条修复没生效）。
+    text = str(value)[:96]
     text = text.replace("\\", "\\\\").replace('"', '\\"')
     for raw, escaped in (("\n", "\\n"), ("\r", "\\r"), ("\t", "\\t")):
         text = text.replace(raw, escaped)
@@ -1193,7 +1231,7 @@ class _Handler(BaseHTTPRequestHandler):
             "# TYPE dywatch_known_posts gauge",
         ]
         for user in users:
-            label = _label(str(user.get("nickname") or user.get("sec_user_id") or "?"))
+            label = _label(_metrics_label(user))
             lines.append(f'dywatch_known_posts{{author="{label}"}} {_as_int(user.get("known_posts"))}')
             lines.append(
                 f'dywatch_account_failures{{author="{label}"}} {_as_int(user.get("consecutive_fails"))}'

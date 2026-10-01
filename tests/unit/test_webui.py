@@ -257,8 +257,8 @@ def test_panel_and_metrics_survive_a_hand_edited_snapshot(tmp_path):
         assert status == 200
         assert "dywatch_rounds_total 0" in body
         assert "dywatch_rounds_recorded_total 0" in body
-        assert 'dywatch_known_posts{author="示例账号"} 0' in body
-        assert 'dywatch_account_failures{author="示例账号"} 0' in body
+        assert f'dywatch_known_posts{{author="{ID_OK}|示例账号"}} 0' in body
+        assert f'dywatch_account_failures{{author="{ID_OK}|示例账号"}} 0' in body
 
         assert get(base + "/")[0] == 200
         assert get(base + "/api/health")[0] == 200
@@ -348,7 +348,35 @@ def test_metrics_stay_parseable_with_hostile_nicknames(tmp_path):
     assert status == 200
     lines = [line for line in body.splitlines() if line.startswith("dywatch_known_posts{")]
     assert len(lines) == 1, "换行没被转义，样本被拆成了多行"
-    assert 'author="nl\\nq\\"\\\\x"' in lines[0]
+    # label 现在是 `id|昵称`：id 在前，所以断言里面的昵称那一段
+    assert 'nl\\nq\\"\\\\x"' in lines[0]
+    assert lines[0].startswith(f'dywatch_known_posts{{author="{ID_OK}|')
+
+
+def test_two_accounts_with_the_same_nickname_do_not_break_the_whole_scrape(tmp_path):
+    """昵称允许重复，而重复样本会让 Prometheus **拒收整次抓取**。
+
+    丢掉的不只是那两个同名账号的指标，是这个面板的全部指标——所以 label 里必须带 id。
+    """
+    settings = make_settings(tmp_path)
+    write_status(
+        settings,
+        users=[
+            user_entry(sec_user_id="MS4wLjABAAAAone", nickname="同名"),
+            user_entry(sec_user_id="MS4wLjABAAAAtwo", nickname="同名"),
+        ],
+    )
+
+    with panel(settings) as base:
+        status, body = get(base + "/metrics")
+
+    assert status == 200
+    labels = [
+        line.split('author="', 1)[1].split('"', 1)[0]
+        for line in body.splitlines()
+        if line.startswith("dywatch_known_posts{")
+    ]
+    assert len(labels) == len(set(labels)) == 2, "同名账号产出了重复样本"
 
 
 def test_metrics_label_never_ends_with_a_half_escape():
@@ -359,21 +387,7 @@ def test_metrics_label_never_ends_with_a_half_escape():
     """
     from dywatch.webui import _label
 
-    for raw in ("a" * 63 + '"' + "b", "a" * 62 + '"' + "b", "长" * 63 + '"', "\\" * 40, '"' * 40):
-        label = _label(raw)
-        trailing = len(label) - len(label.rstrip("\\"))
-        assert trailing % 2 == 0, f"{raw[-3:]!r} 截出了半个转义：{label[-4:]!r}"
-
-
-def test_metrics_label_never_ends_with_a_half_escape():
-    """截断点落在转义反斜杠上时，label 不能以落单的转义符结尾（那等于换行那个 bug 的翻版）。
-
-    `_label` 因此先截断再转义：只断言"结尾反斜杠成对"，因为落单的那一个会让
-    Prometheus 认为转义没结束。
-    """
-    from dywatch.webui import _label
-
-    for raw in ("a" * 63 + '"' + "b", "a" * 62 + '"' + "b", "长" * 63 + '"', "\\" * 40, '"' * 40):
+    for raw in ("a" * 95 + '"' + "b", "a" * 94 + '"' + "b", "长" * 95 + '"', "\\" * 60, '"' * 60):
         label = _label(raw)
         trailing = len(label) - len(label.rstrip("\\"))
         assert trailing % 2 == 0, f"{raw[-3:]!r} 截出了半个转义：{label[-4:]!r}"
@@ -555,7 +569,7 @@ def test_routes(tmp_path, monkeypatch):
 
         status, body = get(base + "/metrics")
         assert status == 200 and "dywatch_gate_open 1" in body
-        assert 'dywatch_known_posts{author="示例账号"} 8' in body
+        assert f'dywatch_known_posts{{author="{ID_OK}|示例账号"}} 8' in body
         # 进程级的那个保留 counter 语义（重启归零），累计的另起一个名字
         assert "dywatch_rounds_total 137" in body
         assert "dywatch_rounds_recorded_total 3214" in body

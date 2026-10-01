@@ -26,7 +26,8 @@ from . import __version__
 from .dtk import DtkClient, MonitorError
 from .runtime import build_runtime, setup_logging, single_instance_lock
 from .settings import Settings, resolve_env_file, load_settings
-from .users import load_users_conf, resolve_input
+from .users import is_safe_id, load_users_conf, resolve_input
+from .webui import read_status
 
 REQUIRED_SCOPES = ("douyin:read", "archive:read")
 
@@ -51,11 +52,29 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("target", help="抖音主页链接，或 sec_user_id")
     add.add_argument("nickname", nargs="?", default="", help="展示用昵称（默认取 ID 尾部）")
 
+    # `--env` 也接受写在子命令**后面**（`dywatch doctor --env /srv/x/.env`）。
+    # 文档说"所有命令都接受 --env"，而只在顶层注册的话这种写法会被 argparse 拒掉。
+    #
+    # `default=SUPPRESS` 是必需的（这里踩过一次）：子解析器一旦给 `--env` 设了普通默认值
+    # （哪怕是 None），它就会把**顶层那份** `--env` 覆盖掉——`dywatch --env X doctor`
+    # 于是静默退回 `./.env`。用 SUPPRESS 时，子命令没写这个选项就完全不碰命名空间，
+    # 顶层那份得以保留；两处都写时子命令那份（后解析）生效。
+    for name, child in sub.choices.items():
+        child.add_argument(
+            "--env", metavar="PATH", default=argparse.SUPPRESS,
+            help="指定 .env 路径（等价于写在子命令前面；两处都给时以子命令后面这个为准）",
+        )
     return parser
 
 
+def _env_path(args: argparse.Namespace) -> Path:
+    """这次实际读的 `.env` 路径：子命令后面的 `--env` 优先，其次顶层的。"""
+    explicit = getattr(args, "env", None) or None
+    return resolve_env_file(explicit)
+
+
 def _load(args: argparse.Namespace) -> Settings:
-    return load_settings(resolve_env_file(args.env))
+    return load_settings(_env_path(args))
 
 
 # ---------------------------------------------------------------------------
@@ -63,9 +82,12 @@ def _load(args: argparse.Namespace) -> Settings:
 # ---------------------------------------------------------------------------
 
 
-def cmd_config_check(settings: Settings) -> int:
+def cmd_config_check(settings: Settings, *, env_file: Path | None = None) -> int:
     print(f"dywatch {__version__} —— 生效配置")
-    print(f"配置文件: {resolve_env_file(None)}")
+    # 打的是**这次实际读的那个文件**。以前固定打 `resolve_env_file(None)`，于是
+    # `--env /srv/dywatch/.env` 的报告头上写着 `./.env`；再叠上"显式路径不存在时
+    # 静默跳过"的行为，一个拼错的 `--env` 会得到一份别的文件的完整报告而毫无提示。
+    print(f"配置文件: {env_file if env_file is not None else resolve_env_file(None)}")
     lines = settings.describe()
     # 分隔线跟着最长的一行走：键名长了（比如 ARCHIVE_DOWNLOAD_MAX_PER_ROUND），
     # 写死 78 会让表格比它自己的框还宽，读起来像是溢出
@@ -95,7 +117,12 @@ def cmd_status(settings: Settings) -> int:
     if not path.is_file():
         print(f"暂无状态快照（{path} 不存在），先跑一次 dywatch once")
         return 1
-    data = json.loads(path.read_text(encoding="utf-8"))
+    # 与面板同一个口径：快照读不出来就说读不出来，而不是抛一个 traceback。
+    # 面板把"文件损坏"当成"没有数据"，命令行不该比它更脆（同一份文件、同一种坏法）。
+    data = read_status(settings)
+    if not data:
+        print(f"状态快照读不出来（{path} 损坏或不是 JSON 对象），等下一轮覆盖，或直接删掉它")
+        return 1
     print(f"快照时间: {data.get('timestamp')}  PID: {data.get('pid')}")
     gate = data.get("gate") or {}
     print(f"上游闸门: {'正常' if gate.get('open', True) else '已关闭(' + str(gate.get('reason')) + ')'}")
@@ -124,7 +151,7 @@ def cmd_status(settings: Settings) -> int:
         when = "—" if hours is None else (f"{hours} 小时前" if hours else "刚刚")
         print(
             f"{(user.get('nickname') or '')[:20]:<22}{status:<10}"
-            f"{int(user.get('known_posts') or 0):>4}{int(user.get('consecutive_failures') or user.get('consecutive_fails') or 0):>5}  "
+            f"{int(user.get('known_posts') or 0):>4}{int(user.get('consecutive_fails') or 0):>5}  "
             f"{(user.get('update_frequency') or '—')[:6]:<8}{when:<12}"
             f"{user.get('last_error_code') or ''}"
         )
@@ -168,15 +195,33 @@ async def cmd_doctor(settings: Settings) -> int:
         scopes = set(user.get("scopes") or [])
         print(f"✓ 凭据有效：username={user.get('username')} role={user.get('role')} via={user.get('via')}")
         print(f"  scopes: {', '.join(sorted(scopes))}")
-        missing = [scope for scope in REQUIRED_SCOPES if scope not in scopes]
+        # `archive:read` **只在用得上它的时候才算必需**：它在配置里的开关就是
+        # `ARCHIVE_ENABLED`（关掉之后删除判定只是少一个零成本的第二信源）。
+        # 以前这里不看开关，两个方向都错：默认开启 + 缺 scope 时打印了 ✗ 却仍然
+        # "✓ 自检通过"并 exit 0（一个把 exit code 当门禁的 CI 会放过去，而归档交叉
+        # 确认实际上一直在失败）；反过来 `ARCHIVE_ENABLED=false` 时还在报 ✗。
+        required = [
+            scope for scope in REQUIRED_SCOPES
+            if scope != "archive:read" or settings["ARCHIVE_ENABLED"]
+        ]
+        missing = [scope for scope in required if scope not in scopes]
+        optional_missing = [
+            scope for scope in REQUIRED_SCOPES
+            if scope not in required and scope not in scopes
+        ]
         if missing:
             print(f"✗ 缺少必需的 scope: {', '.join(missing)}")
             print("  douyin:read  -> user/posts、video、tools/parse-url、tasks/{id}")
             print("  archive:read -> 归档交叉确认（可在配置里用 ARCHIVE_ENABLED=false 关掉）")
-            if "douyin:read" in missing:
-                problems.append("缺少 douyin:read")
+            for scope in missing:
+                problems.append(f"缺少 {scope}")
         else:
             print("✓ 必需的 scope 齐备")
+        if optional_missing:
+            print(
+                f"  ! 缺 {', '.join(optional_missing)}：ARCHIVE_ENABLED=false，"
+                "删除判定少一个零成本的第二信源（这是配置选择，不算问题）"
+            )
 
         if settings["ARCHIVE_DOWNLOAD_ENABLED"]:
             if "media:write" not in scopes:
@@ -337,11 +382,31 @@ async def cmd_add(settings: Settings, target: str, nickname: str) -> int:
         print("✗ 没能得到 sec_user_id")
         return 2
 
+    # **写进文件之前先过一遍校验器**：`users.conf` 的解析器会静默丢弃非法 ID，
+    # 于是"写进去了但没人监控"和"✓ 已加入"可以同时成立——用户要等到发现那个账号
+    # 从来没推过东西才会察觉。这里用同一个 `is_safe_id` 把它拦在入口。
+    if not is_safe_id(candidate):
+        print(f"✗ 这个 sec_user_id 不合法：{candidate!r}")
+        print("  它里面含空白、控制字符（含零宽字符/BOM）或 | / \\ 之类的字符，")
+        print("  写进去也会被 users.conf 的解析器丢弃。请改成主页链接重新 add 一遍。")
+        return 2
+    # 昵称只用于展示，但它是**一行一条**的格式：带换行会把一行拆成两条记录。
+    clean_nickname = " ".join(str(nickname).split()) if nickname else ""
+    if nickname and clean_nickname != nickname:
+        print(f"! 昵称里的换行/连续空白已折叠为空格：{clean_nickname!r}")
+
     path = settings.users_conf
-    line = f"{candidate}|{nickname or candidate[-8:]}"
-    if path.is_file() and candidate in path.read_text(encoding="utf-8"):
+    # 去重按**整行 ID 字段**比，不用子串匹配：所有真实 ID 都以 `MS4wLjABAAAA` 开头，
+    # 子串匹配会把"与某个已有 ID 前缀相同"的新账号误判成重复而拒绝写入。
+    existing = {
+        entry.sec_user_id
+        for entry in load_users_conf(path)
+    } if path.is_file() else set()
+    if candidate in existing:
         print(f"! 该账号已在 users.conf 中：{candidate}")
         return 1
+
+    line = f"{candidate}|{clean_nickname or candidate[-8:]}"
     with path.open("a", encoding="utf-8") as handle:
         handle.write(line + "\n")
     print(f"✓ 已加入 {path}：{line}")
@@ -423,7 +488,13 @@ async def cmd_test_notify(settings: Settings) -> int:
     notifier = build_notifier(settings)
     names = notifier.names
     if not names:
-        print("没有任何可用渠道（检查 NOTIFY_CHANNELS 与对应的凭据）")
+        # 静默模式是**用户自己开的开关**，不是"凭据没配"。这里以前一律说"检查凭据"，
+        # 于是照着自己配好的凭据反复核对，而真实原因（SILENT_MODE=true）从未被提到。
+        if settings["SILENT_MODE"]:
+            print("SILENT_MODE=true：推送被整体关掉了，所以没有渠道可测。")
+            print("  想验证渠道凭据，先把 SILENT_MODE 设为 false 再跑一次（测完可以改回来）。")
+            return 2
+        print("没有任何可用渠道（检查 NOTIFY_CHANNELS / NOTIFY_TARGETS 与对应的凭据）")
         return 2
     print(f"向 {', '.join(names)} 发送测试消息…")
     delivery = await notifier.send_test()
@@ -444,7 +515,7 @@ def main(argv: list[str] | None = None) -> int:
     command = args.command or "run"
 
     if command == "config-check":
-        return cmd_config_check(settings)
+        return cmd_config_check(settings, env_file=_env_path(args))
     if command == "status":
         return cmd_status(settings)
     if command in ("doctor", "add", "test-notify"):
