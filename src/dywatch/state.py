@@ -216,7 +216,13 @@ class StateStore:
         # systemd 单元的 `ProtectSystem=strict` + 单独账号不是同一件事：共享主机、
         # 或者工作目录被别的东西挂在同一个 umask 下时，默认的 0644 就是"同机任何用户
         # 都能读你的监控名单"。失败不致命（某些文件系统不支持 chmod），所以只试一次。
+        #
+        # **目录一起收**：WAL 模式会在同目录再长出 `-wal` / `-shm`（里面是还没 checkpoint
+        # 的**已提交数据**），面板读的 `status.json` 也在那儿——只把主库设成 0600，
+        # 旁路文件照样按 umask（通常 0644）落盘，等于白设。`data/` 是本工具自己建的目录
+        # （`settings.db_path` 恒为 `<MONITOR_HOME>/data/dywatch.db`），收它不影响别人。
         with contextlib.suppress(OSError):
+            os.chmod(self.path.parent, 0o700)
             os.chmod(self.path, 0o600)
 
     # ---------------------------------------------------------------- 生命周期

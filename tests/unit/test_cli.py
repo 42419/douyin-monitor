@@ -171,6 +171,31 @@ def test_config_check_prints_the_env_file_it_actually_read(tmp_path, capsys):
     assert str(explicit) in capsys.readouterr().out
 
 
+def test_explicit_env_that_does_not_exist_refuses_to_run(tmp_path, capsys):
+    """`--env` 是"我要读这个文件"的明确承诺：文件不存在就该报错，而不是静默换一份配置跑。
+
+    （报告头只修了"显示读了哪个文件"，改不了"实际读了哪个文件"——拼错一个字符就会拿默认
+    路径那份配置跑起来，而输出里看不出任何异常。）
+    """
+    missing = tmp_path / "typo.env"
+
+    code = cli.main(["--env", str(missing), "config-check"])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert str(missing) in captured.err
+    assert "配置文件不存在" in captured.err
+
+
+def test_without_explicit_env_a_missing_file_is_still_fine(tmp_path, monkeypatch, capsys):
+    """没写 `--env` 时，`.env` 不存在是**正常**的（用户可以完全用环境变量），不该报错。"""
+    monkeypatch.chdir(tmp_path)
+
+    cli.main(["config-check"])
+
+    assert "配置文件不存在" not in capsys.readouterr().err
+
+
 def test_config_check_masks_the_identity_key_and_webhook_url(tmp_path, capsys):
     """这份输出会被贴进 issue（排障文档就是这么建议的），凭据一个都不能明文。"""
     settings = settings_for(
@@ -198,17 +223,49 @@ posix_only = pytest.mark.skipif(
 
 @posix_only
 def test_state_database_is_created_owner_only(tmp_path):
-    """DESIGN §1.1：状态库 0600。共享主机上默认的 0644 就是"同机谁都能读监控名单"。"""
+    """DESIGN §1.1：状态库 0600、**它所在的目录 0700**。
+
+    共享主机上默认的 0644 就是"同机谁都能读监控名单"。目录这一层同样要收：WAL 模式会在
+    同一个目录里再长出 `-wal` / `-shm`（还没 checkpoint 的**已提交数据**），面板读的
+    `status.json` 也在那儿——只收主库文件，旁路文件照样按 umask 落盘。
+    """
     old_umask = os.umask(0o022)
     try:
+        # pytest 给的 tmp_path 自己就是 0700，先放宽成 0755，模拟"按 umask 建出来的目录"
+        os.chmod(tmp_path, 0o755)
         store = StateStore(tmp_path / "dywatch.db")
         store.migrate()
-        mode = stat.S_IMODE(os.stat(tmp_path / "dywatch.db").st_mode)
+        file_mode = stat.S_IMODE(os.stat(tmp_path / "dywatch.db").st_mode)
+        dir_mode = stat.S_IMODE(os.stat(tmp_path).st_mode)
         store.close()
     finally:
         os.umask(old_umask)
 
-    assert mode == 0o600, oct(mode)
+    assert file_mode == 0o600, oct(file_mode)
+    assert dir_mode == 0o700, oct(dir_mode)
+
+
+def test_the_store_asks_for_private_modes_even_where_they_are_not_enforced(tmp_path, monkeypatch):
+    """上面那条在 Windows 上会被跳过（chmod 是空操作），但**请求**本身要一直在。
+
+    部署目标是 Linux：哪天有人把这两行 chmod 删掉，这条在哪儿都会红；而它不依赖文件系统
+    真的去执行权限位。
+    """
+    seen: list[tuple[str, int]] = []
+    real_chmod = os.chmod
+
+    def spy(path: Any, mode: int) -> None:
+        seen.append((str(path), mode))
+        real_chmod(path, mode)
+
+    monkeypatch.setattr(os, "chmod", spy)
+    store = StateStore(tmp_path / "data" / "dywatch.db")
+    store.migrate()
+    store.close()
+
+    wanted = {mode for _path, mode in seen}
+    assert 0o700 in wanted, f"没给状态库目录请求 0700：{seen}"
+    assert 0o600 in wanted, f"没给状态库文件请求 0600：{seen}"
 
 
 @posix_only

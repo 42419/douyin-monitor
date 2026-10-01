@@ -19,7 +19,8 @@ dywatch test-notify    # 给每个渠道发一条测试消息
 :::
 
 所有命令都接受 `--env /path/to/.env` 指定配置文件（默认 `$MONITOR_HOME/.env`，
-其次 `./.env`）；`--version` 打印版本号。
+其次 `./.env`）；`--version` 打印版本号。**显式写了 `--env` 而那个文件不存在时会直接报错退出**
+（退出码 2，并告出没写 `--env` 时会读哪个文件）——拼错一个字符不会静默换一份配置跑起来。
 
 ## `dywatch doctor`：先跑这个
 

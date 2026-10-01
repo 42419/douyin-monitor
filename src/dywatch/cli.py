@@ -511,6 +511,15 @@ async def cmd_test_notify(settings: Settings) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    # 显式给了 `--env` 就是"我要读这个文件"的承诺：那个文件不存在时**报错退出**。
+    # 以前是静默跳过——拼错一个字符就会拿默认路径那份配置跑起来，而输出里看不出异常
+    # （报告头只修了"显示读了哪个文件"，改不了"实际读了哪个文件"）。
+    # 没写 `--env` 时默认路径不存在是正常的：用户可以完全用环境变量，那种情况仍然静默。
+    explicit = getattr(args, "env", None) or None
+    if explicit and not Path(explicit).is_file():
+        print(f"配置文件不存在：{explicit}", file=sys.stderr)
+        print(f"没写 --env 时读的是 {resolve_env_file(None)}", file=sys.stderr)
+        return 2
     settings = _load(args)
     command = args.command or "run"
 
