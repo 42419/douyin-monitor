@@ -67,13 +67,16 @@ def parse_users(text: str, *, logger: Any = None) -> list[UserEntry]:
             continue
         sec_user_id, _, nickname = line.partition("|")
         sec_user_id, nickname = sec_user_id.strip(), nickname.strip()
-        # 行内注释：`ID|市场部  # 主账号` 里的 `# 主账号` 是给人看的，不是昵称的一部分。
+        # 行内注释：`ID|市场部 # 主账号` 里的 `# 主账号` 是给人看的，不是昵称的一部分。
         # 不剥掉的话它会跟着进**每一条通知**、面板和 /metrics 的 label。
-        # 只在 `#` 前面有空白时才当注释——昵称里真要带 `#`（比如 "#1 账号"）不受影响。
-        for marker in ("  #", "\t#"):
-            if marker in nickname:
-                nickname = nickname.split(marker, 1)[0].strip()
-                break
+        # 规则与 `NOTIFY_TARGETS` 那边**一致**：`#` 前面有空白就算注释，直到行尾。
+        # 昵称里真要带 `#`，别在它前面留空格——`账号#1` 与 `#1 账号` 都原样保留。
+        cut = next(
+            (i for i, ch in enumerate(nickname) if ch == "#" and i and nickname[i - 1].isspace()),
+            None,
+        )
+        if cut is not None:
+            nickname = nickname[:cut].strip()
         if not nickname:
             nickname = sec_user_id[-8:]
         if not is_safe_id(sec_user_id):

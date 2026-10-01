@@ -8,6 +8,9 @@
 #       dywatch add "https://www.douyin.com/user/MS4wLjABAAAA..."
 #
 # 昵称只用于通知展示，可以随便写，也可以与别的账号重复。
-# # 开头为注释，空行忽略。运行中修改本文件**无需重启**（按 mtime 自动热加载）。
+# # 开头为注释，空行忽略；# 前面有**空白**时算行尾注释，到行末为止：
+#     MS4wLjABAAAA...|市场部 # 主账号      → 昵称是「市场部」
+#   昵称里真要带 #，别在它前面留空格（写成 账号#1）。
+# 运行中修改本文件**无需重启**（按 mtime 自动热加载）。
 
 MS4wLjABAAAA4MjTvxSsNOjHfi9kfyRdu0KMKRHA1dPNv1WQQwW0OKY|示例账号

@@ -328,10 +328,23 @@ def test_comments_strip_before_entry_splitting_in_all_the_documented_spellings()
         "dingtalk token=a\n   # 前面有空白的注释\nserverchan sendkey=b\n",
         "dingtalk token=a ;# 分号后面跟注释\nserverchan sendkey=b\n",
         "dingtalk token=a,   # 逗号后面跟注释\nserverchan sendkey=b\n",
+        "dingtalk token=a\t# 制表符后面跟注释\nserverchan sendkey=b\n",
     ):
         parsed = parse_targets(raw)
         assert not parsed.errors, (raw, parsed.errors)
         assert [t.kind for t in parsed.targets] == ["dingtalk", "serverchan"], raw
+
+
+def test_a_semicolon_inside_a_tab_prefixed_comment_does_not_reactivate_a_channel():
+    """制表符也是空白：`_strip_comments` 的判定必须和 `_tokenize` 完全一致。
+
+    漏掉 tab 这一种拼写时，注释**内部**的 `;` 会在分条那一步把后面那段切出来，
+    于是一个被注释掉的渠道**重新生效**——比丢掉渠道更危险。
+    """
+    parsed = parse_targets("dingtalk token=a\t# 备注;serverchan sendkey=b\n")
+
+    assert not parsed.errors, parsed.errors
+    assert [t.kind for t in parsed.targets] == ["dingtalk"], "被注释掉的渠道不该生效"
 
 
 def test_a_hash_inside_a_quoted_value_survives_comment_stripping():

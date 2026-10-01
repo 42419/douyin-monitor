@@ -224,7 +224,9 @@ def _strip_comments(text: str) -> str:
                 quote = char
                 current.append(char)
                 continue
-            if char == COMMENT and (not current or current[-1] in (FIELD_SEP, FIELD_SEP_ALT, ENTRY_SEP)):
+            if char == COMMENT and (
+                not current or current[-1].isspace() or current[-1] in (FIELD_SEP_ALT, ENTRY_SEP)
+            ):
                 break
             current.append(char)
         out.append("".join(current))

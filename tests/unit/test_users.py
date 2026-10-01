@@ -27,6 +27,28 @@ def test_parses_the_documented_format():
     ]
 
 
+def test_inline_comment_needs_only_one_space_before_the_hash():
+    """规则与 `NOTIFY_TARGETS` 一致：`#` 前面有空白就是注释，到行尾为止。
+
+    早先只认"两个空格或 tab"，于是 `市场部 # 主账号` 里的注释会跟着进每一条通知、
+    面板和 `/metrics` 的 label——两种写法长得几乎一样，却只有一种生效。
+    """
+    entries = parse_users(
+        "MS4wLjABAAAA_1|市场部 # 主账号\n"
+        "MS4wLjABAAAA_2|运营\t# 备注\n"
+        "MS4wLjABAAAA_3|摄影   # 两个空格也行\n"
+    )
+
+    assert [e.nickname for e in entries] == ["市场部", "运营", "摄影"]
+
+
+def test_a_hash_inside_a_nickname_survives_when_nothing_precedes_it():
+    """昵称里真要带 `#`：只要它前面没有空白就原样保留（两种常见写法都保住）。"""
+    entries = parse_users("MS4wLjABAAAA_1|账号#1\nMS4wLjABAAAA_2|#1 账号\n")
+
+    assert [e.nickname for e in entries] == ["账号#1", "#1 账号"]
+
+
 def test_blank_nickname_falls_back_to_the_id_tail():
     entries = parse_users("MS4wLjABAAAA_abcdef|x\nMS4wLjABAAAA_abcdefg|\n"[:80])
     assert entries[0].nickname == "x"
