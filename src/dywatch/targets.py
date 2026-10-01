@@ -149,7 +149,7 @@ def parse_targets(raw: Any) -> TargetSet:
     seen_names: set[str] = set()
     per_kind: dict[str, int] = {}
 
-    for entry in _entries(text):
+    for entry in _entries(_strip_comments(text)):
         kind, fields, field_errors = _parse_entry(entry)
         if field_errors:
             # 字段有问题就整条丢掉：留着"半个目标"会带着被截断的值跑
@@ -193,11 +193,51 @@ def _raw_text(raw: Any) -> str:
     return ""
 
 
+def _strip_comments(text: str) -> str:
+    """先把注释去掉，**再**交给 `_entries` 分条。
+
+    注释必须在分条**之前**处理，原因是分条同时要做引号配对：注释里有一个落单的引号
+    （`# can't disable telegram` 里的撇号）时，分条会以为引号一直没闭合，把后面的目标
+    整段吞进同一个条目，`_tokenize` 又在条目开头的 `#` 处 `break`——于是那个渠道
+    **无声无息地消失**，`errors` 里什么都没有。反过来，注释里出现 `;` 时，分条会把它
+    当成目标分隔符，一个被注释掉的渠道会被**重新激活**（`# backend;telegram ...`）。
+    两条路都是"安静地做错事"，所以注释的判定只用一条规则、只在一处发生。
+
+    注释规则与 `_tokenize` 保持一致（也保持文档的承诺）：
+
+    * 行首或**前面是空白/逗号/`;`** 的 `#` → 注释到行尾；
+    * 引号里的 `#` 是值的一部分（`url='https://x/a#frag'`），不动；
+    * 其它位置的裸 `#`（`secret=SECx#备注`）**不在这里处理**，留给 `_tokenize` 报错——
+      猜"这是注释还是值"正是当初静默发不出通知的原因，这里不重复那个错误。
+    """
+    out: list[str] = []
+    for line in text.splitlines():
+        quote: str | None = None
+        current: list[str] = []
+        for char in line:
+            if quote is not None:
+                current.append(char)
+                if char == quote:
+                    quote = None
+                continue
+            if char in QUOTES:
+                quote = char
+                current.append(char)
+                continue
+            if char == COMMENT and (not current or current[-1] in (FIELD_SEP, FIELD_SEP_ALT, ENTRY_SEP)):
+                break
+            current.append(char)
+        out.append("".join(current))
+    return "\n".join(out)
+
+
 def _entries(text: str) -> list[str]:
     """拆成"一行一个目标"。空行丢掉；**引号外**的 `;` 也算目标分隔符（写成一行的便利写法）。
 
     必须自己做，不能先 `replace(';', '\n')`：那样引号就保护不了值里的 `;`，
     而文档明确承诺"值里要带 `;` 就加引号"（独立审查抓到的矛盾）。
+
+    调用方要先过一遍 `_strip_comments`（见那里的理由：注释里一个撇号就能让引号配不上对）。
     """
     out: list[str] = []
     current: list[str] = []

@@ -293,3 +293,50 @@ def test_the_documented_example_actually_parses():
 
     assert not parsed.errors, parsed.errors
     assert [t.kind for t in parsed.targets] == ["dingtalk", "dingtalk", "telegram"]
+
+
+# ------------------------------------------------------------------ 注释不能吃掉配置
+def test_a_comment_with_an_apostrophe_does_not_swallow_the_next_target():
+    """文档鼓励"想停掉某个渠道就把它注释掉"，而 `# can't ...` 是最自然的写法。
+
+    注释处理曾经只发生在 `_tokenize`，而分条与引号配对在更早的 `_entries` 里：
+    注释里一个落单的撇号会让引号"一直没闭合"，把后面的目标整段吞进同一个条目，
+    然后在条目开头的 `#` 处 break —— 那个渠道**无声消失**，errors 里什么都没有。
+    """
+    raw = "\ndingtalk token=aaa\n# can't disable telegram\nserverchan sendkey=bbb\n"
+    parsed = parse_targets(raw)
+
+    assert not parsed.errors, parsed.errors
+    assert [t.kind for t in parsed.targets] == ["dingtalk", "serverchan"], (
+        "注释里的撇号不该吃掉后面那个目标"
+    )
+
+
+def test_a_comment_containing_a_semicolon_does_not_reactivate_a_channel():
+    """注释里的 `;` 不能被当成目标分隔符——那会把一个**被注释掉的**渠道重新打开。"""
+    raw = "\ndingtalk token=aaa\n# backend;serverchan sendkey=bbb\n"
+    parsed = parse_targets(raw)
+
+    assert [t.kind for t in parsed.targets] == ["dingtalk"], (
+        "被注释掉的渠道悄悄生效，比丢掉渠道更危险"
+    )
+
+
+def test_comments_strip_before_entry_splitting_in_all_the_documented_spellings():
+    for raw in (
+        "# 行首注释\ndingtalk token=a\nserverchan sendkey=b\n",
+        "dingtalk token=a\n   # 前面有空白的注释\nserverchan sendkey=b\n",
+        "dingtalk token=a ;# 分号后面跟注释\nserverchan sendkey=b\n",
+        "dingtalk token=a,   # 逗号后面跟注释\nserverchan sendkey=b\n",
+    ):
+        parsed = parse_targets(raw)
+        assert not parsed.errors, (raw, parsed.errors)
+        assert [t.kind for t in parsed.targets] == ["dingtalk", "serverchan"], raw
+
+
+def test_a_hash_inside_a_quoted_value_survives_comment_stripping():
+    """引号里的 `#` 是值（URL 片段），不能被当成注释切掉。"""
+    parsed = parse_targets("webhook url='https://x/a#frag'")
+
+    assert not parsed.errors, parsed.errors
+    assert parsed.targets[0].fields["url"] == "https://x/a#frag"
