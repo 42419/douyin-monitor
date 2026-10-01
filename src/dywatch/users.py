@@ -37,6 +37,23 @@ class UserEntry:
     nickname: str
 
 
+def strip_inline_comment(text: str) -> str:
+    """去掉行尾注释：`#` 前面是空白就算注释，直到行尾；没有就原样返回。
+
+    **这是 users.conf 里"什么算注释"的唯一判定**，解析（`parse_users`）与写入
+    （`dywatch add` 校验昵称）共用同一个函数——两边各写一份的话，写进去的昵称和读回来的
+    昵称就可能不是同一个东西（`小王 #1` 写入后读回只剩 `小王`，且没有任何提示）。
+
+    规则与 `NOTIFY_TARGETS` 一致：行首的 `#`、或前面有空白的 `#` 是注释；
+    `账号#1` / `|#热门` 这种 `#` 紧贴前一个字符的，是内容，原样保留。
+    判定对象是**未经 strip 的原始行**：`ID| # 主账号` 里 `|` 与 `#` 之间的空格同样算空白。
+    """
+    for index, char in enumerate(text):
+        if char == "#" and index and text[index - 1].isspace():
+            return text[:index]
+    return text
+
+
 def is_safe_id(value: str) -> bool:
     if not value or len(value) > MAX_ID_LENGTH:
         return False
@@ -58,7 +75,11 @@ def parse_users(text: str, *, logger: Any = None) -> list[UserEntry]:
     seen: dict[str, str] = {}
 
     for lineno, raw_line in enumerate(text.splitlines(), start=1):
-        line = raw_line.strip()
+        # 行内注释：`ID|市场部 # 主账号` 里的 `# 主账号` 是给人看的，不是昵称的一部分。
+        # 不剥掉的话它会跟着进**每一条通知**、面板和 /metrics 的 label。
+        # 对**整行**做、且在 strip 之前：`ID| # 主账号` 里 `|` 后面的空格也算"前面有空白"，
+        # 否则 strip 之后 `#` 成了昵称的第一个字符，注释就变成了昵称。
+        line = strip_inline_comment(raw_line).strip()
         if not line or line.startswith("#"):
             continue
         if "|" not in line:
@@ -67,16 +88,6 @@ def parse_users(text: str, *, logger: Any = None) -> list[UserEntry]:
             continue
         sec_user_id, _, nickname = line.partition("|")
         sec_user_id, nickname = sec_user_id.strip(), nickname.strip()
-        # 行内注释：`ID|市场部 # 主账号` 里的 `# 主账号` 是给人看的，不是昵称的一部分。
-        # 不剥掉的话它会跟着进**每一条通知**、面板和 /metrics 的 label。
-        # 规则与 `NOTIFY_TARGETS` 那边**一致**：`#` 前面有空白就算注释，直到行尾。
-        # 昵称里真要带 `#`，别在它前面留空格——`账号#1` 与 `#1 账号` 都原样保留。
-        cut = next(
-            (i for i, ch in enumerate(nickname) if ch == "#" and i and nickname[i - 1].isspace()),
-            None,
-        )
-        if cut is not None:
-            nickname = nickname[:cut].strip()
         if not nickname:
             nickname = sec_user_id[-8:]
         if not is_safe_id(sec_user_id):

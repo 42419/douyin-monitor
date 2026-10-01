@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dywatch.users import is_safe_id, parse_users, resolve_input
+from dywatch.users import is_safe_id, parse_users, resolve_input, strip_inline_comment
 
 
 class Recorder:
@@ -90,3 +90,32 @@ def test_resolve_input_accepts_a_link_tail():
     assert resolve_input("https://www.douyin.com/user/MS4wLjABAAAA_x") == "MS4wLjABAAAA_x"
     assert resolve_input("https://www.douyin.com/user/MS4wLjABAAAA_x/") == "MS4wLjABAAAA_x"
     assert resolve_input("https://www.douyin.com/user/MS4wLjABAAAA_x?from=web") == "MS4wLjABAAAA_x"
+
+
+ID = "MS4wLjABAAAA" + "x" * 20
+
+
+def test_a_comment_right_after_the_pipe_is_a_comment_not_the_nickname():
+    """`|` 后面隔一个空格再 `#`：`#` 前面有空白，按文档就是行尾注释。
+
+    解析器以前是先 strip 昵称再找注释：strip 把那个空格吃掉，`#` 成了昵称的第一个字符，
+    于是整段注释变成了昵称（`# 主账号`），进每一条通知。
+    """
+    entries = parse_users(f"{ID}| # 主账号\n")
+
+    assert [e.nickname for e in entries] == [ID[-8:]], "没有真昵称就退回 ID 尾部"
+
+
+def test_a_hash_glued_to_the_text_is_content_not_a_comment():
+    entries = parse_users(f"{ID}|#热门\n{ID}x|账号#1\n")
+
+    assert [e.nickname for e in entries] == ["#热门", "账号#1"]
+
+
+def test_strip_inline_comment_rule():
+    assert strip_inline_comment("市场部 # 主账号") == "市场部 "
+    assert strip_inline_comment("市场部\t# 主账号") == "市场部\t"
+    assert strip_inline_comment("账号#1") == "账号#1"
+    assert strip_inline_comment("#开头") == "#开头", "第 0 位没有前一个字符，不算注释"
+    assert strip_inline_comment("") == ""
+

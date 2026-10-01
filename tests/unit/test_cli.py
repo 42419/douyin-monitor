@@ -80,6 +80,26 @@ async def test_add_folds_a_newline_in_the_nickname_instead_of_injecting_a_line(a
     assert "折叠为空格" in capsys.readouterr().out
 
 
+async def test_add_refuses_a_nickname_the_parser_would_truncate(add_home, capsys):
+    """`小王 #1` 写进去、读回来只剩 `小王`：写入与读取对"什么算注释"必须是同一个答案。"""
+    settings = settings_for(add_home)
+
+    code = await cli.cmd_add(settings, GOOD_ID, "小王 #1")
+
+    assert code == 2
+    assert "空白 + #" in capsys.readouterr().out
+    assert (add_home / "users.conf").read_text(encoding="utf-8").strip() == "", "拒绝就不能写任何东西"
+
+
+async def test_add_accepts_a_hash_that_is_glued_to_the_text_and_reads_it_back_intact(add_home):
+    settings = settings_for(add_home)
+
+    code = await cli.cmd_add(settings, GOOD_ID, "账号#1")
+
+    assert code == 0
+    assert load_users_conf(add_home / "users.conf")[0].nickname == "账号#1"
+
+
 async def test_add_writes_and_reports_the_line(add_home):
     settings = settings_for(add_home)
 

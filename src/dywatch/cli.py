@@ -26,7 +26,7 @@ from . import __version__
 from .dtk import DtkClient, MonitorError
 from .runtime import build_runtime, setup_logging, single_instance_lock
 from .settings import Settings, resolve_env_file, load_settings
-from .users import is_safe_id, load_users_conf, resolve_input
+from .users import is_safe_id, load_users_conf, resolve_input, strip_inline_comment
 from .webui import read_status
 
 REQUIRED_SCOPES = ("douyin:read", "archive:read")
@@ -394,6 +394,13 @@ async def cmd_add(settings: Settings, target: str, nickname: str) -> int:
     clean_nickname = " ".join(str(nickname).split()) if nickname else ""
     if nickname and clean_nickname != nickname:
         print(f"! 昵称里的换行/连续空白已折叠为空格：{clean_nickname!r}")
+    # 与解析器共用同一个判定：写进去的昵称必须是读回来的昵称。`小王 #1` 里 `#` 前有空白，
+    # 解析器会把 `#1` 当行尾注释，读回来只剩 `小王`——所以在入口就拦下，而不是写完再说"✓"。
+    if strip_inline_comment(clean_nickname) != clean_nickname:
+        print(f"✗ 昵称里有「空白 + #」：{clean_nickname!r}")
+        print("  users.conf 会把它当行尾注释，读回来只剩 # 前面那部分。")
+        print("  去掉 # 前面的空格（写成 账号#1），或者不要用 #。")
+        return 2
 
     path = settings.users_conf
     # 去重按**整行 ID 字段**比，不用子串匹配：所有真实 ID 都以 `MS4wLjABAAAA` 开头，
