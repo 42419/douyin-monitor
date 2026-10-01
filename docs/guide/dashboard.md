@@ -60,3 +60,15 @@ WEB_PORT=8787
 | `/api/user/<sec_user_id>`     | 单账号详情                    |
 | `/metrics`                    | Prometheus 格式               |
 | `/healthz` `/readyz`          | 探针                          |
+
+::: warning `/metrics` 的 `author` label 变了
+账号相关指标（`dywatch_known_posts`、`dywatch_account_failures`）的 `author` label 现在是
+`<sec_user_id>|<昵称>`，不再只是昵称。昵称允许重复，只用昵称会让两个同名账号产出一模一样的
+样本，Prometheus 会把**整次抓取**判为失败。
+
+如果你有按昵称写的 Grafana 面板或告警规则，需要改成正则匹配，例如：
+
+```text
+dywatch_known_posts{author=~".*[|]市场部"}
+```
+:::
