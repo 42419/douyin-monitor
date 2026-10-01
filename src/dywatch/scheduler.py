@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -70,20 +71,61 @@ class GlobalGate:
         del self._history[:-20]
         return seconds
 
+    def _retry_after(self, error: MonitorError) -> int | None:
+        """上游给的 `retry_after`（秒），**解析不了或不合理就当没给**；合理的也封顶。
+
+        `retry_after` 是原样透传的 JSON 值，类型没人保证：`"30.5"`、`NaN`、负数都可能出现。
+        以前闸门根本不关，这些值只是被写进日志；现在它们真的决定"停多久"，所以：
+
+        * 转不成数字 / 非正数 → `None`，退回我们自己的退避（而不是在 `except` 分支里抛
+          `ValueError`，让一个账号的异常处理把整轮带崩）；
+        * 封顶 `backoff_max`：上游说"等一天"，我们最多停到这个上限，到点再探一次——
+          还在限流就会拿到新的 `retry_after`，代价只是一个请求，换来的是不会因为
+          一个异常大的数值（或一个手滑）把整个监控停摆一天。
+        """
+        raw = error.retry_after
+        if raw is None or isinstance(raw, bool):
+            return None
+        try:
+            seconds = math.ceil(float(raw))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if seconds <= 0:
+            return None
+        return min(seconds, self.backoff_max)
+
     def backoff_for(self, error: MonitorError) -> int:
         """How long to stay closed for this error.
 
         Uses the upstream's own `retry_after` when it gives one — it knows better than
         we do — and otherwise doubles with consecutive failures up to the ceiling.
         """
-        if error.retry_after:
-            self._consecutive += 1
-            return int(error.retry_after)
         self._consecutive += 1
+        retry_after = self._retry_after(error)
+        if retry_after is not None:
+            return retry_after
         if self._consecutive <= self.backoff_after:
             return self.default_seconds
         doublings = min(self._consecutive - self.backoff_after, 10)
         return min(self.default_seconds * (2**doublings), self.backoff_max)
+
+    def trip(self, error: MonitorError) -> int:
+        """一个"闸门类"错误到了：关闸（或确认它已经关着），返回现在还要停多少秒。
+
+        一轮里有 `MAX_CONCURRENT` 个请求同时在途，**一次**上游故障会让它们几乎同时失败。
+        如果每一个都走 `backoff_for()`，`_consecutive` 一次事故就被加了 N 次——它本该数的
+        是"连续几次故障"，不是"这次故障被几个请求撞上"：5 并发、默认值下，第 3 个起就
+        翻倍成 120 秒，第 4 个 240 秒，实际停多久取决于有几个请求恰好在途。
+
+        所以闸门**已经关着**时来的失败是同一次事故的后到者：不再推进连续计数、不再记一次
+        关闸；唯一的例外是它带着**更长**的 `retry_after`（上游明说要等更久），那就延长。
+        """
+        if self.is_open():
+            return self.close(self.backoff_for(error), reason=error.code)
+        wanted = self._retry_after(error)
+        if wanted is not None and wanted > self.remaining():
+            return self.close(wanted, reason=error.code)
+        return max(1, math.ceil(self.remaining()))
 
     def note_success(self) -> None:
         """A request that got through resets the doubling."""

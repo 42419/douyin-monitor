@@ -122,9 +122,17 @@ async def run_author(
             # 通知，却没调用 `close()`，于是 `_until` 恒为 0、`is_open()` 恒真——
             # 上游明明在限流，本工具照旧以约 11 次/分钟砸过去，`retry_after` 全被无视。
             # 现场特征就是那条日志里的 `remaining=0.0`：自己说关了，余量却是零。
-            seconds = gate.close(gate.backoff_for(exc), reason=exc.code)
-            _log(logger, "warn", "gate.closed", code=exc.code, seconds=seconds,
-                 remaining=round(gate.remaining(), 1))
+            #
+            # 同一轮里多个在途请求会被**同一次**故障撞上：只有第一个真的"关闸"，后到的
+            # 看到闸门已经关着，只确认、不叠加退避（见 `GlobalGate.trip`）。
+            fresh = gate.is_open()
+            seconds = gate.trip(exc)
+            if fresh:
+                _log(logger, "warn", "gate.closed", code=exc.code, seconds=seconds,
+                     remaining=round(gate.remaining(), 1))
+            else:
+                _log(logger, "debug", "gate.already_closed", code=exc.code,
+                     remaining=round(gate.remaining(), 1))
             await _notify_upstream(exc, seconds, notifier=notifier, dedup=dedup, logger=logger)
         elif exc.is_config:
             # 连坐所有账号的错误：关闸一小时并明确告警，而不是让每个账号各失败一遍

@@ -108,6 +108,88 @@ def test_retry_after_also_counts_as_a_consecutive_failure():
     assert g.backoff_for(MonitorError("RATE_LIMITED")) == 120
 
 
+# ------------------------------------------------------------------ retry_after 的边界
+def test_retry_after_is_capped_at_backoff_max():
+    """闸门现在真的会关：上游一个异常大的 `retry_after` 不能把监控停摆一天。"""
+    g = gate(default_seconds=60, backoff_max=600)
+    assert g.backoff_for(MonitorError("RATE_LIMITED", retry_after=86400)) == 600
+
+
+def test_a_fractional_retry_after_from_json_is_honoured_rounded_up():
+    """`retry_after` 是原样透传的 JSON 值，`"30.5"` / `30.5` 都可能出现。"""
+    g = gate()
+    assert g.backoff_for(MonitorError("RATE_LIMITED", retry_after="30.5")) == 31
+    assert g.backoff_for(MonitorError("RATE_LIMITED", retry_after=12.2)) == 13
+
+
+@pytest.mark.parametrize("junk", ["abc", "", "nan", "inf", -5, 0, True, [], {}])
+def test_an_unusable_retry_after_falls_back_to_our_own_backoff(junk):
+    """转不成数字、非正数、布尔：当作没给，**不能抛**（它发生在 `except MonitorError` 分支里）。"""
+    g = gate(default_seconds=60)
+    assert g.backoff_for(MonitorError("RATE_LIMITED", retry_after=junk)) == 60
+
+
+# ------------------------------------------------------------------ trip：同一次故障只算一次
+def test_trip_closes_an_open_gate_and_reports_the_seconds():
+    g = gate(default_seconds=60)
+
+    seconds = g.trip(MonitorError("QUEUE_FULL"))
+
+    assert seconds == 60
+    assert g.is_open() is False
+    assert g.reason == "QUEUE_FULL"
+    assert g.times_closed == 1
+
+
+def test_stragglers_of_the_same_incident_do_not_escalate_the_backoff():
+    """5 个并发请求撞上**同一次**故障，不该被当成"连续 5 次故障"而翻倍。
+
+    以前每个失败的请求都走一遍 `backoff_for()`：第 3 个起 120 秒，第 4 个 240 秒——
+    实际停多久取决于有几个请求恰好在途。
+    """
+    g = gate(default_seconds=60, backoff_after=2, backoff_max=600)
+
+    results = [g.trip(MonitorError("QUEUE_FULL")) for _ in range(5)]
+
+    assert results[0] == 60
+    assert all(59 <= seconds <= 60 for seconds in results), results
+    assert g.remaining() <= 60
+    assert g.times_closed == 1, "一次事故只记一次关闸"
+
+
+def test_the_next_real_incident_still_escalates_after_stragglers():
+    """后到者不推进计数，但**下一次真的事故**（闸门开回来之后又失败）照常翻倍。"""
+    g = gate(default_seconds=60, backoff_after=1, backoff_max=600)
+    g.trip(MonitorError("QUEUE_FULL"))
+    for _ in range(4):
+        g.trip(MonitorError("QUEUE_FULL"))      # 同一次事故的后到者
+    g._until = 0.0                               # 时间过去了，闸门开回来
+
+    assert g.trip(MonitorError("QUEUE_FULL")) == 120, "第二次事故：连续 2 > 阈值 1，翻倍"
+
+
+def test_a_straggler_with_a_longer_retry_after_extends_the_gate():
+    g = gate(default_seconds=60, backoff_max=600)
+    g.trip(MonitorError("QUEUE_FULL"))
+
+    seconds = g.trip(MonitorError("RATE_LIMITED", retry_after=300))
+
+    assert seconds == 300
+    assert g.remaining() > 290
+    assert g.reason == "RATE_LIMITED", "理由跟着更长的截止时间走"
+
+
+def test_a_straggler_with_a_shorter_retry_after_never_shortens_the_gate():
+    g = gate(default_seconds=60, backoff_max=600)
+    g.trip(MonitorError("RATE_LIMITED", retry_after=300))
+
+    seconds = g.trip(MonitorError("RATE_LIMITED", retry_after=10))
+
+    assert 299 <= seconds <= 300
+    assert g.remaining() > 290
+    assert g.times_closed == 1
+
+
 # ------------------------------------------------------------------ 快照
 def test_snapshot_exposes_what_the_panel_and_logs_need():
     g = gate()
