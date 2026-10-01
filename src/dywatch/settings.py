@@ -84,6 +84,14 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
     SettingSpec("FAIL_COOLDOWN", 300, "int", "同类失败告警冷却（秒）"),
     SettingSpec("BACKOFF_AFTER", 2, "int", "连续失败几次后全局闸门开始翻倍"),
     SettingSpec("BACKOFF_MAX_SECONDS", 600, "int", "全局闸门退避上限（秒）"),
+    SettingSpec(
+        "RETRY_AFTER_MAX_SECONDS", 3600, "int",
+        "上游 `retry_after` 的封顶（秒，默认 1 小时）。它是**上游明说要等多久**，"
+        "与 `BACKOFF_MAX_SECONDS`（我们自己退避的封顶，默认 600）不是一回事：把上游的话"
+        "截到 600 秒，会让它在人家要求等一小时的时候每 10 分钟放出一轮请求（默认 5 并发），"
+        "反复撞同一堵墙。封顶本身仍然要有——上游一个异常大的数值（或一次手滑）不该把监控"
+        "停摆一天。必须 ≥ BACKOFF_MAX_SECONDS",
+    ),
     # ---------------------------------------------------------------- 归档
     SettingSpec("ARCHIVE_ENABLED", True, "bool", "是否用 DTK 归档做删除交叉确认"),
     SettingSpec(
@@ -294,6 +302,17 @@ class Settings:
             errors.append("REQUEST_INTERVAL_MIN 必须大于 0")
         if v["REQUEST_INTERVAL_MIN"] > v["REQUEST_INTERVAL_MAX"]:
             errors.append("REQUEST_INTERVAL_MIN 不能大于 REQUEST_INTERVAL_MAX")
+
+        # 上游的 `retry_after` 封顶必须不低于我们自己的退避封顶：低于它意味着"上游要求等
+        # 一小时、我们只等十分钟"，然后每十分钟放出一轮请求反复撞墙——等于自己制造循环。
+        if v["RETRY_AFTER_MAX_SECONDS"] < 1:
+            errors.append("RETRY_AFTER_MAX_SECONDS 必须大于 0（它是上游 retry_after 的封顶秒数）")
+        elif v["RETRY_AFTER_MAX_SECONDS"] < v["BACKOFF_MAX_SECONDS"]:
+            errors.append(
+                f"RETRY_AFTER_MAX_SECONDS({v['RETRY_AFTER_MAX_SECONDS']}) 不能小于 "
+                f"BACKOFF_MAX_SECONDS({v['BACKOFF_MAX_SECONDS']})："
+                "上游要求等得比我们自己的退避上限还久时，封顶会让闸门提前放开、反复撞墙"
+            )
 
         if v["POLL_INTERVAL_MIN"] < MIN_POLL_INTERVAL:
             errors.append(

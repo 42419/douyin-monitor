@@ -246,6 +246,33 @@ def test_a_hash_inside_a_nickname_is_kept_when_it_is_not_a_comment():
     assert entries[0].nickname == "#1 账号"
 
 
+# --------------------------------------------------------------- 闸门封顶留痕
+def test_the_gate_banner_says_when_upstream_retry_after_was_capped():
+    """上游要求的等待时间被封顶过时，面板横幅必须说出来。
+
+    否则运维看到"闸门每十分钟开一次"只会以为上游一直在限流，而真相是
+    "上游要求等更久、我们没完全照办"（DESIGN 修正 #32）。
+    """
+    from dywatch.webui import _gate_html
+
+    capped = _gate_html({"open": False, "reason": "RATE_LIMITED", "remaining_seconds": 600,
+                         "retry_after_capped": 3})
+    plain = _gate_html({"open": False, "reason": "RATE_LIMITED", "remaining_seconds": 600,
+                        "retry_after_capped": 0})
+
+    assert "已被封顶 3 次" in capped and "RETRY_AFTER_MAX_SECONDS" in capped
+    assert "封顶" not in plain, "没封顶过就别提这件事"
+    assert "闸门关闭" in capped and "闸门关闭" in plain
+
+
+def test_the_gate_banner_survives_a_hostile_capped_value():
+    from dywatch.webui import _gate_html
+
+    for junk in ("abc", None, [], {}):
+        html = _gate_html({"open": False, "reason": "RATE_LIMITED", "retry_after_capped": junk})
+        assert "闸门关闭" in html
+
+
 # --------------------------------------------------------------- /metrics label
 def test_two_accounts_with_the_same_nickname_do_not_collide():
     """同名账号必须产出**不同**的 label（重复样本 = Prometheus 拒收整次抓取）。"""

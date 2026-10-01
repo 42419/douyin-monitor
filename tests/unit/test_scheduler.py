@@ -109,10 +109,72 @@ def test_retry_after_also_counts_as_a_consecutive_failure():
 
 
 # ------------------------------------------------------------------ retry_after 的边界
-def test_retry_after_is_capped_at_backoff_max():
-    """闸门现在真的会关：上游一个异常大的 `retry_after` 不能把监控停摆一天。"""
-    g = gate(default_seconds=60, backoff_max=600)
-    assert g.backoff_for(MonitorError("RATE_LIMITED", retry_after=86400)) == 600
+def test_retry_after_is_capped_at_its_own_ceiling_not_the_backoff_one():
+    """上游一个异常大的 `retry_after` 不能把监控停摆一天，但也不该被截到十分钟。
+
+    `retry_after` 是**上游明说要等多久**，与 `backoff_max`（我们自己退避的封顶）不是一回事：
+    早先两者共用 600 秒，于是上游要求等一小时时我们只等十分钟就放出一轮请求（默认 5 并发）
+    去撞同一堵墙。现在它有自己的上限（默认 3600），且与 `backoff_max` 相互独立。
+    """
+    g = gate(default_seconds=60, backoff_max=600, retry_after_max=3600)
+    assert g.backoff_for(MonitorError("RATE_LIMITED", retry_after=86400)) == 3600
+
+    # 上游要求的时间**在**上限之内就原样照办（这才是"听上游的"）
+    g2 = gate(default_seconds=60, backoff_max=600, retry_after_max=3600)
+    assert g2.backoff_for(MonitorError("RATE_LIMITED", retry_after=1800)) == 1800
+
+    # 两个上限各自独立：把退避上限调大不会顺带放大 retry_after 的封顶
+    g3 = gate(default_seconds=60, backoff_max=1200, retry_after_max=1800)
+    assert g3.backoff_for(MonitorError("RATE_LIMITED", retry_after=9999)) == 1800
+
+
+class _Log:
+    """最小的结构化日志替身：只记事件名与字段。"""
+
+    def __init__(self) -> None:
+        self.records: list[tuple[str, dict]] = []
+
+    def debug(self, event: str, **fields) -> None:
+        self.records.append((event, fields))
+
+    def info(self, event: str, **fields) -> None:      # pragma: no cover - 闸门只打 debug
+        self.records.append((event, fields))
+
+    def warning(self, event: str, **fields) -> None:   # pragma: no cover
+        self.records.append((event, fields))
+
+
+def test_capping_leaves_a_trace_in_the_log_and_the_snapshot():
+    """封顶必须留痕：否则"闸门为什么每十分钟开一次"只能靠读代码才知道。"""
+    log = _Log()
+    g = gate(default_seconds=60, retry_after_max=600, logger=log)
+
+    g.backoff_for(MonitorError("RATE_LIMITED", retry_after=3600))
+
+    capped = [fields for event, fields in log.records if event == "gate.retry_after_capped"]
+    assert capped, "封顶时要有日志"
+    assert capped[0]["raw"] == 3600 and capped[0]["capped"] == 600
+    assert capped[0]["code"] == "RATE_LIMITED"
+    assert g.snapshot()["retry_after_capped"] == 1, "快照里要有计数（面板与 /metrics 靠它）"
+
+
+def test_the_cap_counter_never_moves_when_nothing_was_capped():
+    log = _Log()
+    g = gate(default_seconds=60, retry_after_max=3600, logger=log)
+
+    assert g.backoff_for(MonitorError("RATE_LIMITED", retry_after=120)) == 120
+    assert g.backoff_for(MonitorError("RATE_LIMITED")) == 60          # 没给 retry_after
+
+    assert g.snapshot()["retry_after_capped"] == 0
+    assert [e for e, _ in log.records] == [], "没封顶就不该有日志（否则日志会被刷满）"
+
+
+def test_a_gate_without_a_logger_still_works():
+    """单测可以直接构造闸门，不必为了日志多搭一层（`logger=None` 是默认值）。"""
+    g = gate(backoff_max=600, retry_after_max=600)
+
+    assert g.backoff_for(MonitorError("RATE_LIMITED", retry_after=9999)) == 600
+    assert g.snapshot()["retry_after_capped"] == 1
 
 
 def test_a_fractional_retry_after_from_json_is_honoured_rounded_up():

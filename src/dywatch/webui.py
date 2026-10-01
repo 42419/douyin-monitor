@@ -747,12 +747,23 @@ def _gate_html(gate: Mapping[str, Any]) -> str:
     tail = ""
     if isinstance(remaining, (int, float)) and remaining:
         tail = f"，约 {int(remaining)} 秒后自动重试"
+    # 上游要求的等待时间被封顶过：横幅要说出来。否则运维看到"闸门每十分钟开一次"，
+    # 只会以为上游一直在限流，而真相是"上游要求等更久，我们没完全照办"（见 DESIGN 修正 #32）
+    capped = _as_int(gate.get("retry_after_capped"))
+    capped_note = (
+        f"　注意：上游要求的等待时间已被封顶 {capped} 次"
+        f"（上限见 RETRY_AFTER_MAX_SECONDS），闸门会比上游要求的更早放开。"
+        if capped
+        else ""
+    )
     return (
         '<div class="gate mono">[ 闸门关闭 ] 上游不可用（'
         + _escape_html(reason)
         + "），本轮的请求已整体跳过，只记录不推送"
         + tail
-        + "。这与某个账号无关，必要时去 DTK 控制台看身份池。</div>"
+        + "。这与某个账号无关，必要时去 DTK 控制台看身份池。"
+        + capped_note
+        + "</div>"
     )
 
 
@@ -1227,6 +1238,13 @@ class _Handler(BaseHTTPRequestHandler):
             "# HELP dywatch_gate_open 1 when the global gate is open.",
             "# TYPE dywatch_gate_open gauge",
             f"dywatch_gate_open {1 if (data.get('gate') or {}).get('open', True) else 0}",
+            # 上游 retry_after 被封顶的次数：>0 说明"我们没完全听上游的"——闸门会比上游
+            # 要求的更早放开，运维该看的是这个数（见 DESIGN 修正 #32）
+            "# HELP dywatch_gate_retry_after_capped_total Times an upstream retry_after"
+            " exceeded the configured ceiling and was capped.",
+            "# TYPE dywatch_gate_retry_after_capped_total counter",
+            "dywatch_gate_retry_after_capped_total "
+            f"{_as_int((data.get('gate') or {}).get('retry_after_capped'))}",
             "# HELP dywatch_known_posts Posts currently tracked per account.",
             "# TYPE dywatch_known_posts gauge",
         ]

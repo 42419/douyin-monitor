@@ -21,6 +21,7 @@ import math
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from .dtk import MonitorError
 
@@ -32,12 +33,20 @@ class GlobalGate:
     default_seconds: int = 60
     backoff_after: int = 2
     backoff_max: int = 600
+    #: **上游** `retry_after` 的封顶（与 `backoff_max` 是两件事：那个是我们自己退避的封顶）。
+    #: 默认 1 小时：上游说"等一小时"就真的等一小时，而不是每十分钟放出一轮请求去撞墙。
+    retry_after_max: int = 3600
+    #: 可选的结构化日志器（`runtime.StructuredLogger` 那一套）。没给就不记——
+    #: 这样单测可以直接构造闸门，不必为了日志多搭一层。
+    logger: Any = None
 
     #: monotonic deadline; 0 means open
     _until: float = 0.0
     _reason: str = ""
     _closes: int = 0
     _consecutive: int = 0
+    #: 上游 `retry_after` 被封顶的次数（>0 就说明"我们没完全听上游的"）
+    _capped: int = 0
     _history: list[tuple[float, str, int]] = field(default_factory=list)
 
     def is_open(self) -> bool:
@@ -79,9 +88,10 @@ class GlobalGate:
 
         * 转不成数字 / 非正数 → `None`，退回我们自己的退避（而不是在 `except` 分支里抛
           `ValueError`，让一个账号的异常处理把整轮带崩）；
-        * 封顶 `backoff_max`：上游说"等一天"，我们最多停到这个上限，到点再探一次——
-          还在限流就会拿到新的 `retry_after`，代价只是一个请求，换来的是不会因为
-          一个异常大的数值（或一个手滑）把整个监控停摆一天。
+        * 封顶 `retry_after_max`（默认 1 小时）：上游一个异常大的数值（或一次手滑）不该把
+          监控停摆一天。**封顶时留痕**（debug 日志 + `retry_after_capped` 计数）——"上游
+          说等一小时、我们只等了十分钟"这件事如果完全静默，运维只能靠读代码才知道
+          闸门为什么每十分钟开一次。
         """
         raw = error.retry_after
         if raw is None or isinstance(raw, bool):
@@ -92,7 +102,17 @@ class GlobalGate:
             return None
         if seconds <= 0:
             return None
-        return min(seconds, self.backoff_max)
+        if seconds > self.retry_after_max:
+            self._capped += 1
+            self._log("gate.retry_after_capped", raw=seconds,
+                      capped=self.retry_after_max, code=error.code, count=self._capped)
+            return self.retry_after_max
+        return seconds
+
+    def _log(self, event: str, **fields: Any) -> None:
+        """可选日志：没给 logger 时什么都不做（单测里构造闸门不必搭日志）。"""
+        if self.logger is not None:
+            self.logger.debug(event, **fields)
 
     def backoff_for(self, error: MonitorError) -> int:
         """How long to stay closed for this error.
@@ -137,6 +157,9 @@ class GlobalGate:
             "reason": self.reason,
             "remaining_seconds": round(self.remaining(), 1),
             "times_closed": self._closes,
+            # 上游 `retry_after` 被封顶的次数：>0 就说明"我们没完全听上游的"，
+            # 面板 / `/api/state` / `/metrics` 都能看到（见 DESIGN 修正 #32）
+            "retry_after_capped": self._capped,
         }
 
 

@@ -55,6 +55,7 @@
 | `MAX_CONSECUTIVE_FAILS`                  | `5`         | 连续失败几次告警                          |
 | `FAIL_COOLDOWN`                          | `300`       | 同类失败告警冷却（秒）                    |
 | `BACKOFF_AFTER` / `BACKOFF_MAX_SECONDS`  | `2` / `600` | 上游 429/503 触发全局闸门后的翻倍退避      |
+| `RETRY_AFTER_MAX_SECONDS`                | `3600`      | 上游返回的 `retry_after` 的封顶（秒）。它与上面那个"我们自己退避的封顶"**不是一回事**：`retry_after` 是上游明说要等多久，截短了会让它在要求等一小时时每 10 分钟被我们撞一次（默认 5 并发同时发）。必须 ≥ `BACKOFF_MAX_SECONDS`；被封顶的次数会进日志、面板与 `/metrics` 的 `dywatch_gate_retry_after_capped_total` |
 
 ## 归档
 

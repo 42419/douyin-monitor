@@ -573,8 +573,40 @@ def test_routes(tmp_path, monkeypatch):
         # 进程级的那个保留 counter 语义（重启归零），累计的另起一个名字
         assert "dywatch_rounds_total 137" in body
         assert "dywatch_rounds_recorded_total 3214" in body
+        # 上游 retry_after 被封顶的次数：>0 是"我们没完全听上游的"的唯一信号
+        assert "dywatch_gate_retry_after_capped_total 0" in body
 
         assert get(base + "/nope")[0] == 404
+
+
+def test_metrics_report_how_often_an_upstream_retry_after_was_capped(tmp_path):
+    """封顶次数要能从 `/metrics` 看到——否则"闸门为什么每十分钟开一次"只能靠读代码。"""
+    settings = make_settings(tmp_path)
+    write_status(
+        settings,
+        gate={"open": False, "reason": "RATE_LIMITED", "remaining_seconds": 600.0,
+              "times_closed": 3, "retry_after_capped": 7},
+    )
+
+    with panel(settings) as base:
+        status, body = get(base + "/metrics")
+
+    assert status == 200
+    assert "dywatch_gate_retry_after_capped_total 7" in body
+    assert "# TYPE dywatch_gate_retry_after_capped_total counter" in body
+
+
+def test_a_snapshot_without_the_new_gate_field_still_scrapes(tmp_path):
+    """旧版本写下的快照里没有 `retry_after_capped`：那一项按 0 处理，不能让整次抓取失败。"""
+    settings = make_settings(tmp_path)
+    write_status(settings, gate={"open": True, "reason": None, "remaining_seconds": 0,
+                                 "times_closed": 0})
+
+    with panel(settings) as base:
+        status, body = get(base + "/metrics")
+
+    assert status == 200
+    assert "dywatch_gate_retry_after_capped_total 0" in body
 
 
 def test_readyz_reports_unreachable_upstream(tmp_path, monkeypatch):
