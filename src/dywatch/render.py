@@ -306,6 +306,16 @@ def _build(
     if kind in (EventKind.POST_REMOVED, EventKind.ALL_GONE):
         removed = _entries(payload, "removed")
         all_gone = bool(payload.get("all_gone")) or kind is EventKind.ALL_GONE
+        if not removed and payload.get("removed"):
+            # 载荷形状不对（不是列表/里面没有字典）。不能继续按"0 条"渲染：
+            # 那会推出一条"有 0 条作品已确认消失"的假信息——比不推更糟，
+            # 看的人会以为"什么事都没有"。所以**不走 `_titles` 的计数模板**，
+            # 标题直接说明形状读不出来（`_titles` 会把 count 写进标题栏）。
+            shape = type(payload.get("removed")).__name__
+            subject = f"【作品消失·载荷异常】{plain_name}"
+            heading = f"【作品消失·载荷异常】{md_name}"
+            note = msg.NOTE_PAYLOAD_UNREADABLE.format(shape=shape)
+            return subject, _card(heading, [_item(note)])
         template = msg.T_ALL_GONE if all_gone else msg.T_POST_REMOVED
         subject, heading = _titles(template, plain_name, md_name, count=len(removed))
         note = msg.NOTE_ALL_GONE if all_gone else ""
@@ -361,7 +371,7 @@ def _build(
 
     if kind is EventKind.ACCOUNT_RECOVERED:
         subject, heading = _titles(msg.T_ACCOUNT_RECOVERED, plain_name, md_name)
-        rows = [_item(f"此前连续失败 {_val(payload.get('fails') or "?", 10)} 次，本轮已成功读取")]
+        rows = [_item(f"此前连续失败 {_val(payload.get('fails') or '?', 10)} 次，本轮已成功读取")]
         return subject, _card(heading, rows)
 
     if kind is EventKind.STALE_NO_UPDATE:
@@ -381,7 +391,7 @@ def _build(
             _field(msg.ROW_CODE, _val(payload.get("code") or "?", 40)),
             _field(msg.ROW_ROUNDS, _val(payload.get("rounds") or "?", 10)),
             _field(msg.ROW_IMPACT,
-                   f"全局闸门关闭 {_val(payload.get('gate_seconds') or "?", 10)} 秒，本轮整体跳过"),
+                   f"全局闸门关闭 {_val(payload.get('gate_seconds') or '?', 10)} 秒，本轮整体跳过"),
         ]
         return subject, _card(heading, rows, msg.NOTE_GATE)
 

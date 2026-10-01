@@ -123,6 +123,39 @@ def test_parse_page_refuses_a_payload_it_cannot_track():
     assert no_id.value.code == "CONTRACT_VIOLATION"
 
 
+def test_parse_page_refuses_a_string_items_field_instead_of_returning_an_empty_page():
+    """`{"items": "abc"}` 必须是 `CONTRACT_VIOLATION`，**不能**变成一个空页。
+
+    `str` 也是 `Sequence`，所以早先它通过了"是不是数组"的检查，然后被逐字符迭代：
+    每个字符都不是 Mapping → 被跳过 → 返回 0 条的 Page。而"0 条"与"这个作者没有作品"
+    完全无法区分——一个曾有过作品的账号会因此走 `all_gone` 三级确认，
+    三天后收到一条"作者把作品删光了"的假通知。
+    """
+    with pytest.raises(MonitorError) as caught:
+        parse_page({"items": "abc", "cursor": None, "has_more": False},
+                   raw_included=False, task_id=None)
+
+    assert caught.value.code == "CONTRACT_VIOLATION"
+    assert "str" in caught.value.message
+
+
+def test_parse_content_survives_wrongly_typed_nested_containers():
+    """嵌套字段类型不对时**只能**是 `CONTRACT_VIOLATION`，不能抛 AttributeError/TypeError。
+
+    调用方只 catch `MonitorError`：别的异常会一路逃出整轮，那个账号被记成 INTERNAL
+    失败且状态不落库，而 DESIGN 给这种情况留的信号（"DTK 升级后响应形状变了"）永远不出现。
+    """
+    for node in (
+        {"content_id": "1", "media": "oops"},
+        {"content_id": "1", "author": 7},
+        {"content_id": "1", "tags": 5},
+        {"content_id": "1", "stats": "nope"},
+        {"content_id": "1", "media": {"covers": "not-a-list"}},
+    ):
+        item = parse_content(node, raw_included=False)   # 不抛异常即可
+        assert item.content_id == "1"
+
+
 def test_non_top_helper_excludes_pinned_posts():
     payload = {
         "items": [content_node("a", top=True, raw=True), content_node("b", raw=True)],

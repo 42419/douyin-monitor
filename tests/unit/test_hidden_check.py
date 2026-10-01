@@ -590,6 +590,36 @@ async def test_total_drop_ignores_hidden_post_outside_the_login_window(tmp_path)
     )
 
 
+async def test_an_ancient_pinned_post_does_not_define_the_window_bottom(tmp_path):
+    """窗口底**只看非置顶项**：置顶项的发布时间是任意的（实测有 2024/2025 年的）。
+
+    混进来的后果很具体：窗口底被拖到几年前，"比窗口还旧就不判删除"这道保护形同虚设——
+    一条只是滑出窗口的隐藏作品会被报成"作者真把它删了"，紧接着标记被清、下轮又被核验
+    填回来，两个视角来回横跳。反过来，把置顶项排除出去之后，窗口底由**本页最旧的非置顶**
+    决定，那条隐藏作品落在窗口**之内**，判删除才是正确的。这条测试正是钉"窗口底变对了"。
+    """
+    now = datetime.now(timezone.utc)
+    author = _author_with_a_hidden_post(now).with_updates(
+        posts=(
+            PostState(content_id="visible1", created_at=now - timedelta(days=1)),
+            PostState(content_id="hidden1", created_at=now - timedelta(days=30),
+                      hidden_from_guest_at=now - timedelta(days=25)),
+        )
+    )
+    visible = make_content("visible1", created_at=now - timedelta(days=1))
+    pinned = make_content("ancient-pin", created_at=now - timedelta(days=400))
+    client = Client(posts_items=(visible, pinned), content_count=1)
+    pin = PinClient(posts_items=(visible, pinned))
+
+    result, _store, _n, _p = await _run(
+        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+    )
+
+    assert any(e.kind is EventKind.POST_REMOVED for e in result.events), (
+        "30 天前那条落在窗口内（本页最旧的非置顶是 1 天前），应当判为删除"
+    )
+
+
 # ----------------------------------------------------------------- 降级
 async def test_profile_fetch_failure_does_not_break_the_round(tmp_path):
     """查总数失败：这一轮已经算好的结果原样返回，不抛异常、不浪费一次定向核验。
@@ -663,6 +693,45 @@ async def test_profile_fetch_failure_backs_off_instead_of_polling_every_round(tm
         cfg=cfg, hidden_check=_hidden_check(PinClient()), now=after_interval,
     )
     assert client.profile_calls == 2, "越过保底间隔应当重试"
+
+
+async def test_a_profile_without_a_content_count_also_backs_off(tmp_path):
+    """**DTK 没给发布总数**时也要退避，理由与"读失败"完全一样。
+
+    `stats.content_count` 缺失是它自己承认的合法情况（`parse_author_profile` 因此返回
+    None，而不是 0）。早先这条分支直接 `return`，**不推进 `baseline_content_count_at`**：
+    于是 `due_for_sample` 每轮都为真，那个账号**每一轮**都去请求一次作者信息、
+    每轮烧掉一个身份——正是低频保底要避免的"逐轮轮询上游"。
+    """
+    now = datetime.now(timezone.utc)
+    store = StateStore(tmp_path / "db.sqlite")
+    store.migrate()
+    author = _author_with_a_hidden_post(now).with_updates(
+        baseline_content_count_at=now - timedelta(hours=2)
+    )
+    store.ensure_author("u1", "示例", now)
+    client = Client(posts_items=(_staying_post(now),), content_count=None)
+    cfg = DiffConfig(delete_rounds=99)
+
+    _r1, store, _n, _p = await _run(
+        tmp_path=tmp_path, store=store, author=author, client=client, cfg=cfg,
+        hidden_check=_hidden_check(PinClient()), now=now,
+    )
+    assert client.profile_calls == 1, "保底触发，试了一次"
+    attempted_at = store.load_authors()["u1"].baseline_content_count_at
+    assert attempted_at is not None and attempted_at >= now, (
+        "字段缺失也要把'上次核对'推到现在，否则下一轮还会再敲一次"
+    )
+    assert store.load_authors()["u1"].baseline_content_count is not None, (
+        "基准值本身不该被这次无信息的结果抹掉"
+    )
+
+    later = now + timedelta(minutes=1)
+    _r2, store, _n, _p = await _run(
+        tmp_path=tmp_path, store=store, author=store.load_authors()["u1"], client=client,
+        cfg=cfg, hidden_check=_hidden_check(PinClient()), now=later,
+    )
+    assert client.profile_calls == 1, "同一 interval 内不该每轮重试"
 
 
 async def test_profile_fetch_failure_still_folds_new_posts_into_the_baseline(tmp_path):
