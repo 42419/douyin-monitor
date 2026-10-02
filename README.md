@@ -137,19 +137,27 @@ sudo bash deploy/install.sh --yes                  # 必须重跑：.venv 里装
 ## 面板
 
 `.env` 里 `WEB_ENABLED=true` 打开，默认只听回环：`http://127.0.0.1:8787/`。
-面板**只读、无鉴权、不发任何上游请求**——列表读 `data/status.json`（每轮写一次的快照），
-详情读状态库，所以打开它不消耗身份、不会触发风控。要对外暴露请自己加反代鉴权。
+面板**只读、无鉴权、不发任何上游请求、不创建文件**——列表读 `data/status.json`
+（每轮写一次的快照），详情与事件页读状态库，所以打开它不消耗身份、不会触发风控。
+要对外暴露请自己加反代鉴权。
 
 ![面板：LED 状态阵列、数据条与账号列表](screenshots/panel-list.png)
 
 一屏看完"每个账号现在怎么样"：LED 状态阵列（正常 / 失败 / 长期无更新 / 从未有作品 / 已移除）、
-数据条、账号列表（状态徽章、更新频率、已知作品数、距最新作品发布多久）。
+数据条、账号列表（状态徽章、更新频率、已知作品数、距最新作品发布多久），外加一张上游健康卡片。
 
 ![账号详情弹窗](screenshots/panel-detail.png)
 
-点任意一行打开详情：作品（置顶的排最前）、已消失作品、最近事件、更新频率与累计轮次。
-顺带提供机器接口：`/api/state`、`/api/health`、`/api/user/<sec_user_id>`、`/metrics`（Prometheus）、
-`/healthz` `/readyz`。读法与移动端布局见 [只读面板](https://dywatch.yunov.top/guide/dashboard)。
+点任意一行打开详情：作品（置顶的排最前）、已消失作品、**互动量曲线**（赞/评/藏/转）、
+最近事件、更新频率与累计轮次。
+
+另一页 `/events` 回答"最近到底发生了什么"：一张柱状图 + 一份**同一份数据**的列表，
+按 `全部 / 作品 / 账号 / 系统 / 机制` 分类，每条标出投递状态（已推送 / 推送失败 / 静默 /
+无投递记录）。图表用随包分发的 Chart.js，**不走 CDN**。
+
+顺带提供机器接口：`/api/state`、`/api/health`、`/api/user/<sec_user_id>`、`/api/events`、
+`/metrics`（Prometheus）、`/healthz` `/readyz`。读法与移动端布局见
+[只读面板](https://dywatch.yunov.top/guide/dashboard)。
 
 ---
 
@@ -164,10 +172,10 @@ sudo bash deploy/install.sh --yes                  # 必须重跑：.venv 里装
 | 查某个命令怎么用                               | [命令行](https://dywatch.yunov.top/guide/commands)                |
 | 加账号、改昵称、粘主页链接                     | [监控列表 users.conf](https://dywatch.yunov.top/guide/users-conf) |
 | 看面板每个读数是什么意思                       | [只读面板](https://dywatch.yunov.top/guide/dashboard)             |
-| **查某个配置项的默认值与含义（全部 50 项）**   | [配置参考](https://dywatch.yunov.top/config/reference)            |
+| **查某个配置项的默认值与含义（全部 60 项）**   | [配置参考](https://dywatch.yunov.top/config/reference)            |
 | 估机器、网络与磁盘够不够                       | [容量估算](https://dywatch.yunov.top/config/capacity)             |
 | 搞清"新作品 / 作品消失 / 漏检 / ID 写错"怎么判 | [判定规则](https://dywatch.yunov.top/guide/detection-rules)       |
-| 15 种事件分别是什么意思、哪种会推送            | [事件类型](https://dywatch.yunov.top/reference/events)            |
+| 16 种事件分别是什么意思、哪种会推送            | [事件类型](https://dywatch.yunov.top/reference/events)            |
 | 开归档下载（作品下架前留一份证据）             | [归档下载](https://dywatch.yunov.top/guide/archive-download)      |
 | 给 Key 授权、申请 `media:write`                | [权限 / API Key](https://dywatch.yunov.top/reference/permissions) |
 | 升级到新版本                                   | [升级](https://dywatch.yunov.top/operations/upgrade)              |

@@ -16,12 +16,20 @@
 | `account_recovered`   | 从连续失败中恢复                                   | ✅   | 无                                                |
 | `stale_no_update`     | `STALE_FALLBACK_DAYS` 天没有新作品                 | ✅   | 一次性                                            |
 | `upstream_degraded`   | 上游 429/503/熔断 → 全局闸门关闭                   | ✅   | 1 小时 / 错误码                                   |
-| `self_degraded`       | 自身降级（磁盘/状态库超限）                        | ✅   | 6 小时 —— **目前没有产生点，不会出现**            |
+| `self_degraded`       | 自身降级：数据目录剩余空间低于 `SELF_CHECK_FREE_MB`，或状态库写不进去 | ✅   | 6 小时 / 原因                                     |
 | `revived`             | 曾消失的作品又出现（按设计**不算**新作品）         | ✅   | 6 小时 / 每条作品                                     |
 | `title_changed`       | 已知作品的标题变了                                 | ✅   | 1 小时 / 账号                                     |
 | `scrolled_out`        | 被新作品挤出窗口（静默清理并写 tombstone）         | —    |                                                    |
 | `trimmed`             | 超过 `KNOWN_IDS_MAX` 被裁剪（同时写 tombstone）    | —    |                                                    |
 | `initialized`         | 首次记录该账号（否则上线新账号会被历史作品刷屏）   | —    |                                                    |
+
+`self_degraded` 与 `upstream_degraded` 都按**原因**分桶（前者的 `reason`、后者的 `code`），
+不只是按事件类型：磁盘满了和状态库写不进去是两件事，池子空了和接口熔断也是两件事，
+只用一个大桶的话，先来的那个会把后来者的窗口占满一小时。
+
+自身降级是**边沿触发**的：条件是持续为真的（磁盘不会自己空出来），所以只有"新增的原因"
+产生事件，恢复正常时只记日志、不发"恢复"事件——面板上的横幅跟着快照消失就够了。
+它的读数（`free_mb` / `writable` / `reasons`）每轮都写进 `status.json`。
 
 ## 查自己库里的事件分布
 

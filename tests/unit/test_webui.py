@@ -21,7 +21,15 @@ from typing import Any, Iterator
 import pytest
 
 from dywatch import webui
-from dywatch.models import AuthorState, Event, EventKind, Kind, PostState, Tombstone
+from dywatch.models import (
+    AuthorState,
+    Event,
+    EventKind,
+    Kind,
+    PostMetrics,
+    PostState,
+    Tombstone,
+)
 from dywatch.settings import Settings, load_settings
 from dywatch.state import StateStore
 from dywatch.webui import (
@@ -547,7 +555,9 @@ def test_routes(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     seed_db(settings)
     write_status(settings)
-    monkeypatch.setattr(webui, "_dtk_ok", lambda *a, **k: {"ok": True})
+    # 补丁打在**定义它的模块**上：`webui` 是门面，它上面那个名字只是一个副本，
+    # 改它不会影响 handler 真正调用的那个函数（拆包时踩过一次）
+    monkeypatch.setattr(webui.server, "_dtk_ok", lambda *a, **k: {"ok": True})
 
     with panel(settings) as base:
         status, body = get(base + "/")
@@ -575,6 +585,15 @@ def test_routes(tmp_path, monkeypatch):
         assert "dywatch_rounds_recorded_total 3214" in body
         # 上游 retry_after 被封顶的次数：>0 是"我们没完全听上游的"的唯一信号
         assert "dywatch_gate_retry_after_capped_total 0" in body
+
+        status, body = get(base + "/events")
+        assert status == 200 and "DYWATCH / EVENTS" in body
+        # 图表库是本地打包的静态资源：面板常常跑在没有外网的机器上
+        status, body = get(base + "/assets/chart.umd.min.js")
+        assert status == 200 and "Chart" in body[:4000]
+        status, events = get(base + "/api/events?range=24h")
+        # seed_db 里那两条事件（new_post / post_removed）就落在 24 小时窗口内
+        assert status == 200 and json.loads(events)["total"] == 2
 
         assert get(base + "/nope")[0] == 404
 
@@ -612,12 +631,33 @@ def test_a_snapshot_without_the_new_gate_field_still_scrapes(tmp_path):
 def test_readyz_reports_unreachable_upstream(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     monkeypatch.setattr(
-        webui, "_dtk_ok", lambda *a, **k: {"ok": False, "reason": "URLError: refused"}
+        webui.server, "_dtk_ok", lambda *a, **k: {"ok": False, "reason": "URLError: refused"}
     )
     with panel(settings) as base:
         status, body = get(base + "/readyz")
     assert status == 503
     assert json.loads(body)["components"]["dtk"]["ok"] is False
+
+
+def test_readyz_does_not_create_the_state_store(tmp_path, monkeypatch):
+    """回归：`/readyz` 是 systemd / 负载均衡周期性打的探针，它**不该**把状态库"建"出来。
+
+    `sqlite3.connect` 会给不存在的路径建一个 0 字节文件；之后 `queries.has_store()` 就会
+    说"库在"，所有查询转成 `no such table: authors` —— 排障的人盯着数据目录里那个空文件，
+    会以为库被折腾坏了，而它只是被一个健康检查顺手创建的。
+    """
+    settings = make_settings(tmp_path)
+    # 上游照样 patch 掉：这条用例只关心"库有没有被创建"，不该依赖网络
+    monkeypatch.setattr(webui.server, "_dtk_ok", lambda *a, **k: {"ok": True})
+    assert not settings.db_path.exists()
+
+    with panel(settings) as base:
+        status, body = get(base + "/readyz")
+
+    assert status == 503
+    assert json.loads(body)["components"]["state_store"]["reason"] == "state store not found"
+    assert not settings.db_path.exists(), "探针在数据目录里留下了空库"
+    assert not settings.db_path.parent.exists() or list(settings.db_path.parent.iterdir()) == []
 
 
 def test_health_defaults_to_no_data(tmp_path):
@@ -659,7 +699,7 @@ def test_user_endpoint_returns_503_when_store_is_unreadable(tmp_path, monkeypatc
     def boom(*args: Any, **kwargs: Any) -> Any:
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(webui, "user_detail", boom)
+    monkeypatch.setattr(webui.queries, "user_detail", boom)
     with panel(settings) as base:
         status, body = get(base + f"/api/user/{ID_OK}")
     assert status == 503
@@ -702,13 +742,13 @@ def test_access_urls_never_print_the_wildcard_host(monkeypatch):
     """
     assert webui.access_urls("127.0.0.1", 8787) == ["http://127.0.0.1:8787/"]
 
-    monkeypatch.setattr(webui, "guess_lan_ip", lambda: "192.168.20.4")
+    monkeypatch.setattr(webui.server, "guess_lan_ip", lambda: "192.168.20.4")
     assert webui.access_urls("0.0.0.0", 8787) == [
         "http://127.0.0.1:8787/",
         "http://192.168.20.4:8787/",
     ]
 
-    monkeypatch.setattr(webui, "guess_lan_ip", lambda: None)
+    monkeypatch.setattr(webui.server, "guess_lan_ip", lambda: None)
     assert webui.access_urls("0.0.0.0", 8787) == ["http://127.0.0.1:8787/"]
 
 
@@ -740,3 +780,350 @@ def test_urllib_parse_roundtrip_for_ids():
     """前端 encodeURIComponent 的等价物：确保解码端拿得到原值。"""
     raw = "MS4wLjABAAAA+a=b/c"
     assert urllib.parse.unquote(urllib.parse.quote(raw, safe="")) == raw
+
+# --------------------------------------------------- 上游健康卡片 / 自身降级横幅
+
+def upstream_snapshot(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "base_url": "http://dtk.local:8000",
+        "ok": True,
+        "checked_at": "2026-09-16T20:00:00+08:00",
+        "version": "5.1.2",
+        "uptime_seconds": 9 * 86400 + 3600 * 7 + 1800,
+        "components": {
+            "postgres": {"ok": True, "latency_ms": 3},
+            "redis": {"ok": True, "latency_ms": 1},
+            "browser_rpc": {"ok": None, "latency_ms": None},
+        },
+        "pool": {
+            "douyin": {"minting": 1, "active": 7, "cooling": 2, "degraded": 0, "retired": 4},
+            "total_active": 7,
+        },
+        "storage": {"db_size_bytes": 402_653_184, "identities": 14},
+    }
+    base.update(overrides)
+    return base
+
+
+def test_status_page_shows_the_upstream_card(tmp_path):
+    settings = make_settings(tmp_path)
+    write_status(settings, upstream=upstream_snapshot())
+    html = render_page(settings)
+    assert "上游 DTK" in html
+    assert "5.1.2" in html
+    assert "9 天 7 小时" in html          # uptime 要人话，不是秒数
+    assert "384.0 MB" in html             # 存储用量要人话
+    assert "身份池" in html and "活跃 7" in html
+    assert "未配置" in html               # browser_rpc 的 ok 是 None == 不知道，不是坏了
+
+
+def test_status_page_says_so_when_the_upstream_reading_is_missing(tmp_path):
+    """老快照里只有 base_url：要说清"还没取到读数"，而不是画一张全是—的卡片。"""
+    settings = make_settings(tmp_path)
+    write_status(settings, upstream={"base_url": "http://dtk.local:8000"})
+    html = render_page(settings)
+    assert "还没有取到读数" in html
+    assert "5.1.2" not in html
+
+
+def test_status_page_marks_a_stale_upstream_reading(tmp_path):
+    """取不到时保留上一次的值（比抹掉更有用），但必须说清它是旧的。"""
+    settings = make_settings(tmp_path)
+    write_status(settings, upstream=upstream_snapshot(
+        ok=False, error="UPSTREAM_UNREACHABLE", version="5.1.2",
+    ))
+    html = render_page(settings)
+    assert "不可用（UPSTREAM_UNREACHABLE）" in html
+    assert "上一次取到的读数" in html
+    assert "5.1.2" in html
+
+
+def test_self_check_banner_renders_reasons_and_readings(tmp_path):
+    settings = make_settings(tmp_path)
+    write_status(settings, self_check={
+        "ok": False, "reasons": ["disk_low"], "free_mb": 138, "free_limit_mb": 200,
+        "writable": True,
+    })
+    html = render_page(settings)
+    assert "[ 自身降级 ]" in html
+    assert "磁盘剩余空间不足" in html
+    assert "剩余 138MB / 阈值 200MB" in html
+
+
+def test_self_check_banner_is_absent_when_everything_is_fine(tmp_path):
+    settings = make_settings(tmp_path)
+    write_status(settings, self_check={"ok": True, "reasons": [], "free_mb": 9000})
+    # 用带方括号的横幅字样断言：CSS 注释里也有"自身降级"四个字，直接搜它会永远为真
+    assert "[ 自身降级 ]" not in render_page(settings)
+
+
+def test_health_report_includes_self_and_upstream_state(tmp_path):
+    """机器读的小结里也该有"服务自己好没好"，否则只能靠人打开网页看。"""
+    settings = make_settings(tmp_path)
+    write_status(
+        settings,
+        self_check={"ok": False, "reasons": ["disk_low"]},
+        upstream={"base_url": "x", "ok": False, "error": "E"},
+    )
+    health = webui.build_health(settings)
+    assert health["self_ok"] is False and health["self_reasons"] == ["disk_low"]
+    assert health["upstream_ok"] is False
+
+
+# --------------------------------------------------- /metrics
+
+def parse_exposition(text: str) -> tuple[dict[str, str], list[str]]:
+    """极简 Prometheus 文本解析：只取 `# TYPE` 表和样本名。"""
+    types: dict[str, str] = {}
+    samples: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("# TYPE "):
+            name, _, kind = line[len("# TYPE "):].partition(" ")
+            types[name] = kind
+        elif line and not line.startswith("#"):
+            samples.append(line.split("{")[0].split(" ")[0])
+    return types, samples
+
+
+def test_every_metric_is_declared_with_help_and_type(tmp_path):
+    """**每个样本名都必须有 `# HELP` / `# TYPE`。**
+
+    回归：`dywatch_account_failures` 只写了样本、没有声明，抓取端会把它当成 untyped——
+    不报错，但在图表里既不能算速率也不能算均值，人只会觉得"这个数怪怪的"。
+    """
+    settings = make_settings(tmp_path)
+    write_status(settings, upstream=upstream_snapshot())
+    types, samples = parse_exposition(webui.metrics_text(settings))
+    assert samples, "至少要有一个样本"
+    undeclared = sorted({name for name in samples if name not in types})
+    assert undeclared == [], f"这些指标没有 # HELP/# TYPE：{undeclared}"
+
+
+def test_metrics_cover_upstream_pool_archive_and_features(tmp_path):
+    settings = make_settings(tmp_path)
+    write_status(
+        settings,
+        upstream=upstream_snapshot(),
+        self_check={"ok": False, "reasons": ["disk_low"], "free_mb": 138},
+        archive={"enabled": True, "pending": 3, "muted_code": None},
+        features={"metrics": True, "hidden_check": False, "archive_download": True},
+    )
+    text = webui.metrics_text(settings)
+    assert 'dywatch_upstream_pool_identities{platform="douyin",state="active"} 7' in text
+    assert "dywatch_upstream_pool_active 7" in text
+    assert "dywatch_upstream_component_latency_ms" in text
+    assert "dywatch_upstream_storage_db_bytes 402653184" in text
+    assert "dywatch_archive_pending 3" in text
+    assert "dywatch_archive_muted 0" in text
+    assert "dywatch_self_check_ok 0" in text and "dywatch_self_check_free_mb 138" in text
+    assert 'dywatch_feature_enabled{name="hidden_check"} 0' in text
+    assert "dywatch_upstream_checked_timestamp_seconds" in text
+
+
+def test_metrics_skip_unknown_upstream_components_instead_of_reporting_zero(tmp_path):
+    """`ok: null` 是"上游不知道"，不是 0——报 0 就是替上游宣布一次故障。
+
+    断言要**枚举全部 `component_ok` 行**，不能只看第一行：只检查 `[0]` 的话，
+    多出来的那行未知组件（browser_rpc）永远不会被看到——这条用例曾经就是这个形状，
+    把"跳过 `ok is None`"改坏它照样全绿。
+    """
+    settings = make_settings(tmp_path)
+    write_status(settings, upstream=upstream_snapshot())
+    text = webui.metrics_text(settings)
+
+    ok_lines = [
+        line for line in text.splitlines() if line.startswith("dywatch_upstream_component_ok")
+    ]
+    assert ok_lines == [
+        'dywatch_upstream_component_ok{component="postgres"} 1',
+        'dywatch_upstream_component_ok{component="redis"} 1',
+    ], ok_lines
+
+    # 延迟那一组同理：值为 None 的样本不该出现（不是写成 0）
+    latency_lines = [
+        line for line in text.splitlines()
+        if line.startswith("dywatch_upstream_component_latency_ms")
+    ]
+    assert latency_lines == [
+        'dywatch_upstream_component_latency_ms{component="postgres"} 3',
+        'dywatch_upstream_component_latency_ms{component="redis"} 1',
+    ], latency_lines
+
+
+def test_metrics_count_events_from_the_store(tmp_path):
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    text = webui.metrics_text(settings)
+    assert "dywatch_state_readable 1" in text
+    assert 'dywatch_events_recent{kind="new_post"} 1' in text
+    assert 'dywatch_events_recent{kind="post_removed"} 1' in text
+    assert 'dywatch_state_rows{table="authors"} 3' in text
+
+
+def test_metrics_survive_a_database_that_cannot_be_read(tmp_path):
+    """库读不出来时少几行 + `dywatch_state_readable 0`，**不能整次抓取 500**：
+    那会把所有指标（包括与库无关的"上游挂了"）一起弄丢。"""
+    settings = make_settings(tmp_path)
+    write_status(settings, upstream=upstream_snapshot())
+    settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.db_path.write_bytes("这不是一个 SQLite 文件".encode("utf-8"))
+    text = webui.metrics_text(settings)
+    assert "dywatch_state_readable 0" in text
+    assert "dywatch_events_recent" not in text
+    assert "dywatch_upstream_pool_active 7" in text
+
+
+def test_metrics_omit_db_metrics_when_there_is_no_database_at_all(tmp_path):
+    """库文件都不在时**不要顺手建一个空的**——那会让下一次查询报 `no such table`。"""
+    settings = make_settings(tmp_path)
+    write_status(settings)
+    text = webui.metrics_text(settings)
+    assert "dywatch_state_readable 0" in text
+    assert not settings.db_path.exists()
+
+
+# --------------------------------------------------- 图表资源
+
+def test_chart_asset_is_served_with_a_content_hash_and_cached(tmp_path):
+    settings = make_settings(tmp_path)
+    write_status(settings)
+    version = webui.asset_version()
+    assert version and len(version) == 10
+    with panel(settings) as base:
+        status, body = get(base + f"/assets/chart.umd.min.js?v={version}")
+        assert status == 200 and "Chart" in body[:4000]
+
+        # 版本对不上就不缓存：老页面指向旧版本时宁可多下一次，也不要让浏览器
+        # 一直用旧版本的图表库——那种错看起来像"图表代码有 bug"
+        import urllib.request as _rq
+
+        with _rq.urlopen(base + "/assets/chart.umd.min.js?v=stale") as response:
+            assert response.headers["Cache-Control"] == "no-store"
+            assert response.headers["Content-Type"].startswith("text/javascript")
+
+
+def test_status_page_links_the_chart_library_with_the_current_version(tmp_path):
+    settings = make_settings(tmp_path)
+    write_status(settings)
+    html = render_page(settings)
+    assert f"/assets/chart.umd.min.js?v={webui.asset_version()}" in html
+    assert "data-chart" in html or 'id="detailMetrics"' in html
+
+
+def test_unknown_asset_and_traversal_are_not_found(tmp_path):
+    settings = make_settings(tmp_path)
+    with panel(settings) as base:
+        assert get(base + "/assets/../../etc/passwd")[0] == 404
+        assert get(base + "/assets/nope.js")[0] == 404
+
+
+# --------------------------------------------------- 互动量落库 → 面板
+
+def seed_metrics(settings: Settings) -> None:
+    """给 `seed_db` 的那个账号补两轮互动量（跨两个不同的小时桶）。"""
+    store = StateStore(settings.db_path)
+    store.migrate()
+    posts = tuple(
+        PostState(content_id=f"74{index:017d}", kind=Kind.VIDEO, title=f"第 {index} 条",
+                  created_at=NOW - timedelta(days=index))
+        for index in range(4)
+    )
+    for hour, factor in ((2, 100), (1, 180)):
+        store.save_round(
+            ID_OK,
+            AuthorState(sec_user_id=ID_OK, nickname="示例账号", initialized_at=NOW,
+                        ever_had_posts=True, runs=120, posts=posts),
+            [],
+            now=NOW - timedelta(hours=hour),
+            metrics=[
+                PostMetrics(content_id=f"74{index:017d}", play_count=factor * 10,
+                            digg_count=factor, comment_count=index,
+                            share_count=None, collect_count=factor * 2)
+                for index in range(4)
+            ],
+        )
+    store.close()
+
+
+def test_user_detail_includes_the_engagement_series_and_chart(tmp_path):
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    seed_metrics(settings)
+    detail = user_detail(settings, ID_OK)
+    assert len(detail["metrics_series"]) == 2
+    assert detail["metrics_chart"]["type"] == "line"
+    assert [item["label"] for item in detail["metrics_chart"]["datasets"]] == [
+        "点赞", "评论", "收藏", "分享",
+    ]
+    digg = next(item for item in detail["metrics_chart"]["datasets"] if item["label"] == "点赞")
+    # 同一小时里 4 条作品求和：100 → 180
+    assert digg["data"] == [400, 720]
+    # 逐条作品的"最新一行"要挂在作品上，而不是每个作品各查一次
+    assert detail["posts"][0]["metrics"]["digg"] == 180
+    assert detail["posts"][0]["metrics"]["share"] is None
+    assert detail["metrics_enabled"] is True
+
+
+def test_user_detail_says_when_metrics_are_switched_off(tmp_path):
+    """没开记录 vs 开了还没采到——两件事，页面上的说法必须不同。"""
+    settings = make_settings(tmp_path, METRICS_ENABLED="false")
+    seed_db(settings)
+    seed_metrics(settings)
+    detail = user_detail(settings, ID_OK)
+    assert detail["metrics_enabled"] is False
+    assert detail["metrics_series"] == [] and detail["metrics_chart"] is None
+
+
+def test_detail_page_shows_per_post_engagement_badges(tmp_path):
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    seed_metrics(settings)
+    html = render_page(settings)
+    # 数字交给前端格式化（万/亿），所以这里只断言取值路径存在
+    assert "metricLine" in html and "detailMetrics" in html
+
+
+def test_user_endpoint_survives_engagement_metrics(tmp_path):
+    """回归：`/api/user/<id>` 带互动量读数时，整条响应曾被掐断。
+
+    上面那几条用例直接调 `user_detail`，所以发现不了这个 bug：`hour` 是 `datetime`，
+    只有走到 `json.dumps` 那一步才抛 `TypeError`，而它抛在发响应头**之前**——客户端
+    拿到的是连接被重置（不是 500，没有 body），浏览器只说"请求失败"。
+    所以这一条必须走 HTTP，且要断言"能解析出 JSON"本身，而不只是某个字段的值。
+    """
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    seed_metrics(settings)
+    with panel(settings) as base:
+        status, body = get(f"{base}/api/user/{ID_OK}")
+    assert status == 200, body
+    detail = json.loads(body)
+    # JSON 里没有 datetime：两处时间戳都必须是字符串
+    assert isinstance(detail["metrics_series"][0]["hour"], str)
+    assert isinstance(detail["posts"][0]["metrics"]["hour"], str)
+    # 而且**同一份数据在两处必须长得一样**：作品上那行和序列里最后一格是同一个小时桶。
+    # 只断言 `isinstance(..., str)` 是不够的——`json.dumps` 的 `default=str` 兜底会把
+    # `datetime` 降级成 `str(datetime)`（空格分隔），既不是 ISO 也不等于序列里的写法，
+    # 而"能解析出 JSON"照样成立。
+    assert detail["posts"][0]["metrics"]["hour"] == detail["metrics_series"][-1]["hour"]
+    assert detail["posts"][0]["metrics"]["digg"] == 180
+
+
+def test_metrics_json_normalises_only_the_timestamp():
+    """`_metrics_json` 只把 `hour` 转成字符串，其余字段（含以后新加的）原样带走。"""
+    raw = {"hour": NOW, "play": 7, "digg": None, "将来新增的字段": "x"}
+    out = webui.queries._metrics_json(raw)
+    assert out == {"hour": NOW.isoformat(), "play": 7, "digg": None, "将来新增的字段": "x"}
+    # 复制一份再改：调用方手里那份不能被就地改掉
+    assert raw["hour"] is NOW
+    assert webui.queries._metrics_json(None) is None
+
+
+def test_json_body_degrades_unknown_types_instead_of_dropping_the_response():
+    """兜底：真出现没预料到的类型时，降级成字符串，而不是把整条响应丢掉。
+
+    这是"失败方式"的选择——一个读数显示成 ISO 时间戳，好过一个点不动的详情弹窗。
+    """
+    payload = json.loads(webui.json_body({"t": NOW, "nested": {"d": timedelta(days=1)}}))
+    assert isinstance(payload["t"], str)
+    assert isinstance(payload["nested"]["d"], str)

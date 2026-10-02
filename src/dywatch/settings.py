@@ -138,6 +138,29 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
         "已知对访客不可见的作品被删；没有它只能等 STALE_FALLBACK_DAYS 那次兜底。"
         "代价是每账号每 30 分钟一次（相对每账号每轮的抓取可忽略）",
     ),
+    # ---------------------------------------------------------------- 可观测与自身
+    SettingSpec(
+        "METRICS_ENABLED", True, "bool",
+        "记录作品互动量（点赞/评论/收藏/分享）的时间序列。这些数字**本来就随每轮抓取返回**"
+        "（`user/posts` 的每一条里都有），所以采它们不额外消耗任何身份，代价只有磁盘：按小时"
+        "聚合，每账号每小时最多 FETCH_COUNT 行。面板的互动量曲线与增长对比由它供数。"
+    ),
+    SettingSpec(
+        "METRICS_KEEP_DAYS", 14, "int",
+        "互动量时间序列的保留天数（必须 ≥ 1）。它只影响历史曲线能回看多久，与判定无关。"
+        "注意删行不会让 SQLite 文件变小，真正回收磁盘要 VACUUM。"
+    ),
+    SettingSpec(
+        "UPSTREAM_STATUS_INTERVAL_SECONDS", 300, "int",
+        "每隔多少秒读一次上游的 `system/status`（版本 / 组件健康 / 身份池普查 / 存储用量），"
+        "写进 status.json 供面板展示（秒，0 = 关闭）。这个接口不需要 scope、不消耗身份；"
+        "主循环取一次、面板只读快照，所以打开面板仍然不发任何上游请求。"
+    ),
+    SettingSpec(
+        "SELF_CHECK_FREE_MB", 200, "int",
+        "自身检查：数据目录所在文件系统的剩余空间低于这么多 MB 时产生一次 SELF_DEGRADED"
+        "（0 = 关闭这一项检查）。磁盘满会让状态库写不进去，而那时通知恰恰是最需要的。"
+    ),
     # ---------------------------------------------------------------- 通知
     SettingSpec("NOTIFY_CHANNELS", ["dingtalk"], "csv", "启用的渠道，逗号分隔"),
     SettingSpec(
@@ -409,6 +432,19 @@ class Settings:
             # 负数会被 `interval > 0` 的守卫当成"关闭保底"——静默失效是最坏的一种，
             # 因为读配置的人会以为自己配了个值（跟 POLL_INTERVAL_MIN 那条同一个道理）
             errors.append("HIDDEN_CHECK_INTERVAL_MINUTES 不能为负（0 = 关闭保底）")
+
+        if v["METRICS_KEEP_DAYS"] < 1:
+            # 0 或负数会被 `metrics_days > 0` 的守卫当成"不清理"——那是**无限的**磁盘增长，
+            # 而配置里写着 0 看起来像"不留历史"，两者正好相反。想关掉记录请用
+            # METRICS_ENABLED=false。
+            errors.append(
+                "METRICS_KEEP_DAYS 必须 ≥ 1（它不能关掉清理，只能决定留多久；"
+                "想完全不记录请用 METRICS_ENABLED=false）"
+            )
+        if v["UPSTREAM_STATUS_INTERVAL_SECONDS"] < 0:
+            errors.append("UPSTREAM_STATUS_INTERVAL_SECONDS 不能为负（0 = 关闭）")
+        if v["SELF_CHECK_FREE_MB"] < 0:
+            errors.append("SELF_CHECK_FREE_MB 不能为负（0 = 关闭这一项检查）")
 
         return errors
 

@@ -516,7 +516,7 @@ v5 的代码质量主要来自一批**成文且被强制执行的规矩**。本�
         ┌──────────────────────────┼──────────────────────────┐
         │                          │                          │
 ┌───────▼────────┐      ┌──────────▼─────────┐      ┌─────────▼────────┐
-│  loop.py       │      │  pipeline.py       │      │  webui.py        │
+│  loop.py       │      │  pipeline.py       │      │  webui/          │
 │  轮次循环       │─────▶│  fetch→diff→persist│      │  只读面板 + 探针  │
 │  pacer 节奏     │      │  →notify 编排       │      │                  │
 └───────┬────────┘      └──────────┬─────────┘      └─────────┬────────┘
@@ -545,7 +545,7 @@ v5 的代码质量主要来自一批**成文且被强制执行的规矩**。本�
 - `notifiers/` **不 import** `dtk.py`、`state.py`；只接收渲染好的 `Message`。
 - `state.py` **不 import** `dtk.py`、`notifiers/`。
 - `dtk.py` **不 import** 上面任何一个（它不知道"监控"这件事存在）。
-- `webui.py` 只读 `state.py` 与一个 runtime 快照，**不触发任何上游请求**。
+- `webui/`（包）只读 `state.py` 与一个 runtime 快照，**不触发任何上游请求**。
 - 只有 `pipeline.py` 同时知道 `dtk` / `diff` / `state` / `notifiers`——它是唯一的编排者。
 
 收益：判定规则（最易错）与投递格式（最琐碎）都能脱离网络单测；
@@ -568,7 +568,15 @@ v5 的代码质量主要来自一批**成文且被强制执行的规矩**。本�
 | `render.py`    | 事件 → 三类文案（markdown / 纯文本 / 短标题）                                                                                                                                                                              | 不发送                                                                                    |
 | `messages.py`  | 全部文案常量与格式化（时间、时长、数字缩写、**更新频率分级**、事件与 tombstone 原因的中文）                                                                                                                                | 不含逻辑分支                                                                              |
 | `notifiers/*`  | 渠道 payload 构造 + 投递 + 单渠道失败隔离                                                                                                                                                                                  | 不跨渠道重试、不改写文案                                                                  |
-| `webui.py`     | 只读面板（状态页 + 单账号详情）、`/healthz`、`/readyz`、`/api/state`、`/api/health`、`/api/user/{id}`、`/metrics`                                                                                                          | 不做鉴权、**不发上游请求**、不写状态库                                                    |
+| `webui/*`      | 只读面板：状态页 `GET /`（LED 阵列 / 数据条 / 上游健康卡片 / 自身降级横幅 / 账号列表 / 详情弹窗）与事件时间线 `GET /events`（过滤 + 柱状图 + 载荷展开）、`/healthz`、`/readyz`、`/api/state`、`/api/health`、`/api/user/{id}`、`/api/events`、`/assets/*`、`/metrics` | 不做鉴权、**不发上游请求**、不写状态库（连探针也不创建库文件） |
+
+`webui/` 是一个包，内部按"CSS / 数据访问 / 图表 / 两个页面 / HTTP"分层：
+`theme.py`（全部 CSS 与页面骨架）、`common.py`（快照读取、归一化、转义、账号分级）、
+`charts.py`（静态资源、前端引导脚本、数据分桶纯函数）、`queries.py`（只读查询）、
+`page_status.py`、`page_events.py`、`server.py`（路由、探针、`/metrics`、服务器生命周期）。
+`__init__.py` 只是门面，把各部分重新导出成原来的名字，调用方一行都不用改。
+拆分的理由很直接：原先是一个 1300 行的单文件，加图表与第二个页面之后就没法改了；
+拆分时 **CSS 整段搬运、视觉与交互没变**。
 
 ### 4.3 并发与运行时模型
 
@@ -744,15 +752,32 @@ events(                                   -- 通知审计：能回答"当时到�
   ts TEXT NOT NULL, sec_user_id TEXT, content_id TEXT,
   kind TEXT NOT NULL, payload_json TEXT NOT NULL,
   delivery_json TEXT);                    -- 每渠道成功/失败
+
+post_metrics(                             -- 互动量时间序列（按小时桶聚合，只增不删）
+  sec_user_id TEXT NOT NULL, content_id TEXT NOT NULL,
+  hour TEXT NOT NULL,                     -- 小时桶起点（ISO/UTC），主键的一部分
+  captured_at TEXT NOT NULL,              -- 这个桶最后一次采到的时刻
+  play_count INTEGER, digg_count INTEGER, comment_count INTEGER,
+  share_count INTEGER, collect_count INTEGER,
+  PRIMARY KEY (sec_user_id, content_id, hour));
+CREATE INDEX ix_post_metrics_hour ON post_metrics(hour);
 ```
 
 `kind` 的取值与"哪一种会推送"以 `models.EventKind` / `NOTIFY_KINDS` 为准，清单与抑制窗口
-抄在文档站的「参考 / 事件类型」（`docs/reference/events.md`）；
-**`self_degraded` 目前没有任何产生点**（见第 10 章"尚未做"）。
+抄在文档站的「参考 / 事件类型」（`docs/reference/events.md`）。
+`self_degraded` 的产生点在 `loop.py` 的自身检查里（每轮一次 `disk_usage` 与 `os.access`，
+加上"这一轮有没有写失败"），**边沿触发**：只有新增的原因产生事件，恢复只记日志、不发事件。
+
+`post_metrics` 的互动量数字**本来就随每轮抓取免费返回**（`user/posts` 的每一条里都有
+`stats.*_count`），`METRICS_ENABLED` 打开时只是把它们记下来，不消耗任何额外的身份。
+三条写语义都有测试盯着：**按小时桶**（一轮约 1.5 分钟，逐轮写是每账号每小时约 40 行 ×
+`FETCH_COUNT` 条作品，而曲线分辨率并不会因此变好）、**缺字段不擦已有值**
+（`COALESCE(excluded.x, post_metrics.x)`——DTK 的 `play_count` 实测恒为 `null`，那是
+"这次没有"，不是"它变成 0 了"）、**只增不删**（清理只按保留期，判定逻辑一行都不读它）。
 
 维护任务（每轮顺带，不单独起线程）：tombstone 按上限与 TTL 回收、
 `events` 保留 `EVENTS_KEEP_DAYS`（默认 30）、`rounds` 保留 `ROUNDS_KEEP_DAYS`（默认 5）、
-`posts` 清理已不在窗口且已 tombstone 的行。
+`post_metrics` 保留 `METRICS_KEEP_DAYS`（默认 14）、`posts` 清理已不在窗口且已 tombstone 的行。
 
 > `rounds` 是**唯一会持续增长**的表（轮次周期只有几十秒：1 个账号 ≈ 每天 2600 轮，
 > 30 天就是 7.8 万行）。它没有任何读取方，保留期就是这个表的唯一取舍——默认只给 5 天，
@@ -944,19 +969,26 @@ payload 形状直接参考 v5 `ops/channels.py`（已验证可用的形状，不
 
 ### 4.9 可观测性与降级
 
-**面板**（`webui.py`，`WEB_ENABLED=true` 时随主循环起一个后台线程）：
+**面板**（`webui/` 包，`WEB_ENABLED=true` 时随主循环起一个后台线程）：
 
 | 路由                          | 内容                                                                                                                      | 备注                                                                                  |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `GET /`                       | 状态页：**LED 状态阵列**（24 格，按状态计数用最大余数法量化，小类别保底 1 格）+ 数据条 + 账号列表（含频率气泡）+ 详情弹窗 | 服务端渲染，`<meta refresh>` 30 秒自刷，只有弹窗用 JS                                 |
-| `GET /api/user/{sec_user_id}` | 单账号详情：作者行、作品、**已消失作品（tombstone）**、**最近事件**                                                       | 读 SQLite（只 `SELECT`）；`400` 非法 ID / `404` 查无此人 / `503` 库读不出来，三者分开 |
+| `GET /`                       | 状态页：**LED 状态阵列**（24 格，按状态计数用最大余数法量化，小类别保底 1 格）+ 数据条 + **上游健康卡片** + **自身降级横幅** + 账号列表（含频率气泡）+ 详情弹窗（含互动量曲线） | 服务端渲染，`<meta refresh>` 30 秒自刷，只有弹窗与图表用 JS                            |
+| `GET /events`                 | 事件时间线：柱状图 + **同一组过滤条件**的列表（24h/7d/30d × 全部/作品/账号/系统/机制，可再按类型与账号收窄）+ 点行展开 `payload` | 图与列表由 `build_view` 一处算出（否则"柱子上 5 根、列表 1 条"会被当成采集漏了数据）；60 秒局部刷新，读展开载荷时不刷 |
+| `GET /api/user/{sec_user_id}` | 单账号详情：作者行、作品（含互动量读数）、**已消失作品（tombstone）**、**最近事件**、**互动量曲线**                        | 读 SQLite（只 `SELECT`）；`400` 非法 ID / `404` 查无此人 / `503` 库读不出来，三者分开 |
+| `GET /api/events`             | 与事件页同一套过滤的事件列表                                                                                              | 认 `range` / `group` / `kind` / `author` 四个参数；认不出的值退回默认，不报错          |
+| `GET /assets/<name>`          | 静态资源（目前只有 `chart.umd.min.js`）                                                                                    | **只按名字白名单给**，不从路径拼；带内容哈希 `?v=`，对不上就 `no-store`                |
 | `GET /api/state`              | `status.json` 原文                                                                                                        | 给脚本用                                                                              |
-| `GET /api/health`             | 精简小结（账号数 / 失败数 / 快照时间 / 闸门）                                                                             | 机器可读                                                                              |
+| `GET /api/health`             | 精简小结（账号数 / 失败数 / 快照时间 / 闸门 / 自身降级 / 上游读数）                                                        | 机器可读                                                                              |
 | `/healthz` `/readyz`          | 进程活着 / 依赖探针（状态库可读 + DTK 可达）                                                                              | 见下                                                                                  |
 
-- **面板不发任何上游请求、不消耗身份**：列表读每轮写一次的 `status.json`，详情读状态库。
-  打开它不会被风控，也不会因为上游抖动而变慢。这也是为什么"上游健康卡片"仍然是**可选未做**：
-  那需要面板去调 `GET /api/v1/system/status`，与上面这条性质冲突（见第 10 章）。
+- **面板不发任何上游请求、不消耗身份**：列表读每轮写一次的 `status.json`，详情与事件页读状态库。
+  打开它不会被风控，也不会因为上游抖动而变慢。上游健康卡片按同一条性质落地：**由主循环**
+  每隔 `UPSTREAM_STATUS_INTERVAL_SECONDS` 取一次 `GET /api/v1/system/status` 写进快照
+  （过同一个 `RequestPacer`、失败保留旧值），面板只读快照——而不是让面板自己去发请求（见 D22）。
+- 面板也**不写状态库、不创建任何文件**：所有查询都是 `SELECT`；`/readyz` 在库不存在时直接报
+  "state store not found"，不去 `connect`——`sqlite3.connect` 会给不存在的路径建一个 0 字节空库，
+  之后 `has_store()` 会说"库在"、所有查询转成 `no such table`，排障的人会以为库被折腾坏了。
 - 视觉与交互（LED 阵列 / 数据条 / 列表 / 弹窗）来自旧项目 `douyin-monitor-enhance` 的面板；
   数据源换成 SQLite 之后多出"已消失作品"与"最近事件"，`never_seen`（抖音对**形态合法但不存在**
   的 `sec_user_id` 返回 `200 + items:[]`）单独一色标注——旧面板没有这个概念，
@@ -973,10 +1005,25 @@ payload 形状直接参考 v5 `ops/channels.py`（已验证可用的形状，不
   「累计 M 轮」= 状态库里的累计值（`StateStore.rounds_total()`，跨重启、不受 `ROUNDS_KEEP_DAYS`
   裁剪影响，取 `sqlite_sequence` 的自增号段而不是行数）。详情弹窗里的「累计轮次」是第三个口径：
   **这个账号**被检查过多少轮（`authors.runs`）。三者互不相等，少标一个就会被读成"轮数丢了"
-- `/metrics`：Prometheus 文本：`dywatch_users`、`dywatch_rounds_total`（**进程级**，重启归零，
-  符合 counter 语义）、`dywatch_rounds_recorded_total`（状态库累计）、`dywatch_gate_open`、
-  `dywatch_known_posts{author}`、`dywatch_account_failures{author}`、`dywatch_never_seen_accounts`
-  （设计稿早期写的 `monitor_*` 前缀未落地，见第 10 章"尚未做"）
+- `/metrics`：Prometheus 文本，覆盖五组东西——①进程与轮次：`dywatch_users`、
+  `dywatch_rounds_total`（**进程级**，重启归零，符合 counter 语义）、
+  `dywatch_rounds_recorded_total`（状态库累计）、`dywatch_gate_open`；
+  ②账号：`dywatch_known_posts{author}`、`dywatch_account_failures{author}`、
+  `dywatch_never_seen_accounts`；③**上游健康**（来自快照里的那块读数）：
+  `dywatch_upstream_ok` / `_uptime_seconds` / `_checked_timestamp_seconds`、
+  `dywatch_upstream_component_ok{component}` / `_latency_ms{component}`、
+  `dywatch_upstream_pool_identities{platform,state}` / `_pool_active`、
+  `dywatch_upstream_storage_db_bytes` / `_identities`；④**自身状态**：
+  `dywatch_self_check_ok` / `_free_mb`、`dywatch_archive_pending` / `_muted`、
+  `dywatch_feature_enabled{name}`；⑤**状态库规模**：`dywatch_state_readable`、
+  `dywatch_state_rows{table}`、`dywatch_events_recent{kind}`、`dywatch_post_metrics_rows` 等。
+  三条硬约束：**每个样本名都必须先有 `# HELP`/`# TYPE`**（否则抓取端当 untyped，图表里既不能
+  算速率也不能算均值）；label 值按规范转义 `\ " \n \r \t`、其余控制字符换空格；
+  **同名同 label 的重复样本会让整次抓取失败**，所以 `author` label 必须带 `sec_user_id`
+  （详见下一条）。上游组件返回 `ok: null`（"不知道"，例如没配 browser-rpc）时**不出样本**，
+  而不是报 0——报 0 等于替上游宣布一次故障。
+  （设计稿早期写的 `monitor_*` 前缀未落地，见第 10 章"尚未做"；库读不出来时只少几行并给出
+  `dywatch_state_readable 0`，绝不因为读指标而顺手建一个空库、也不把整次抓取变成 500。）
   账号相关指标的 `author` label 是 `<sec_user_id>|<昵称>`（昵称允许重复，只用昵称会让同名账号产出
   两行一模一样的样本，Prometheus 会把**整次抓取**判失败；label 值最长 96 字符，id 在前所以不会被截掉）。
   **这是破坏性变更**：此前按昵称写的 Grafana 面板 / 告警规则要改成正则匹配，见修正 #31
@@ -985,12 +1032,18 @@ payload 形状直接参考 v5 `ops/channels.py`（已验证可用的形状，不
   确认轮数、日志级别
 - **降级矩阵**：
 
-| 条件                  | 行为                                         |
-| --------------------- | -------------------------------------------- |
-| 上游 429 / 503 / 熔断 | 全局闸门关闭若干分钟，只记录不推送，面板标红 |
-| `archive:read` 未授予 | 关闭交叉确认，面板小字说明，不报错           |
-| 自身磁盘/状态库超限   | 停推送、保留判定记录，日志 WARN              |
-| `SILENT_MODE`         | 只记录不推送                                 |
+| 条件                  | 行为                                                                      |
+| --------------------- | ------------------------------------------------------------------------- |
+| 上游 429 / 503 / 熔断 | 全局闸门关闭若干分钟，只记录不推送，面板顶部出红色警示条                    |
+| `archive:read` 未授予 | 关闭交叉确认，面板小字说明，不报错                                          |
+| 自身磁盘余量低于阈值  | 产生一次 `SELF_DEGRADED`（通知）+ 面板琥珀横幅；**判定与推送照常**          |
+| 状态库写不进去        | 同上（`reason=state_store_write_failed`），并且这个原因**当轮**就出现在快照里 |
+| 状态库读不出来        | 面板少显示几块、`/metrics` 给 `dywatch_state_readable 0`，不把整次抓取变成 500 |
+| 上游健康读数取不到    | 保留上一次的读数并写"上一次取到的读数"；不落库、不推送                     |
+| `SILENT_MODE`         | 只记录不推送                                                                |
+
+"自身降级"的取舍：原设计写的是"停推送"，实现改成**照常推送 + 明确告知**——磁盘满、
+库写不进去的时候，通知恰恰是最需要工作的那条链路（第 10 章修正 #35）。
 
 ### 4.10 隐藏作品核验（`HIDDEN_POST_CHECK_ENABLED`，默认关闭）
 
@@ -1146,7 +1199,8 @@ and 存在不带标记的作品`。全部已知作品都带标记时，访客列
 **状态库**：`authors` 加三列（`baseline_content_count` / `baseline_content_count_at` /
 `content_count_drift_rounds`）、`posts` 加两列（`hidden_from_guest_at` 与
 `hidden_seen_streak`——后者是"带标记期间连续可见轮数"，清标记的分级确认用），是这个项目
-第一批真正的 schema 迁移（v1 → v2 → v3 → v4 → v5，`ALTER TABLE ... ADD COLUMN`）。
+第一批真正的 schema 迁移（v1 → v2 → v3 → v4 → v5，`ALTER TABLE ... ADD COLUMN`；
+现在的 `SCHEMA_VERSION` 是 **6**，v5 → v6 建的是 4.6 里的 `post_metrics` 表）。
 `CREATE TABLE IF NOT EXISTS` 对已存在的表是 no-op，不会给旧库自动补列，所以
 `migrate()` 按 `_MIGRATIONS` 表逐步升级，而不是"版本不对就报错"。
 
@@ -1187,7 +1241,10 @@ douyin-monitor/
 │   ├── notifiers/
 │   │   ├── base.py  composite.py  null.py
 │   │   └── dingtalk.py wecom.py bark.py serverchan.py telegram.py webhook.py
-│   └── webui.py               # 只读面板（状态页 + 账号详情）+ 探针 + metrics
+│   └── webui/                 # 只读面板 + 探针，按职责分层（见 4.2）
+│       ├── theme.py  common.py  charts.py  queries.py
+│       ├── page_status.py  page_events.py  server.py
+│       └── assets/chart.umd.min.js   # Chart.js 4.4.7 本地打包（不走 CDN）
 └── tests/
     ├── unit/test_diff.py      # 新/删/分级确认/回归/挤出预算/全部消失/漏检/裁剪（重点）
     ├── unit/test_pacer.py     # 节奏与并发无关性
@@ -1275,7 +1332,7 @@ douyin-monitor/
 | **S1** 判定与状态 | `diff.py`（旧逻辑完整移植）+ `state.py` + 迁移                                                         | 单测覆盖：初始化 / 新作品 / 普通 2 轮 / 置顶 3 轮 / 全空 3 轮 / 挤出预算 / 窗口回移静默恢复 / 标题变更静默 / 裁剪 / 漏检 / 畸形列表；`now` 由参数注入 |
 | **S2** 循环与节奏 | `loop.py` + `pacer.py` + `scheduler.py` + `pipeline.py` + 日志                                         | 5 账号连续跑 30 分钟：实测速率 ≈ 11 次/分钟、节奏与并发无关；`kill -9` 后重启不丢状态、不重复推送                                                     |
 | **S3** 通知层     | `render.py` + `messages.py` + `notifiers/*` + `alerts.py`                                              | 钉钉 + 通用 webhook 首发，其余按模板补齐；单渠道挂掉其它照常；`SILENT_MODE` 可用；窗口去重有单测                                                      |
-| **S4** 面板与降级 | `webui.py` + 探针 + metrics + 降级矩阵                                                                 | 面板显示每账号状态、更新频率与上游健康；`/readyz` 在 DTK 不可达时正确报不就绪                                                                         |
+| **S4** 面板与降级 | `webui/` + 探针 + metrics + 降级矩阵                                                                 | 面板显示每账号状态、更新频率与上游健康；`/readyz` 在 DTK 不可达时正确报不就绪                                                                         |
 | **S5** 交付       | `deploy/`（systemd 单元 + logrotate + `install.sh`）+ README（由 SETTINGS 生成配置表、容量算例、排障） | Ubuntu 上 `install.sh` 装成 systemd 服务后 `systemctl restart` 正常。README 覆盖 Key 权限、容量算例、常见故障                                         |
 
 ---
@@ -1306,10 +1363,15 @@ douyin-monitor/
 | D19  | 怎么把"对访客不可见"与"作品被删"分开              | **把核验结论持久化成作品上的标记**（`posts.hidden_from_guest_at`）：带标记的作品**不参与访客视角的缺席判定**，直到它重新出现在访客列表里；总数减少时用登录视角复核这些标记作品是否真的没了，才是"作品消失"。核验不再逐轮触发，改为事件触发 + **每账号 30 分钟低频保底**（`HIDDEN_CHECK_INTERVAL_MINUTES`）                                       |
 | D20  | 通知正文用什么 markdown 版式                              | **只用钉钉 ∩ 企业微信 都支持的元素**（`###` 标题 / `- ` 列表 / `>` 引用 / `**加粗**` / `[文字](链接)`），**每一行都必须是块级元素、块之间空一行**——钉钉把单个换行当软换行折叠，裸段落行会被挤成一整行（第一版"推送内容太乱"的根因）。钉钉不支持行内代码/表格/代码块/分隔线，企业微信 markdown 不支持列表与斜体，一律不用。正文按企业微信上限（4096 字节）留余量截断，标题按原始值截断再转义，`subject` 保持纯文本（进通知栏，不做 markdown 解析）  |
 | D21  | 通知渠道怎么配（`NOTIFY_CHANNELS` 类型名列表 + 每类型一组**单值**凭据键） | 新增 `NOTIFY_TARGETS`，**一行一个目标**（`.env` 的带引号多行值）：`类型 key=value, key=value`，字段用**空格或逗号**分隔（值里要带空格/逗号就加引号）、`#` 注释、`;` 也可分隔目标。同一类型可多实例（两个钉钉群）。实例名 `name=` 或按类型自动编号（`dingtalk-2`），**必须唯一**（投递结果按名字存、面板也按名字列）。旧写法**保留可用**，两者同时配时新写法生效并告警；串行发送的时间代价在每个目标最坏 17 秒，≥4 个目标时启动告警。**多行值里的引号必须与外层不同**（同种引号会让 python-dotenv 丢掉整个键 → 已加"写了却读不出来"的启动错误兜住，见修正 #23）  |
+| D22  | 上游健康读数（版本 / 组件 / 身份池 / 存储）怎么进面板 | **主循环定期取 + 面板只读快照**：`loop._refresh_upstream_status` 按 `UPSTREAM_STATUS_INTERVAL_SECONDS`（默认 300）读一次 `GET /api/v1/system/status`，过**同一个** `RequestPacer`，写进 `status.json` 的 `upstream` 块；失败**保留上一次的值**、只改 `ok`/`error`/`checked_at`；`summarize_upstream_status` **只白名单搬运**认得的字段 | ①"打开面板不发任何上游请求"是面板的核心性质，让面板自己去调就破了它；②它不消耗身份、不需要 scope，但仍是一次真实的上游请求，"约 11 次/分钟"的承诺必须把它算进去；③失败保留旧值是因为"网络抖一下就把版本号与身份池读数抹成空白"比"显示一个稍过时的读数"更糟；④不透传整份响应，是因为这份数据会成为 `status.json`/`/api/state` 的对外形态——原样复制等于把上游的内部结构悄悄变成我们的契约 |
+| D23  | 互动量（点赞/评论/收藏/转发）要不要落库 | **落，默认开**（`METRICS_ENABLED=true`，保留 `METRICS_KEEP_DAYS=14`）：每轮抓取时**免费返回**的 `stats.*_count` 写进 `post_metrics`，**按小时桶**聚合、缺字段 `COALESCE` 不擦旧值、只增不删、每轮上限 200 行 | ①这些数字本来就随 `user/posts` 的每一条返回，解析进 `Content` 之后被丢掉——采它们不花任何额外身份；②按小时桶是必需的：一轮约 1.5 分钟，逐轮写是每账号每小时约 40 行 × `FETCH_COUNT` 条作品，而曲线分辨率并不会因此变好；③DTK 的 `play_count` 实测恒为 `null`，那是"这次没有"而不是"它变成 0 了"，直接覆盖会把已记下的数字擦掉而没人能看出来；④只增不删——判定逻辑一行都不读它，所以它永远不该影响"这条作品还在不在" |
+| D24  | 自身降级（磁盘 / 状态库）怎么报 | **边沿触发 + 按原因分桶 + 照常推送**：每轮做一次 `disk_usage` 与 `os.access`，加上"这一轮有没有写失败"（`_store_write_failed`）；只有**新增的**原因产生一次 `SELF_DEGRADED`，恢复只记日志、不发事件；读数（`reasons`/`free_mb`/`writable`）**每轮都写进快照**；抑制窗口按 `reason` 分桶 | ①条件是持续为真的（磁盘不会自己空出来），按轮报会在 `events` 表里每轮堆一行一模一样的记录，一天上千行把真正的事件淹掉；②磁盘满/库写不进去的时候，通知恰恰是最需要工作的那条链路——所以原设计"自身超限就停推送"改成**照常推送 + 明确告知**（见修正 #35）；③磁盘满与库写不进去是两件事，只按事件类型分桶会让先来的占满后来者的窗口 |
+| D25  | 面板怎么拆、图表用什么 | 面板拆成 `webui/` 包（`theme`/`common`/`charts`/`queries`/`page_status`/`page_events`/`server`，`__init__.py` 只做门面）；图表用 **Chart.js 4.4.7 本地打包**（`assets/chart.umd.min.js`，不走 CDN）；颜色传 **CSS 变量名**、前端用 `getComputedStyle` 解析；服务端只给数据（分桶/配色/图例都是纯函数） | ①1357 行的单文件加图表与第二个页面之后就没法改了，而拆分不能让视觉变样——CSS 整段搬运、一个字没改；②面板要能在没有外网的机器上打开，所以不走 CDN；③颜色写死在载荷里，深色模式切换后就是"浅色图配深色底"，取 CSS 变量 + `matchMedia` 重建才跟着走；④分桶规则放在 Python 里能直接单测，丢给前端等于把它放进一段没法测的字符串 |
+| D26  | 事件时间线页（`/events`）的形状 | **一张柱状图 + 一份同一组过滤条件的列表**（`build_view` 一处算出，图与列表都从它取）；类别 `全部/作品/账号/系统/机制` **覆盖全部 16 种事件且互不重叠**；投递状态四态：`已推送` / `推送失败` / `静默（设计如此）` / `无投递记录`；60 秒**局部**刷新（读展开载荷时不刷） | ①图与列表用两套过滤条件时会出现"柱子上 5 根、列表 1 条"，看起来像采集漏了数据——这是最容易被当成 bug 的形状；②类别漏一种，那个事件就在"全部"里看得见、按类别却永远筛不出来，而人只会以为自己点错了；③"设计静默"与"该推没推成"必须分开，否则"通知链路到底坏没坏"看不出来；④整页刷新会把读到一半的 `payload` 收回去 |
 
 ---
 
-## 10. 实现状态（2026-09-15）
+## 10. 实现状态（首版 2026-09-15，最近更新 2026-10-02）
 
 ### 已完成
 
@@ -1322,8 +1384,9 @@ douyin-monitor/
 | **S4** 面板与探针 | ✅   | 只读面板 + `/healthz` `/readyz` `/metrics`；`status` 命令输出账号表。**面板后从旧项目整体移植过一次**（LED 阵列 / 数据条 / 详情弹窗，见修正 #9）        |
 | **S5** 交付       | ✅   | systemd 单元（加固齐全）+ 日志轮转（独立 cron，D16）+ `install.sh` + README。**不做容器镜像**（D14）                                                    |
 | **S6** 隐藏作品核验 | ✅ | 见 §4.10。默认关闭（`HIDDEN_POST_CHECK_ENABLED`），第一版设计稿里没有，是上线后发现游客身份会漏看作者主页最新作品才补的能力；覆盖了触发条件、定向核验、事件分类、schema 迁移（v1→v2）的单测 |
+| **S7** 观测与图表 | ✅ | 2026-10-02：互动量时间序列落库（`post_metrics`，schema v5→v6）、上游健康读数进快照（**主循环定期取，面板不自己发请求**）、`SELF_DEGRADED` 补齐（磁盘余量 + 状态库可写）、`/metrics` 补上"上游健康"与"自身状态"两组、事件时间线页 `/events`（Chart.js 本地打包，不走 CDN）；`webui.py` 拆成 `webui/` 包（**CSS 整段搬运、一个字没改**）。设计与取舍见 §4.9、D22~D26 |
 
-代码规模：`src/dywatch` **18 个模块**，测试 **149 项**（unit + replay）。
+代码规模：`src/dywatch` **36 个 `.py`**（顶层 18 个模块 + `notifiers/` 与 `webui/` 两个子包），约 1.2 万行；测试 **655 项**（652 通过 / 3 跳过）。
 
 ### 实现过程中对设计的修正（都记在这里，免得以后当成 bug）
 
@@ -1364,19 +1427,25 @@ douyin-monitor/
 | 32  | 修正 #29 把上游的 `retry_after` 封顶到 `BACKOFF_MAX_SECONDS`（默认 600 秒），且封顶时不留任何痕迹 | 上游 `retry_after` 有**自己的**上限 `RETRY_AFTER_MAX_SECONDS`（默认 3600），跨项校验要求它 ≥ `BACKOFF_MAX_SECONDS`；封顶时记 `gate.retry_after_capped`（debug，带 raw/capped/code）、在闸门快照里计数（→ `status.json` → 面板、`/api/state`）、并暴露 `dywatch_gate_retry_after_capped_total` | 两个上限语义不同：`BACKOFF_MAX_SECONDS` 是**我们自己**退避的封顶，`retry_after` 是**上游明说要等多久**。把上游的话截到 600 秒，等于在它要求等一小时的时候每 10 分钟放出一轮请求（默认 5 并发）去撞同一堵墙——#29 的理由"到点再探一次，代价只是一个请求"在并发下不成立，代价是一轮请求。封顶仍然要有（上游一个异常大的值不该把监控停摆一天），但"我们没完全听上游的"必须能被看见：`retry_after_capped > 0` 就是那个信号 |
 | 33  | 只从响应体的 `error.retry_after` 读等待时间 | 体里没有该字段时回 `Retry-After` 响应头找（`dtk._retry_after_of`）；头里的值只认**秒数**形态，认不出来（如 HTTP-date）当作没给；**体的值优先** | DTK 用一个值同时写体和头（`api/envelope.py` 的 `outgoing["Retry-After"] = str(retry_after)`），所以正常情况读哪个都一样。留这条退路的理由是两者的**性质**不同：头是 HTTP 语义、体是我们自己的信封——响应体被改写或裁剪（反代、上游改了错误形状）时，头还在。`_request` 因此把响应头也返回（`(status, body, headers)`）。认不出头的形态时**不猜**：猜一个时间等于把闸门关成错误的时长，不如退回我们自己的退避 |
 | 34  | 修正 #29 / #32 之后：①`trip()` 用浮点余量判断"后到者是否带着更长的 `retry_after`"，封顶留痕写在 `_retry_after()` 里（每次解析都记）；②`RETRY_AFTER_MAX_SECONDS` 默认 3600，校验直接拿它去比 `BACKOFF_MAX_SECONDS` | ①解析与封顶拆开：`_parse_retry_after()` 纯解析，`_cap()` 才封顶并留痕，且只在**真的用来决定闸门时长**时调用；`trip()` 与 `math.ceil(remaining)` 按**整秒**比；②`RETRY_AFTER_MAX_SECONDS` **没显式配置时取 `max(3600, BACKOFF_MAX_SECONDS)`**（`Settings.retry_after_max`），只有显式写了更小的值才报错；`config-check` 显示的是实际生效值 | ①最常见的真实形状是 5 个并发请求收到**同一个** 429 + `retry_after=30`：第一个关到 30 秒，后到者一比，浮点余量已是 29.99，于是每个都"延长"一次——`times_closed` 记成 5、`_history`（只留 20 条）被同一次事故灌满；封顶计数同理，横幅会写"已被封顶 N 次"而 N 随并发数变化。②旧版本合法的 `.env`（如 `BACKOFF_MAX_SECONDS=7200`）没碰过新键，3600 < 7200 会让它在升级后变成**启动错误**——用户什么都没改、服务起不来。"没配"应当意味着"跟着退避上限走"，而不是"另有一个默认值要核对"。`.env.example` 里这个键因此改成注释掉的，免得复制示例文件就把它显式钉死 |
+| 35  | §3 原则 #8 与 4.9 降级矩阵写着"自身状态库/磁盘超限 → **停推送**、面板标红、不崩不丢状态" | **照常推送 + 明确告知**：降级时 `SELF_DEGRADED` 照样投递，面板出琥珀横幅，正文里写明是哪个原因 | 磁盘满、库写不进去，恰恰是**通知链路最该工作的那一轮**——真出事的时候把它掐掉，等于"因为自己可能坏，所以连报警也省了"。原理由成立的前提是"推送依赖状态库"，而它不依赖：一次 HTTP 而已。降级要传达的信息是"该来清磁盘了"，静默只会让问题拖到 SQLite 自己报错才被发现 |
+| 36  | （实现）一轮里 `_store_write_failed` 的次序是"**清零 → 读（自检）→ 写（记轮 / 维护）**" | 清零提到 `run_round` 开头（任何写之前），`_maintenance()` 移到 `_run_self_check()` **之前**；不变量变成"**清零在所有写之前、读在所有写之后**" | 写失败置的位当轮读不到、下一轮开头又被清零 → `state_store_write_failed` 这个原因**永远不可能出现在快照里**，整个原因是死的；闸门关闭路径更是从不重置它。可怕之处在于逐行看每一步都对、也没有任何测试会失败——这条是独立子代理审查抓出来的，当时"写失败可见"的断言根本不存在 |
+| 37  | （实现）`/readyz` 的存在性探针直接 `sqlite3.connect(db_path)` 判定状态库可用 | 先 `db_path.is_file()`，不存在就回 `{"ok": false, "reason": "state store not found"}` | SQLite 连一个**不存在的路径**会顺手把它建出来（0 字节空库）。systemd / 负载均衡每 15 秒打一次探针，就在还没初始化的目录里造出一个空库——此后 `queries.has_store()` 从"库不存在"（如实报错）变成"库在但 `no such table`"（看起来像库坏了、要人去修）。`queries.py` 里这条纪律早就写了，漏的是**探针这条旁路** |
+| 38  | （实现）详情接口把互动量序列按原样塞进 JSON | `queries._metrics_json()` 只把 `hour` 归一化成 ISO 字符串（复制一份再改，其余字段原样带走）；HTTP 层 `server.json_body()` 再兜一层 `default=str` | `json.dumps` 遇 `datetime` 抛 `TypeError`，而它抛在 `send_response` **之前** → 客户端拿到的是**连接被重置**（不是 500、没有 body，日志里只有一条 traceback）。这种形状只在**真发一次 HTTP 请求**时才出现：原有用例直接调 `queries.user_detail()`，绕过了序列化那一步，于是单测全绿、面板一打开就整页详情拉不出来。回归断言必须**比字面相等**——只断言"是字符串"挡不住 `default=str` 降级出来的那个字符串 |
+| 39  | （做法）新加的断言跑一遍是绿的，就算覆盖到了 | 逐条**把断言要守的代码改坏**再跑（`.tmp/review/mutation_round2.py`，12 条），全红才算数；红/绿一律看 junitxml 里的失败数，不看退出码（沙箱的 safe-delete 会让退出码失真） | 第一轮 11 条里 **9 条改坏之后依旧全绿**——它们测的是"函数能跑"，不是"这条规则被守住"，属于 README 级断言。最典型的是"自检每轮都报"：把产生点改成每轮都发，测试仍然绿，因为 `should_send` 的 6 小时窗口在落库前就把多出来的几次挡掉了；只有断言 `self_check.degraded` 的**日志条数**才看得见 |
+| 40  | （仓库现状）`.gitattributes` 声明 `* text=auto eol=lf`，工作区却有 21 个文件是 CRLF | 统一成 LF（转换脚本断言"字节数差额 == CRLF 条数"，证明只动了行尾） | 混着放会让下一次改动在这些文件上产出整文件级别的 diff（看起来像重写），review 时真正的改动被埋在几千行"变化"里。约定已经写在 `.gitattributes` 里，工作区跟着走就行 |
 
 ### 尚未做（明确不在第一版范围）
 
 - `known_ids_max` 之外的**历史回溯**（DTK 的 `/archive/backfill` 能做，但那会大量消耗身份）
 - 评论监控、粉丝曲线、多平台（TikTok）
 - 通知语言切换（文案已集中在 `messages.py`，加英文只改那一个文件）
-- **自身降级护栏**：`EventKind.SELF_DEGRADED` 已经声明、4.9 的降级矩阵与第 3 章原则 #8 也都写了
-  "自身状态库/磁盘超限 → 停推送、面板标红、不崩不丢状态"，但**一处都没实现**：没有地方产生这个
-  事件，也没有对自身磁盘余量的检查。当前的实际行为是"该推的照推，磁盘满了由 SQLite/systemd 去报错"
-- **面板的上游健康卡片**（4.9 的"可选"）：要显示 DTK 版本 / 组件 / 身份池计数，就得让面板去调
-  `GET /api/v1/system/status`，这与"打开面板不产生任何上游请求"冲突。要做的话应当是**主循环**
-  定期取一次写进 `status.json`，面板继续只读快照——而不是让面板自己发请求
-- **`/metrics` 的指标名**：设计稿写的是 `monitor_*` 前缀（含 `monitor_polls_total{result}`、
-  `monitor_new_posts_total{author}`、`monitor_removed_total`、`monitor_upstream_errors_total{code}`、
-  `monitor_last_success_timestamp`），实现里用的是 `dywatch_*` 且少了几个。补齐需要从
-  `rounds` / `events` 两张审计表汇总，留给专门做监控接入的时候一次改掉（改名前先想清楚谁在抓它）
+- **互动量的历史**：`post_metrics` 从这一版开始记，打开之前的历史补不回来——DTK 只回答"现在的
+  值是多少"，给不出"过去每一天是多少"。所以面板上曲线的起点是部署之后，不是作品发布那天
+- **上游错误按 `code` 分维度**：设计稿里的 `monitor_upstream_errors_total{code}` 没有对应实现，
+  现在只有"此刻好/坏"的读数（`dywatch_upstream_ok` / `_component_ok`）与闸门封顶计数
+  （`dywatch_gate_retry_after_capped_total`），没有"这段时间哪类错误各出现几次"。要有得从
+  `events` 里 `upstream_degraded` 的载荷汇总。顺带：设计稿里的 `monitor_*` 前缀**不再改回去了**，
+  实现统一 `dywatch_*`，改名要重写所有查询
+- **面板鉴权**：**明确不做**（§4.9 的决策）——只读展示，默认只听回环，交给前置反代/内网
+- **`/events` 的翻页与搜索**：一屏取最近 N 条（24h / 200、7d / 300、30d / 600），超出只在页面上
+  标"已截断"，没有分页、也没有按关键词搜 `payload`

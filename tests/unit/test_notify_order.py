@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -27,7 +28,7 @@ from dywatch.models import (
     Page,
     PostState,
 )
-from dywatch.pipeline import run_author
+from dywatch.pipeline import notify_system_event, run_author
 from dywatch.scheduler import GlobalGate
 from dywatch.state import StateStore
 
@@ -202,3 +203,75 @@ async def test_one_notification_crashing_does_not_hold_back_the_rest(tmp_path):
     assert notifier.crashed == 1
     assert [message.event for message in notifier.sent] == [EventKind.NEW_POST]
     assert result.status == "ok", "通知里的意外不该把这一轮判成失败"
+
+
+# ------------------------------------------------------- 全局事件按原因分桶
+#
+# `TRIGGERS` 给全局事件的窗口是**小时级**的，所以"分桶分错了"的代价不是多一条通知，
+# 而是另一件故障被静默整整一个窗口——磁盘满会把"状态库写不进去"压掉一小时，
+# 池子空了会把"接口熔断"压掉一小时。两者的处置方式完全不同。
+
+def test_global_events_are_bucketed_by_cause_not_by_kind():
+    dedup = Deduplicator()
+
+    pool_empty = Event(EventKind.UPSTREAM_DEGRADED, sec_user_id="", payload={"code": "IDENTITY_POOL_EXHAUSTED"})
+    circuit_open = Event(EventKind.UPSTREAM_DEGRADED, sec_user_id="", payload={"code": "ENDPOINT_CIRCUIT_OPEN"})
+    assert should_send(pool_empty, dedup) == (True, "upstream_degraded:IDENTITY_POOL_EXHAUSTED")
+    allowed, key = should_send(circuit_open, dedup)
+    assert allowed is True, "另一种上游故障不该被前一种的窗口压掉"
+    assert key == "upstream_degraded:ENDPOINT_CIRCUIT_OPEN"
+    assert should_send(pool_empty, dedup)[0] is False, "同一个原因才该压在窗口里"
+
+    disk_low = Event(EventKind.SELF_DEGRADED, sec_user_id="", payload={"reason": "disk_low"})
+    store_failed = Event(
+        EventKind.SELF_DEGRADED, sec_user_id="", payload={"reason": "state_store_write_failed"}
+    )
+    assert should_send(disk_low, dedup)[0] is True
+    assert should_send(store_failed, dedup)[0] is True, "磁盘满和库写不进去是两件事"
+    assert should_send(disk_low, dedup)[0] is False
+
+
+def test_a_global_event_without_a_cause_shares_one_bucket():
+    """生产点漏带 `reason`/`code` 时共用 `unknown` 桶——这是**已知的退化**，钉住它。
+
+    它不该被改成"不过滤"（那会让同一个原因每小时刷一次）；真正该守的是"生产点必须带原因"，
+    由 `test_loop.py::test_self_check_lands_in_the_snapshot_but_reports_only_once` 那边的
+    payload 断言盯着。
+    """
+    dedup = Deduplicator()
+    first, key = should_send(Event(EventKind.SELF_DEGRADED, sec_user_id="", payload={}), dedup)
+    assert first is True and key == "self_degraded:unknown"
+    assert should_send(Event(EventKind.SELF_DEGRADED, sec_user_id="", payload={}), dedup)[0] is False
+
+
+# ------------------------------------------------------- 系统级事件的落库与投递
+
+async def test_system_events_are_recorded_and_a_suppressed_repeat_is_not(tmp_path):
+    """系统级事件：**先落库、再投递、回写结果**；被窗口压掉的重复**不落库**。
+
+    不落库是刻意的：一次上游故障会让同一轮里所有在途账号各自撞上，5 个账号就是 5 行
+    一模一样的记录，而闸门关着的那段时间每轮都跳过、不会重复触发——"一次故障一行"
+    正是抑制窗口近似出来的口径。
+    """
+    store = StateStore(tmp_path / "db.sqlite")
+    store.migrate()
+    notifier = RecordingNotifier()
+    dedup = Deduplicator()
+    event = Event(EventKind.SELF_DEGRADED, sec_user_id="", payload={"reason": "disk_low", "free_mb": 10})
+
+    row_id = await notify_system_event(
+        event, notifier=notifier, dedup=dedup, store=store, now=NOW, logger=Logger()
+    )
+    assert row_id is not None
+    assert notifier.kinds == [EventKind.SELF_DEGRADED]
+
+    rows = store.recent_events()
+    assert [row["kind"] for row in rows] == ["self_degraded"]
+    assert json.loads(rows[0]["delivery_json"])["sent"] == ["stub"], "投递结果要回写到那一行"
+
+    again = await notify_system_event(
+        event, notifier=notifier, dedup=dedup, store=store, now=NOW, logger=Logger()
+    )
+    assert again is None, "被抑制的重复没有行 id"
+    assert notifier.kinds == [EventKind.SELF_DEGRADED], "也不该再投一次"
+    assert len(store.recent_events()) == 1, "被压掉的重复不该在 events 表里堆行"

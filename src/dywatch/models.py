@@ -125,6 +125,53 @@ class Content:
 
 
 @dataclass(frozen=True, slots=True)
+class PostMetrics:
+    """One post's engagement counters, as the author's page already carries them.
+
+    DTK 在 `user/posts` 的**每一条**里就带全了这些数字（实测载荷见
+    `tests/replay/fixtures/douyin_user_posts_real.json`），所以采它们不花任何额外的
+    身份——以前这里只是把它们解析进 `Content` 然后丢掉。落库按小时聚合，见
+    `state.record_*` 那一节。
+    """
+
+    content_id: str
+    play_count: int | None = None
+    digg_count: int | None = None
+    comment_count: int | None = None
+    share_count: int | None = None
+    collect_count: int | None = None
+
+    @property
+    def is_empty(self) -> bool:
+        """五个数一个都没有 —— 这样的行不写。
+
+        跟 DTK 自己 `services/snapshots.py` 的取舍一致：写一行全是 NULL 的记录只增加噪音，
+        而写 0 会在增长曲线里造出一个平台从未说过的悬崖。
+        """
+        return all(
+            value is None
+            for value in (
+                self.play_count,
+                self.digg_count,
+                self.comment_count,
+                self.share_count,
+                self.collect_count,
+            )
+        )
+
+    @classmethod
+    def from_content(cls, content: Content) -> "PostMetrics":
+        return cls(
+            content_id=content.content_id,
+            play_count=content.play_count,
+            digg_count=content.digg_count,
+            comment_count=content.comment_count,
+            share_count=content.share_count,
+            collect_count=content.collect_count,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class Page:
     """A page of `user/posts` results."""
 
@@ -137,6 +184,14 @@ class Page:
 
     def ids(self) -> frozenset[str]:
         return frozenset(item.content_id for item in self.items)
+
+    def metrics(self) -> tuple[PostMetrics, ...]:
+        """本页每条作品的互动量 —— 空值行直接丢掉（见 `PostMetrics.is_empty`）。"""
+        return tuple(
+            metrics
+            for metrics in (PostMetrics.from_content(item) for item in self.items)
+            if metrics.content_id and not metrics.is_empty
+        )
 
     def non_top(self) -> tuple[Content, ...]:
         """置顶项排除在外的那些——窗口与漏检判定只看它们。

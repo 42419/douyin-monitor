@@ -11,11 +11,18 @@ from dywatch.models import (
     Event,
     EventKind,
     Kind,
+    PostMetrics,
     PostState,
     RoundResult,
     Tombstone,
 )
-from dywatch.state import StateStore
+from dywatch.state import (
+    METRICS_MAX_ROWS_PER_ROUND,
+    SCHEMA_VERSION,
+    StateStore,
+    read_events,
+    read_metrics_series,
+)
 
 NOW = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
 
@@ -313,7 +320,9 @@ def test_migrate_upgrades_a_v1_database_without_losing_data(tmp_path):
 
     with store._tx() as tx:  # noqa: SLF001 —— 就是要验证迁移后的原始表结构
         version = tx.execute("SELECT version FROM schema_version").fetchone()[0]
-        assert version == 5
+        # 对着常量断言而不是写死数字：写死的话每加一次 schema 都要来改这里，
+        # 而"版本号涨了但迁移没写"这件事 `migrate()` 自己会抛错，不需要靠这个数盯着
+        assert version == SCHEMA_VERSION
         columns = {row[1] for row in tx.execute("PRAGMA table_info(authors)")}
         assert "baseline_content_count" in columns
         assert "baseline_content_count_at" in columns
@@ -343,6 +352,14 @@ def test_migrate_upgrades_a_v1_database_without_losing_data(tmp_path):
     # 老作品同样：没被核验标记过，所以是 None
     assert [p.hidden_from_guest_at for p in old.posts] == [None]
 
+    with store._tx() as tx:  # noqa: SLF001 —— 验证 v5→v6 建出来的东西
+        tables = {row[0] for row in tx.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "post_metrics" in tables
+        indexes = {row[0] for row in tx.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        assert "ix_post_metrics_hour" in indexes
+        # 老库里没有互动量行——迁移只建表，不凭空造数据
+        assert tx.execute("SELECT COUNT(*) FROM post_metrics").fetchone()[0] == 0
+
     # 迁移之后新列要能正常读写，不是只加了个空壳
     updated = old.with_updates(baseline_content_count=7, baseline_content_count_at=NOW)
     store.save_round("old_user", updated, events=[], now=NOW)
@@ -355,3 +372,119 @@ def test_migrate_upgrades_a_v1_database_without_losing_data(tmp_path):
     )
     store.save_round("old_user", marked, events=[], now=NOW)
     assert store.load_authors()["old_user"].posts[0].hidden_from_guest_at == NOW
+
+
+# ------------------------------------------------------------ 互动量时间序列
+#
+# 四条写语义（小时桶 / 缺字段不擦旧值 / 每轮上限 / 只增不删）与一条读语义（按 `ts` 倒序）
+# 都在这一节里钉住。它们全是"看起来显然、改坏了却不会报错"的那一类：曲线少几个点、
+# 数字悄悄退回旧值，没人能从画面上看出来。
+
+def test_metrics_merge_into_an_hour_bucket(store):
+    """一小时内的多轮并进同一行（`hour` 是主键的一部分，不是普通一列）。"""
+    state = sample_state()
+    store.save_round("u1", state, events=[], now=NOW,
+                     metrics=[PostMetrics(content_id="p1", digg_count=1)])
+    store.save_round("u1", state, events=[], now=NOW + timedelta(minutes=59),
+                     metrics=[PostMetrics(content_id="p1", digg_count=2)])
+    store.save_round("u1", state, events=[], now=NOW + timedelta(hours=1),
+                     metrics=[PostMetrics(content_id="p1", digg_count=3)])
+
+    with store._tx() as tx:  # noqa: SLF001
+        hours = [row[0] for row in tx.execute("SELECT hour FROM post_metrics ORDER BY hour")]
+    assert hours == ["2026-09-15T12:00:00+00:00", "2026-09-15T13:00:00+00:00"]
+
+
+def test_metrics_never_erase_a_number_we_already_have(store):
+    """缺字段是"这次没有"，不是"它变成 0 了" —— 更新已有桶时必须保留旧值。
+
+    DTK 的 `play_count` 实测恒为 null（它承认的合法表达）。直接覆盖会让曲线少几个点，
+    而没人能看出是代码擦的。
+    """
+    state = sample_state()
+    store.save_round("u1", state, events=[], now=NOW,
+                     metrics=[PostMetrics(content_id="p1", play_count=7, digg_count=111)])
+    store.save_round("u1", state, events=[], now=NOW + timedelta(minutes=20),
+                     metrics=[PostMetrics(content_id="p1", comment_count=7)])
+
+    with store._tx() as tx:  # noqa: SLF001
+        rows = tx.execute(
+            "SELECT hour, play_count, digg_count, comment_count FROM post_metrics"
+        ).fetchall()
+    assert len(rows) == 1, "同一小时内两轮必须并进同一行"
+    assert tuple(rows[0][1:]) == (7, 111, 7), "play/digg 要保留，comment 要补上"
+
+
+def test_metrics_are_capped_per_round(store):
+    """每轮最多写 `METRICS_MAX_ROWS_PER_ROUND` 行：一次异常返回不该把一整轮写爆。"""
+    state = sample_state()
+    items = [
+        PostMetrics(content_id=f"c{index:04d}", digg_count=index)
+        for index in range(METRICS_MAX_ROWS_PER_ROUND + 1)
+    ]
+    store.save_round("u1", state, events=[], now=NOW, metrics=items)
+
+    with store._tx() as tx:  # noqa: SLF001
+        count = tx.execute("SELECT COUNT(*) FROM post_metrics").fetchone()[0]
+    assert count == METRICS_MAX_ROWS_PER_ROUND
+
+
+def test_metrics_skip_rows_without_a_single_number(store):
+    """五个数全空的行不写：写 0 会在增长曲线里造出一个平台从未说过的悬崖。"""
+    state = sample_state()
+    store.save_round(
+        "u1", state, events=[], now=NOW,
+        metrics=[PostMetrics(content_id="p1"), PostMetrics(content_id="p2", digg_count=5)],
+    )
+
+    with store._tx() as tx:  # noqa: SLF001
+        ids = [row[0] for row in tx.execute("SELECT content_id FROM post_metrics")]
+    assert ids == ["p2"]
+
+
+def test_metrics_series_sums_per_hour_and_keeps_missing_columns_null(store):
+    """读回来的序列按小时合计；整列没有值的字段是 `None`（图上的断点），不是 0。"""
+    state = sample_state()
+    store.save_round("u1", state, events=[], now=NOW, metrics=[
+        PostMetrics(content_id="p1", digg_count=100, collect_count=2),
+        PostMetrics(content_id="p2", digg_count=200),
+    ])
+
+    with store._tx() as tx:  # noqa: SLF001
+        series = read_metrics_series(tx, sec_user_id="u1")
+    assert [item["hour"] for item in series] == [NOW]
+    assert series[0]["digg"] == 300 and series[0]["posts"] == 2
+    assert series[0]["collect"] == 2
+    assert series[0]["share"] is None, "一个值都没有的字段必须是 None，不是 0"
+
+
+def test_events_are_read_newest_first_by_time_not_by_row_id(store):
+    """`read_events` 按 **`ts`** 倒序，不是按 `id`。
+
+    多账号并发写的时候 `id` 不等于时间顺序；靠 `id` 排会把时间上更早的那条排在前面。
+    这里故意让 `id` 与 `ts` 的顺序相反来钉住它。
+    """
+    state = sample_state()
+    # 先写"较新"的（id 小、ts 大），再写"较旧"的（id 大、ts 小）
+    store.save_round("u1", state, now=NOW, events=[
+        Event(kind=EventKind.NEW_POST, sec_user_id="u1", content_id="newer"),
+    ])
+    store.save_round("u1", state, now=NOW - timedelta(hours=3), events=[
+        Event(kind=EventKind.TITLE_CHANGED, sec_user_id="u1", content_id="older"),
+    ])
+
+    with store._tx() as tx:  # noqa: SLF001
+        rows = read_events(tx, limit=10)
+    assert [row["content_id"] for row in rows] == ["newer", "older"]
+    assert all(row["ts"] is not None for row in rows), "读回来要是 datetime，不是字符串"
+
+
+def test_kind_filter_that_matches_nothing_does_not_fall_back_to_everything(store):
+    """传了过滤器但一个类型都不合法 → 结果为空，**不能**退化成"不过滤"。"""
+    store.save_round("u1", sample_state(), now=NOW, events=[
+        Event(kind=EventKind.NEW_POST, sec_user_id="u1", content_id="p1"),
+    ])
+
+    with store._tx() as tx:  # noqa: SLF001
+        assert read_events(tx, kinds=("不是事件类型",)) == []
+        assert read_events(tx, kinds=(EventKind.NEW_POST,)) != []

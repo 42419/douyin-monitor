@@ -20,8 +20,19 @@ src/dywatch/
 ├── render.py       事件 → Markdown / 纯文本 / 短标题
 ├── alerts.py       运维告警的抑制窗口
 ├── notifiers/      六个渠道 + 静默空通知器
-└── webui.py        只读面板（状态页 + 账号详情）+ /healthz /readyz /metrics
+└── webui/          只读面板与探针，按职责拆成一层一层（见下）
+    ├── theme.py      全部 CSS、页面骨架、共用小组件模板
+    ├── common.py     快照读取、类型归一化、HTML 转义、账号分级、横幅
+    ├── charts.py     Chart.js 静态资源、前端引导脚本、数据分桶（纯函数）
+    ├── queries.py    只读状态库查询（账号详情 / 事件 / 规模）
+    ├── page_status.py 状态页 `GET /`
+    ├── page_events.py 事件时间线 `GET /events`
+    └── server.py     HTTP 路由、`/healthz` `/readyz` `/metrics`、服务器生命周期
 ```
+
+`webui/` 原先是一个 1357 行的单文件，加图表与第二个页面之后就没法改了，所以按"CSS /
+数据访问 / 图表 / 两个页面 / HTTP"切开；`__init__.py` 只是门面，把各部分重新导出成
+原来的名字，调用方一行都不用改。**视觉与交互没变**（拆分时 CSS 是整段搬过来的）。
 
 ## 依赖方向单向、无环
 
@@ -51,10 +62,10 @@ loop.py（热加载 users.conf，MAX_CONCURRENT 并发调度）
 ## 状态与观测
 
 - **SQLite** 是唯一的持久化出口（`state.py`），一轮一个事务，写入频率低、无并发写冲突。
-- **`webui.py`** 提供的面板完全只读：列表读 `data/status.json`（每轮写一次的快照），
-  详情读状态库，不产生任何对 DTK 的请求，也就不消耗身份、不会触发风控。
+- **`webui/`** 提供的面板完全只读：列表读 `data/status.json`（每轮写一次的快照），
+  详情与事件页读状态库，不产生任何对 DTK 的请求，也就不消耗身份、不会触发风控。
 - 结构化日志、`/healthz`、`/readyz`、`/metrics`（Prometheus 格式）都由 `runtime.py`
-  与 `webui.py` 提供，方便接入现有的监控体系。
+  与 `webui/server.py` 提供，方便接入现有的监控体系。
 
 想了解每一条规则的来历、以及"为什么不那样做"的取舍记录，可以直接读仓库里的
 [`DESIGN.md`](https://github.com/42419/douyin-monitor/blob/main/DESIGN.md)——

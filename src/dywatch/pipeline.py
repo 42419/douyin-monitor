@@ -91,6 +91,7 @@ async def run_author(
     archive_enabled: bool = True,
     archive_trigger: ArchiveTrigger | None = None,
     hidden_check: HiddenCheckConfig | None = None,
+    metrics_enabled: bool = True,
     logger: Any = None,
 ) -> RoundResult:
     started = time.monotonic()
@@ -133,12 +134,14 @@ async def run_author(
             else:
                 _log(logger, "debug", "gate.already_closed", code=exc.code,
                      remaining=round(gate.remaining(), 1))
-            await _notify_upstream(exc, seconds, notifier=notifier, dedup=dedup, logger=logger)
+            await _notify_upstream(exc, seconds, notifier=notifier, dedup=dedup, logger=logger,
+                                   store=store, now=now)
         elif exc.is_config:
             # 连坐所有账号的错误：关闸一小时并明确告警，而不是让每个账号各失败一遍
             gate.close(CONFIG_ERROR_GATE_SECONDS, reason=exc.code)
             await _notify_upstream(
-                exc, CONFIG_ERROR_GATE_SECONDS, notifier=notifier, dedup=dedup, logger=logger
+                exc, CONFIG_ERROR_GATE_SECONDS, notifier=notifier, dedup=dedup, logger=logger,
+                store=store, now=now,
             )
 
     # 归档交叉确认：只在"确实有作品从本页消失"时才去读，且零身份成本
@@ -167,7 +170,15 @@ async def run_author(
             logger=logger,
         )
 
-    event_ids = store.save_round(author.sec_user_id, next_state, events, now=now)
+    event_ids = store.save_round(
+        author.sec_user_id,
+        next_state,
+        events,
+        now=now,
+        # 互动量随每轮这一页免费回来，取不到就整段跳过：**不因为采集失败而让落库失败**，
+        # 也不为了凑数去补一次 `video` 详情请求（那是额外消耗身份，与"零成本"的前提相反）。
+        metrics=page.metrics() if (metrics_enabled and page is not None) else (),
+    )
 
     # ---- 通知（落库之后） ---------------------------------------------------
     # 投递顺序按优先级，不按 diff 的输出顺序：`new_post` 必须第一个发出去。
@@ -816,6 +827,65 @@ class ArchiveTrigger:
         )
 
 
+async def notify_system_event(
+    event: Event,
+    *,
+    notifier: Any,
+    dedup: Deduplicator,
+    store: StateStore | None = None,
+    now: datetime | None = None,
+    logger: Any = None,
+    level: str = "warning",
+) -> int | None:
+    """系统级事件（上游异常 / 自身降级）的**唯一**出口：落库 → 投递 → 回写投递结果。
+
+    三件事的顺序和主通知循环一致（先落库再投递），但有一条自己的规矩：
+
+    **被抑制窗口挡下的重复不落库。** 这条初看反直觉——事件确实发生了，为什么不记？
+    因为它会在 `events` 表里堆垃圾：一次上游故障会让**同一轮里所有在途账号**各自撞上，
+    5 个账号就是 5 行一模一样的记录；而闸门关着的那段时间每轮都跳过、不会重复触发，
+    所以"一次故障 = 一行"正是抑制窗口近似出来的口径。日志里仍然有完整的重复次数。
+
+    返回事件行 id（没落库时为 `None`），投递结果已经写回那一行。
+    """
+    stamp = now or datetime.now(timezone.utc)
+    allowed, key = should_send(event, dedup)
+    if not allowed:
+        _log(logger, "debug", "notify.suppressed", kind=event.kind.value, key=key)
+        return None
+
+    row_id: int | None = None
+    if store is not None:
+        try:
+            row_id = store.record_system_event(event, now=stamp)
+        except Exception as exc:  # noqa: BLE001 - 落库失败不该连投递一起丢掉
+            # 事件落库只是"面板上看得见"，投递才是"人知道"。库坏了的时候更需要后者。
+            _log(logger, "warning", "notify.persist_failed", kind=event.kind.value,
+                 error=f"{type(exc).__name__}: {exc}"[:160])
+            row_id = None
+
+    try:
+        result = await _deliver(notifier, event)
+    except Exception as exc:  # noqa: BLE001 - 与主循环同一个纪律：单条通知出意外不外抛
+        _log(logger, "warning", "notify.crashed", kind=event.kind.value,
+             error=f"{type(exc).__name__}: {exc}"[:160])
+        dedup.release(key)
+        return row_id
+
+    if result.get("failed") and not result.get("sent"):
+        # 一条谁都没收到的消息不该占用抑制窗口（跟主循环同一条规矩）
+        dedup.release(key)
+    if row_id is not None and store is not None:
+        try:
+            store.record_deliveries({row_id: result})
+        except Exception as exc:  # noqa: BLE001 - 投递备注丢了比通知丢了好受得多
+            _log(logger, "debug", "notify.delivery_note_failed", kind=event.kind.value,
+                 error=f"{type(exc).__name__}: {exc}"[:160])
+    _log(logger, level, "notify.system", kind=event.kind.value,
+         sent=result.get("sent"), failed=result.get("failed"))
+    return row_id
+
+
 async def _notify_upstream(
     error: MonitorError,
     seconds: int,
@@ -823,41 +893,31 @@ async def _notify_upstream(
     notifier: Any,
     dedup: Deduplicator,
     logger: Any,
+    store: StateStore | None = None,
+    now: datetime | None = None,
 ) -> None:
     """One UPSTREAM_DEGRADED alert per error code per hour.
 
     上游问题不属于任何一个账号，所以它不跟着某个账号的事务走，也不写进那一条轮次结果——
     直接在这里投递，去重窗口负责保证它不会变成噪音。
     """
-    event = Event(
-        EventKind.UPSTREAM_DEGRADED,
-        sec_user_id="",
-        payload={
-            "code": error.code,
-            "message": error.message,
-            "gate_seconds": seconds,
-            "rounds": 1,
-        },
+    await notify_system_event(
+        Event(
+            EventKind.UPSTREAM_DEGRADED,
+            sec_user_id="",
+            payload={
+                "code": error.code,
+                "message": error.message,
+                "gate_seconds": seconds,
+                "rounds": 1,
+            },
+        ),
+        notifier=notifier,
+        dedup=dedup,
+        store=store,
+        now=now,
+        logger=logger,
     )
-    allowed, key = should_send(event, dedup)
-    if not allowed:
-        _log(logger, "debug", "notify.suppressed", kind=event.kind.value, key=key)
-        return
-    # 和主通知循环同一个纪律：**单条通知出意外不能逃出去**。这里曾经没有这层保护，
-    # 于是一次渲染/渠道异常会从 `run_author` 一路抛到 loop，本轮状态根本没落库
-    # （`save_round` 在通知之后调用），而且已经占用的抑制窗口不会释放——
-    # 那条上游告警被静默整整一个窗口。
-    try:
-        result = await _deliver(notifier, event)
-    except Exception as exc:  # noqa: BLE001 - 见上
-        _log(logger, "warning", "notify.crashed", kind=event.kind.value,
-             error=f"{type(exc).__name__}: {exc}"[:160])
-        dedup.release(key)
-        return
-    if result.get("failed") and not result.get("sent"):
-        dedup.release(key)
-    _log(logger, "warning", "notify.upstream", code=error.code, sent=result.get("sent"),
-         failed=result.get("failed"))
 
 
 async def _deliver(notifier: Any, event: Event) -> dict[str, Any]:
@@ -909,4 +969,4 @@ def _log(logger: Any, level: str, event: str, **fields: Any) -> None:
     getattr(logger, level, logger.info)(event, **fields)
 
 
-__all__ = ["CONFIG_ERROR_GATE_SECONDS", "run_author"]
+__all__ = ["CONFIG_ERROR_GATE_SECONDS", "notify_system_event", "run_author"]

@@ -170,9 +170,17 @@ def should_send(event: Event, dedup: Deduplicator) -> tuple[bool, str]:
     if spec is None:
         return True, ""
     key = dedup_key(event)
-    if spec.scope == "global" and event.kind is EventKind.UPSTREAM_DEGRADED:
-        # 上游问题按错误码分桶，"池子空了"和"接口熔断"不该互相抑制
-        key = f"{key}:{event.payload.get('code', 'unknown')}"
+    if spec.scope == "global":
+        # 全局事件按**具体原因**分桶，别只按事件类型分：
+        #   - 上游：`IDENTITY_POOL_EXHAUSTED`（池子空了）和 `ENDPOINT_CIRCUIT_OPEN`
+        #     （接口熔断）是两件事，处置方式也不一样，互相抑制就会漏掉后面那件；
+        #   - 自身：磁盘快满了和状态库写不进去同样是两件事。
+        # 只按类型分桶时，先来的那个会把后来者的窗口占满——`TRIGGERS` 给的是小时级窗口，
+        # 于是另一件故障被静默整整一个窗口。
+        if event.kind is EventKind.UPSTREAM_DEGRADED:
+            key = f"{key}:{event.payload.get('code', 'unknown')}"
+        elif event.kind is EventKind.SELF_DEGRADED:
+            key = f"{key}:{event.payload.get('reason', 'unknown')}"
     return dedup.allow(key, spec.window_seconds), key
 
 

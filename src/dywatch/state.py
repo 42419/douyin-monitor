@@ -25,13 +25,15 @@ from .models import (
     AuthorState,
     Content,
     Event,
+    EventKind,
     Kind,
+    PostMetrics,
     PostState,
     RoundResult,
     Tombstone,
 )
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -111,6 +113,21 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX IF NOT EXISTS ix_events_ts ON events (ts);
 CREATE INDEX IF NOT EXISTS ix_rounds_ts ON rounds (ts);
+
+CREATE TABLE IF NOT EXISTS post_metrics (
+  sec_user_id   TEXT NOT NULL,
+  content_id    TEXT NOT NULL,
+  hour          TEXT NOT NULL,
+  captured_at   TEXT NOT NULL,
+  play_count    INTEGER,
+  digg_count    INTEGER,
+  comment_count INTEGER,
+  share_count   INTEGER,
+  collect_count INTEGER,
+  PRIMARY KEY (sec_user_id, content_id, hour)
+);
+
+CREATE INDEX IF NOT EXISTS ix_post_metrics_hour ON post_metrics (hour);
 """
 
 
@@ -161,6 +178,37 @@ def _migrate_4_to_5(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_5_to_6(conn: sqlite3.Connection) -> None:
+    """加 `post_metrics`：作品互动量的小时级时间序列。
+
+    **它和 `posts` 的关系是刻意相反的**：`posts` 每轮整段替换（只保当前事实），而这张表
+    只增不改地累积历史——问"这条作品的点赞是怎么涨起来的"，答案只能来自历史，不能来自
+    一张每轮被覆盖的表。
+
+    全新库不用跑这一步（`SCHEMA` 常量里已经有这张表），但老库必须显式建：`executescript`
+    里的 `CREATE TABLE IF NOT EXISTS` 虽然也会把它建出来，但**建表与版本号必须一起走**——
+    否则"版本是 5 但表已经存在"这种中间态会在回滚到旧版时露出来（旧版会以为库是它认识的
+    形状）。所以这里和 SCHEMA 里那份定义重复一次，是有意的。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS post_metrics (
+          sec_user_id   TEXT NOT NULL,
+          content_id    TEXT NOT NULL,
+          hour          TEXT NOT NULL,
+          captured_at   TEXT NOT NULL,
+          play_count    INTEGER,
+          digg_count    INTEGER,
+          comment_count INTEGER,
+          share_count   INTEGER,
+          collect_count INTEGER,
+          PRIMARY KEY (sec_user_id, content_id, hour)
+        );
+        CREATE INDEX IF NOT EXISTS ix_post_metrics_hour ON post_metrics (hour);
+        """
+    )
+
+
 #: 版本号 -> "从这个版本升到下一个版本"的步骤。新增迁移时按顺序追加，
 #: 键是**升级前**的版本号（比如从 2 升到 3 的步骤，键是 2）。
 _MIGRATIONS: Final[Mapping[int, Callable[[sqlite3.Connection], None]]] = {
@@ -168,11 +216,28 @@ _MIGRATIONS: Final[Mapping[int, Callable[[sqlite3.Connection], None]]] = {
     2: _migrate_2_to_3,
     3: _migrate_3_to_4,
     4: _migrate_4_to_5,
+    5: _migrate_5_to_6,
 }
 
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+#: 一个账号一轮最多写多少行 `post_metrics`。一页 `FETCH_COUNT` 条，且只写"至少有一个数"的
+#: 那些行，所以这个上限只是防御性的（防止调用方传进来一个意想不到的长列表）。
+METRICS_MAX_ROWS_PER_ROUND = 200
+
+
+def _metrics_hour(now: datetime) -> str:
+    """互动量快照落在哪个小时桶里。
+
+    **按小时聚合不是省事，是必需的**：一轮约 1.5 分钟，逐轮写就是每账号每小时约 40 行 ×
+    最多 `FETCH_COUNT` 条作品——一天下来单账号上万行、一个月几十万行，而曲线的分辨率并不会
+    因此变好（作品的点赞数在一个小时内本来就没什么可看的形状）。压到小时桶之后写入量降到
+    1/40，而"一条作品的点赞是怎么涨起来的"这个问题仍然答得上来。
+    """
+    return (now.replace(minute=0, second=0, microsecond=0)).isoformat()
 
 
 def _dt(value: Any) -> datetime | None:
@@ -366,6 +431,7 @@ class StateStore:
         *,
         now: datetime,
         deliveries: Mapping[int, Mapping[str, Any]] | None = None,
+        metrics: Sequence[PostMetrics] | None = None,
     ) -> list[int]:
         """One author, one round, one transaction: state + posts + tombstones + events.
 
@@ -373,6 +439,10 @@ class StateStore:
         caller can come back and attach a delivery outcome after it has actually
         delivered — the write happens first, the outcome second, and a crash between
         them costs a missing delivery note rather than a duplicate notification.
+
+        `metrics` 是同一个事务里的第四条写入（见 `post_metrics`）。放在这里而不是单开一个
+        方法，是为了保住"一个账号一轮一个事务"：单开一次写要多一次 fsync，而且会多出
+        "状态写进去了、互动量没写"这种半截状态——它无害，但没有理由留一个。
         """
         event_ids: list[int] = []
         with self._tx() as conn:
@@ -490,7 +560,88 @@ class StateStore:
                     ),
                 )
                 event_ids.append(int(cursor.lastrowid or 0))
+
+            if metrics:
+                self._upsert_metrics(conn, sec_user_id, metrics, now)
         return event_ids
+
+    @staticmethod
+    def _upsert_metrics(
+        conn: sqlite3.Connection,
+        sec_user_id: str,
+        metrics: Sequence[PostMetrics],
+        now: datetime,
+    ) -> int:
+        """把这一轮的互动量并进小时桶。返回真正写了几行。
+
+        两处刻意的写法：
+
+        * **`COALESCE(excluded.x, post_metrics.x)`** —— 更新已有桶时保留旧值。DTK 缺字段
+          （`play_count` 实测恒为 null）是它承认的合法表达，`None` 的意思是"这个字段这次
+          没有"，**不是"它变成 0 了"**。直接覆盖会把已经记下的数字擦掉，而曲线看起来只是
+          少了几个点，没人会发现是代码擦的。
+        * 同一小时内重复跑（一轮 1.5 分钟，一小时约 40 轮）只更新不追加：这就是小时桶的
+          全部意思——`hour` 是主键的一部分，不是普通的一列。
+        """
+        hour = _metrics_hour(now)
+        rows = [
+            (
+                sec_user_id,
+                item.content_id,
+                hour,
+                _iso(now),
+                item.play_count,
+                item.digg_count,
+                item.comment_count,
+                item.share_count,
+                item.collect_count,
+            )
+            for item in metrics[:METRICS_MAX_ROWS_PER_ROUND]
+            if item.content_id and not item.is_empty
+        ]
+        if not rows:
+            return 0
+        conn.executemany(
+            """
+            INSERT INTO post_metrics (
+              sec_user_id, content_id, hour, captured_at,
+              play_count, digg_count, comment_count, share_count, collect_count
+            ) VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(sec_user_id, content_id, hour) DO UPDATE SET
+              captured_at=excluded.captured_at,
+              play_count=COALESCE(excluded.play_count, post_metrics.play_count),
+              digg_count=COALESCE(excluded.digg_count, post_metrics.digg_count),
+              comment_count=COALESCE(excluded.comment_count, post_metrics.comment_count),
+              share_count=COALESCE(excluded.share_count, post_metrics.share_count),
+              collect_count=COALESCE(excluded.collect_count, post_metrics.collect_count)
+            """,
+            rows,
+        )
+        return len(rows)
+
+    def record_system_event(self, event: Event, *, now: datetime) -> int:
+        """Persist an event that belongs to no single author（上游异常 / 自身降级）。
+
+        这类事件以前**只在通知里存在**：投递出去就没了，面板与 `/events` 都看不到，事后
+        想查"那次闸门是什么时候关的、持续了多久"只能翻日志。它们不属于任何账号，所以不进
+        `save_round` 那条"一个账号一轮一个事务"的路径，单独一行即可。
+
+        返回新行的 id，调用方投递完再回来 `record_deliveries` 补投递结果。
+        """
+        with self._tx() as conn:
+            cursor = conn.execute(
+                "INSERT INTO events (ts, sec_user_id, content_id, kind, payload_json, delivery_json)"
+                " VALUES (?,?,?,?,?,?)",
+                (
+                    _iso(now),
+                    event.sec_user_id or None,
+                    event.content_id,
+                    event.kind.value,
+                    json.dumps(event.payload, ensure_ascii=False, default=_json_default),
+                    None,
+                ),
+            )
+            return int(cursor.lastrowid or 0)
 
     def record_deliveries(self, deliveries: Mapping[int, Mapping[str, Any]]) -> None:
         """Attach delivery outcomes to the event rows they belong to."""
@@ -546,7 +697,25 @@ class StateStore:
             conn.execute("DELETE FROM tombstones WHERE sec_user_id = ?", (sec_user_id,))
             conn.execute("DELETE FROM authors WHERE sec_user_id = ?", (sec_user_id,))
 
-    def maintenance(self, *, now: datetime, events_days: int, rounds_days: int) -> None:
+    def maintenance(
+        self,
+        *,
+        now: datetime,
+        events_days: int,
+        rounds_days: int,
+        metrics_days: int = 0,
+    ) -> None:
+        """按保留期裁掉审计类与历史类数据。
+
+        `metrics_days=0` 表示**不清理**（默认值只服务不关心这件事的调用方；主循环永远传
+        配置值，而 `METRICS_KEEP_DAYS` 在 `settings.validate()` 里不许为 0）。
+        `events` / `rounds` / `post_metrics` 都不参与判定，删掉任何一行都不会改变判定结果——
+        这也是它们可以裁、而 `authors` / `posts` / `tombstones` 不能裁的原因。
+
+        注意删行**不缩文件**：SQLite 会把腾出来的页留在空闲列表里给后续写入复用，
+        文件大小只涨不跌，要真正回收得跑 `VACUUM`（面板的磁盘读数与 SELF_DEGRADED 就是
+        为这件事准备的）。
+        """
         with self._tx() as conn:
             conn.execute(
                 "DELETE FROM events WHERE ts < ?", (_iso(now - timedelta(days=events_days)),)
@@ -554,6 +723,237 @@ class StateStore:
             conn.execute(
                 "DELETE FROM rounds WHERE ts < ?", (_iso(now - timedelta(days=rounds_days)),)
             )
+            if metrics_days > 0:
+                conn.execute(
+                    "DELETE FROM post_metrics WHERE hour < ?",
+                    (_metrics_hour(now - timedelta(days=metrics_days)),),
+                )
+
+
+# =================== 面板与时间线用的只读查询 ===================
+#
+# 放在这里而不是散在面板里：这些 SQL 编码的是"哪张表、哪一列、保留期什么口径"的知识，
+# 和写入端同源才不会读错（`post_metrics.hour` 是主键的一部分、`events.sec_user_id` 可以为
+# NULL 表示系统事件——这类事实只有一处说清楚才安全）。
+#
+# 它们**只接受调用方建好的连接**：面板自己开一个只读连接传进来，这些函数不持有句柄、
+# 不负责关闭、也不做任何写操作。
+
+
+def _safe_json(raw: Any) -> dict[str, Any]:
+    """`payload_json` → 字典。**读坏了就返回空字典**，不抛。
+
+    面板是"出问题时打开的东西"：一条手工改坏或旧版本写下的载荷，不该让整页 500。
+    跟渲染层同一个纪律——对外部数据宁可少显示一点，也不能让页面打不开。
+    """
+    if not isinstance(raw, str) or not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _kind_names(kinds: Iterable[Any]) -> list[str] | None:
+    """事件类型过滤器 → 合法名字列表；`None` 表示"一个都不合法，结果必然为空"。"""
+    names: list[str] = []
+    for kind in kinds:
+        try:
+            name = (kind if isinstance(kind, EventKind) else EventKind(str(kind))).value
+        except ValueError:
+            continue
+        if name not in names:
+            names.append(name)
+    return names or None
+
+
+def read_events(
+    conn: sqlite3.Connection,
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    kinds: Iterable[Any] = (),
+    sec_user_id: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """事件行，按时间倒序。时间倒序而不是 id 倒序的原因：`id` 在并发写账号时**不等于**
+    时间顺序（多个账号各写各的），排序靠它会把同一秒里的前后关系搞反。
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    if since is not None:
+        clauses.append("ts >= ?")
+        params.append(_iso(since))
+    if until is not None:
+        clauses.append("ts < ?")
+        params.append(_iso(until))
+    if kinds:
+        names = _kind_names(kinds)
+        if names is None:
+            # 传了过滤器、但一个都不是合法类型：结果就是空，不能退化成"不过滤"
+            return []
+        clauses.append(f"kind IN ({','.join('?' * len(names))})")
+        params.extend(names)
+    if sec_user_id:
+        clauses.append("sec_user_id = ?")
+        params.append(sec_user_id)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(max(1, int(limit)))
+    rows = conn.execute(
+        "SELECT id, ts, sec_user_id, content_id, kind, payload_json, delivery_json"
+        f" FROM events{where} ORDER BY ts DESC, id DESC LIMIT ?",
+        params,
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        out.append(
+            {
+                "id": int(row["id"]),
+                "ts": _dt(row["ts"]),
+                "sec_user_id": row["sec_user_id"],
+                "content_id": row["content_id"],
+                "kind": str(row["kind"]),
+                "payload": _safe_json(row["payload_json"]),
+                "delivery": _safe_json(row["delivery_json"]),
+            }
+        )
+    return out
+
+
+def read_event_ticks(
+    conn: sqlite3.Connection,
+    *,
+    since: datetime,
+    until: datetime,
+    kinds: Iterable[Any] = (),
+    sec_user_id: str | None = None,
+) -> list[tuple[datetime, str]]:
+    """区间内每条事件只取 `(时间, 类型)`，给柱状图数格子用。
+
+    刻意不设 `LIMIT`：它是聚合的输入，截断了就是在图上少画几根柱子，而图上**看不出来**
+    自己少画了。区间由调用方给（面板给的是 24 小时 / 7 天），所以行数是有界的。
+
+    `sec_user_id` 与 `read_events` 同名同义：图上和下面的列表必须用**同一组过滤条件**，
+    否则"柱子上有 5 根、列表里只有 1 条"会让人以为列表漏了数据。
+    """
+    params: list[Any] = [_iso(since), _iso(until)]
+    clause = "WHERE ts >= ? AND ts < ?"
+    if kinds:
+        names = _kind_names(kinds)
+        if names is None:
+            return []
+        clause += f" AND kind IN ({','.join('?' * len(names))})"
+        params.extend(names)
+    if sec_user_id:
+        clause += " AND sec_user_id = ?"
+        params.append(sec_user_id)
+    rows = conn.execute(
+        f"SELECT ts, kind FROM events {clause} ORDER BY ts", params
+    ).fetchall()
+    out: list[tuple[datetime, str]] = []
+    for row in rows:
+        stamp = _dt(row["ts"])
+        if stamp is not None:
+            out.append((stamp, str(row["kind"])))
+    return out
+
+
+def read_metrics_series(
+    conn: sqlite3.Connection, *, sec_user_id: str, since: datetime | None = None
+) -> list[dict[str, Any]]:
+    """一个账号**逐小时**的互动量合计（该账号已知作品在同一小时里的和）。
+
+    `SUM` 会跳过 NULL，整列全 NULL 时返回 NULL —— 这正是要的：缺值的字段在图上应当
+    是断点，而不是 0。写 0 会在曲线里造出一个"数据突然掉到零"的假象，
+    而平台从没这么说过（`models.py` 的第一条契约）。
+    """
+    params: list[Any] = [sec_user_id]
+    clause = "WHERE sec_user_id = ?"
+    if since is not None:
+        clause += " AND hour >= ?"
+        params.append(_metrics_hour(since))
+    rows = conn.execute(
+        "SELECT hour,"
+        " SUM(digg_count) AS digg, SUM(comment_count) AS comment,"
+        " SUM(share_count) AS share, SUM(collect_count) AS collect,"
+        " COUNT(*) AS posts"
+        f" FROM post_metrics {clause} GROUP BY hour ORDER BY hour",
+        params,
+    ).fetchall()
+    return [
+        {
+            "hour": _dt(row["hour"]),
+            "digg": row["digg"],
+            "comment": row["comment"],
+            "share": row["share"],
+            "collect": row["collect"],
+            "posts": int(row["posts"] or 0),
+        }
+        for row in rows
+    ]
+
+
+def read_post_metric_series(
+    conn: sqlite3.Connection,
+    *,
+    sec_user_id: str,
+    content_id: str,
+    since: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """**单条作品**的互动量曲线（面板详情里选中一条作品时用）。"""
+    params: list[Any] = [sec_user_id, content_id]
+    clause = "WHERE sec_user_id = ? AND content_id = ?"
+    if since is not None:
+        clause += " AND hour >= ?"
+        params.append(_metrics_hour(since))
+    rows = conn.execute(
+        "SELECT hour, play_count, digg_count, comment_count, share_count, collect_count"
+        f" FROM post_metrics {clause} ORDER BY hour",
+        params,
+    ).fetchall()
+    return [
+        {
+            "hour": _dt(row["hour"]),
+            "play": row["play_count"],
+            "digg": row["digg_count"],
+            "comment": row["comment_count"],
+            "share": row["share_count"],
+            "collect": row["collect_count"],
+        }
+        for row in rows
+    ]
+
+
+def read_latest_post_metrics(
+    conn: sqlite3.Connection, *, sec_user_id: str
+) -> dict[str, dict[str, Any]]:
+    """每条作品**最新**一行的互动量，按 `content_id` 索引（详情页的作品列表用它）。
+
+    用 `JOIN` 取每条的 `MAX(hour)`，而不是 `GROUP BY` 里直接取"任意一行"：SQLite 的
+    `bare column` 行为会从组里挑一行，挑到哪一行**没有保证**——图上就会时好时坏。
+    """
+    rows = conn.execute(
+        "SELECT m.content_id, m.hour, m.play_count, m.digg_count, m.comment_count,"
+        " m.share_count, m.collect_count"
+        " FROM post_metrics m"
+        " JOIN (SELECT content_id, MAX(hour) AS latest FROM post_metrics"
+        "       WHERE sec_user_id = ? GROUP BY content_id) t"
+        "   ON m.content_id = t.content_id AND m.hour = t.latest"
+        " WHERE m.sec_user_id = ?",
+        (sec_user_id, sec_user_id),
+    ).fetchall()
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        out[str(row["content_id"])] = {
+            "hour": _dt(row["hour"]),
+            "play": row["play_count"],
+            "digg": row["digg_count"],
+            "comment": row["comment_count"],
+            "share": row["share_count"],
+            "collect": row["collect_count"],
+        }
+    return out
 
 
 def _row_to_state(
@@ -614,4 +1014,12 @@ def _row_to_state(
     )
 
 
-__all__ = ["StateStore", "SCHEMA_VERSION"]
+__all__ = [
+    "SCHEMA_VERSION",
+    "StateStore",
+    "read_event_ticks",
+    "read_events",
+    "read_latest_post_metrics",
+    "read_metrics_series",
+    "read_post_metric_series",
+]
