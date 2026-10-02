@@ -7,13 +7,13 @@ dywatch 不直接访问抖音，它需要一个可达的
 **DTK 本身的部署、账号、身份池都以上游文档为准，本页不复制那些步骤**——抄一份过来，
 上游一变我们就得跟着改，还容易改错。下面只列 dywatch 用得到的三件事。
 
-| 想知道                                                        | 去上游                                                              |
-| ------------------------------------------------------------- | ------------------------------------------------------------------- |
-| 从零把 DTK 跑起来（`.env`、启动、初始化向导、第一把 Key）      | [官方 Quick start](https://douyin.wtf/quickstart/)                   |
-| 部署形态、反向代理、备份、升级、扩 worker                     | [Installation and deployment](https://douyin.wtf/installation/)       |
-| 身份池怎么补、代理怎么配                                      | [Identities and proxies](https://douyin.wtf/identities-and-proxies/)  |
-| 角色与 scope 的完整定义                                       | [Users and API keys](https://douyin.wtf/users-and-api-keys/)          |
-| 源码、镜像、问题反馈                                          | [GitHub 仓库](https://github.com/Evil0ctal/Douyin_TikTok_Download_API) |
+| 想知道                                                    | 去上游                                                                 |
+| --------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 从零把 DTK 跑起来（`.env`、启动、初始化向导、第一把 Key） | [官方 Quick start](https://douyin.wtf/quickstart/)                     |
+| 部署形态、反向代理、备份、升级、扩 worker                 | [Installation and deployment](https://douyin.wtf/installation/)        |
+| 身份池怎么补、代理怎么配                                  | [Identities and proxies](https://douyin.wtf/identities-and-proxies/)   |
+| 角色与 scope 的完整定义                                   | [Users and API keys](https://douyin.wtf/users-and-api-keys/)           |
+| 源码、镜像、问题反馈                                      | [GitHub 仓库](https://github.com/Evil0ctal/Douyin_TikTok_Download_API) |
 
 已经有一个可用的 DTK v5 实例和 API Key？直接去[安装 dywatch](/guide/quick-start)。
 

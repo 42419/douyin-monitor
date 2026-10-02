@@ -225,7 +225,9 @@ def _strip_comments(text: str) -> str:
                 current.append(char)
                 continue
             if char == COMMENT and (
-                not current or current[-1].isspace() or current[-1] in (FIELD_SEP_ALT, ENTRY_SEP)
+                not current
+                or current[-1].isspace()
+                or current[-1] in (FIELD_SEP_ALT, ENTRY_SEP)
             ):
                 break
             current.append(char)
@@ -288,7 +290,12 @@ def _tokenize(entry: str) -> tuple[list[str], str | None]:
         if char in QUOTES:
             quote = char
             continue
-        if closed_at is not None and closed_at == index - 1 and char not in (FIELD_SEP, FIELD_SEP_ALT) and not char.isspace():
+        if (
+            closed_at is not None
+            and closed_at == index - 1
+            and char not in (FIELD_SEP, FIELD_SEP_ALT)
+            and not char.isspace()
+        ):
             # `url="https://x"GARBAGE`：不报错的话会静默拼成 `https://xGARBAGE`
             return tokens, (
                 f"引号后面的 {char!r} 没有分隔：引号要包住**整个值**，"
@@ -333,7 +340,11 @@ def _parse_entry(entry: str) -> tuple[str | None, dict[str, str], list[str]]:
         # 类型位置写的是"一整段配置"（`token=x,secret=y`、没写类型）时，顺手把正确形状带上，
         # 而不是只回一句"不认识这个类型"
         hint = f"（{SYNTAX_HINT}）" if any(ch in kind for ch in ":,=") else ""
-        return None, {}, [f"未知渠道类型 {kind!r}；可用：{' / '.join(sorted(SPECS))}{hint}"]
+        return (
+            None,
+            {},
+            [f"未知渠道类型 {kind!r}；可用：{' / '.join(sorted(SPECS))}{hint}"],
+        )
 
     allowed = set(SPECS[kind].required) | set(SPECS[kind].optional) | {NAME_FIELD}
     fields: dict[str, str] = {}
@@ -347,10 +358,14 @@ def _parse_entry(entry: str) -> tuple[str | None, dict[str, str], list[str]]:
             errors.append(f"{kind} 的 {token!r} 不是 key=value 形式（{SYNTAX_HINT}）")
             continue
         if key not in allowed:
-            errors.append(f"{kind} 不认识字段 {key!r}；可用：{' / '.join(sorted(allowed))}")
+            errors.append(
+                f"{kind} 不认识字段 {key!r}；可用：{' / '.join(sorted(allowed))}"
+            )
             continue
         if key in fields:
-            errors.append(f"{kind} 的字段 {key!r} 写了两遍——不静默取最后一个，请删掉一个")
+            errors.append(
+                f"{kind} 的字段 {key!r} 写了两遍——不静默取最后一个，请删掉一个"
+            )
             continue
         fields[key] = value.strip()
     return kind, fields, errors

@@ -53,6 +53,7 @@ from .common import STATUS_KEYS, _as_int, classify_account, read_status
 
 # =================== 探针用的小工具 ===================
 
+
 def _store_ok(db_path: Path) -> dict[str, Any]:
     """探针用的状态库检查。
 
@@ -81,13 +82,17 @@ def _dtk_ok(base_url: str, timeout: float = 3.0) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             body = json.loads(response.read() or b"{}")
-        return {"ok": response.status == 200, "status": body.get("status"),
-                "uptime_seconds": body.get("uptime_seconds")}
+        return {
+            "ok": response.status == 200,
+            "status": body.get("status"),
+            "uptime_seconds": body.get("uptime_seconds"),
+        }
     except (urllib.error.URLError, OSError, ValueError) as exc:
         return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
 
 
 # =================== Prometheus ===================
+
 
 def _metrics_label(user: Mapping[str, Any]) -> str:
     """`/metrics` 的 `author=` label：**必须带上 `sec_user_id`**。
@@ -222,80 +227,108 @@ def metrics_text(settings: Settings) -> str:
 
     out = _Exposition()
     out.add(
-        "dywatch_users", "gauge", "Configured or known accounts.",
+        "dywatch_users",
+        "gauge",
+        "Configured or known accounts.",
         [((), len(users))],
     )
     out.add(
-        "dywatch_accounts", "gauge", "Accounts by status bucket (see the panel's legend).",
+        "dywatch_accounts",
+        "gauge",
+        "Accounts by status bucket (see the panel's legend).",
         [((("status", key),), buckets[key]) for key in STATUS_KEYS],
     )
     out.add(
-        "dywatch_never_seen_accounts", "gauge", "Accounts that never returned a post.",
+        "dywatch_never_seen_accounts",
+        "gauge",
+        "Accounts that never returned a post.",
         [((), sum(1 for u in users if not u.get("ever_had_posts")))],
     )
     out.add(
-        "dywatch_known_posts", "gauge", "Posts currently tracked per account.",
-        [((("author", _metrics_label(u)),), _as_int(u.get("known_posts"))) for u in users],
+        "dywatch_known_posts",
+        "gauge",
+        "Posts currently tracked per account.",
+        [
+            ((("author", _metrics_label(u)),), _as_int(u.get("known_posts")))
+            for u in users
+        ],
     )
     out.add(
-        "dywatch_account_failures", "gauge", "Consecutive fetch failures per account.",
-        [((("author", _metrics_label(u)),), _as_int(u.get("consecutive_fails"))) for u in users],
+        "dywatch_account_failures",
+        "gauge",
+        "Consecutive fetch failures per account.",
+        [
+            ((("author", _metrics_label(u)),), _as_int(u.get("consecutive_fails")))
+            for u in users
+        ],
     )
 
     out.add(
-        "dywatch_rounds_total", "counter",
+        "dywatch_rounds_total",
+        "counter",
         "Rounds this process has completed (resets on restart).",
         [((), _as_int(data.get("rounds")))],
     )
     out.add(
-        "dywatch_rounds_recorded_total", "counter",
+        "dywatch_rounds_recorded_total",
+        "counter",
         "Rounds ever recorded in the state DB (survives restarts, and is not"
         " truncated by ROUNDS_KEEP_DAYS).",
         [((), _as_int(data.get("rounds_total")))],
     )
     out.add(
-        "dywatch_gate_open", "gauge", "1 when the global gate is open.",
+        "dywatch_gate_open",
+        "gauge",
+        "1 when the global gate is open.",
         [((), 1 if gate.get("open", True) else 0)],
     )
     # 上游 retry_after 被封顶的次数：>0 说明"我们没完全听上游的"——闸门会比上游
     # 要求的更早放开，运维该看的是这个数（见 DESIGN 修正 #32）
     out.add(
-        "dywatch_gate_retry_after_capped_total", "counter",
+        "dywatch_gate_retry_after_capped_total",
+        "counter",
         "Times an upstream retry_after exceeded the configured ceiling and was capped.",
         [((), _as_int(gate.get("retry_after_capped")))],
     )
 
     out.add(
-        "dywatch_self_check_ok", "gauge",
+        "dywatch_self_check_ok",
+        "gauge",
         "1 when the monitor's own resources are fine (see self_check reasons in"
         " status.json).",
         [((), 1 if self_check.get("ok", True) else 0)],
     )
     out.add(
-        "dywatch_self_check_free_mb", "gauge",
+        "dywatch_self_check_free_mb",
+        "gauge",
         "Free megabytes on the filesystem holding the data directory.",
         [((), self_check.get("free_mb"))],
     )
 
     out.add(
-        "dywatch_upstream_ok", "gauge",
+        "dywatch_upstream_ok",
+        "gauge",
         "1 when the last upstream system/status read succeeded (stale values are"
         " kept when it fails).",
         [((), 1 if upstream.get("ok", True) else 0)],
     )
     out.add(
-        "dywatch_upstream_checked_timestamp_seconds", "gauge",
+        "dywatch_upstream_checked_timestamp_seconds",
+        "gauge",
         "Unix time of the last upstream system/status read.",
         [((), _epoch(upstream.get("checked_at")))],
     )
     out.add(
-        "dywatch_upstream_uptime_seconds", "gauge", "Uptime reported by the upstream.",
+        "dywatch_upstream_uptime_seconds",
+        "gauge",
+        "Uptime reported by the upstream.",
         [((), upstream.get("uptime_seconds"))],
     )
     components = upstream.get("components")
     if isinstance(components, Mapping):
         out.add(
-            "dywatch_upstream_component_ok", "gauge",
+            "dywatch_upstream_component_ok",
+            "gauge",
             "1/0 per upstream component; absent when the upstream reports unknown.",
             [
                 ((("component", str(name)),), 1 if dict(value).get("ok") else 0)
@@ -304,7 +337,8 @@ def metrics_text(settings: Settings) -> str:
             ],
         )
         out.add(
-            "dywatch_upstream_component_latency_ms", "gauge",
+            "dywatch_upstream_component_latency_ms",
+            "gauge",
             "Reported latency per upstream component.",
             [
                 ((("component", str(name)),), dict(value).get("latency_ms"))
@@ -315,7 +349,8 @@ def metrics_text(settings: Settings) -> str:
     pool = upstream.get("pool")
     if isinstance(pool, Mapping):
         out.add(
-            "dywatch_upstream_pool_identities", "gauge",
+            "dywatch_upstream_pool_identities",
+            "gauge",
             "Identity pool census, by platform and state.",
             [
                 ((("platform", str(platform)), ("state", str(state))), count)
@@ -325,46 +360,58 @@ def metrics_text(settings: Settings) -> str:
             ],
         )
         out.add(
-            "dywatch_upstream_pool_active", "gauge",
+            "dywatch_upstream_pool_active",
+            "gauge",
             "Identities usable right now (upstream's pool.total_active).",
             [((), pool.get("total_active"))],
         )
     storage = upstream.get("storage")
     if isinstance(storage, Mapping):
         out.add(
-            "dywatch_upstream_storage_db_bytes", "gauge", "Upstream database size.",
+            "dywatch_upstream_storage_db_bytes",
+            "gauge",
+            "Upstream database size.",
             [((), storage.get("db_size_bytes"))],
         )
         out.add(
-            "dywatch_upstream_storage_identities", "gauge",
+            "dywatch_upstream_storage_identities",
+            "gauge",
             "Identities stored by the upstream.",
             [((), storage.get("identities"))],
         )
 
     pending = _as_int(archive.get("pending")) if archive.get("enabled") else 0
     out.add(
-        "dywatch_archive_pending", "gauge",
+        "dywatch_archive_pending",
+        "gauge",
         "Archive downloads queued but not sent yet (0 when the side path is off).",
         [((), pending)],
     )
     out.add(
-        "dywatch_archive_muted", "gauge",
+        "dywatch_archive_muted",
+        "gauge",
         "1 when archive downloads are paused by capacity backoff.",
         [((), 1 if (archive.get("enabled") and archive.get("muted_code")) else 0)],
     )
 
     channels = notify.get("channels")
     out.add(
-        "dywatch_notify_channels", "gauge", "Notification channels configured.",
+        "dywatch_notify_channels",
+        "gauge",
+        "Notification channels configured.",
         [((), len(channels)) if isinstance(channels, list) else ((), 0)],
     )
     out.add(
-        "dywatch_notify_silent", "gauge", "1 when SILENT_MODE skips every push.",
+        "dywatch_notify_silent",
+        "gauge",
+        "1 when SILENT_MODE skips every push.",
         [((), 1 if notify.get("silent") else 0)],
     )
 
     out.add(
-        "dywatch_feature_enabled", "gauge", "1 when a feature is switched on.",
+        "dywatch_feature_enabled",
+        "gauge",
+        "1 when a feature is switched on.",
         [
             ((("name", name),), 1 if features.get(key) else 0)
             for name, key in (
@@ -379,29 +426,39 @@ def metrics_text(settings: Settings) -> str:
     # 报 0 会让人去查"为什么事件突然没了"，而真相是库读不出来（`dywatch_state_readable 0`
     # 就在同一份文本里，所以这个区分是有用的，不是啰嗦）
     out.add(
-        "dywatch_state_readable", "gauge", "1 when the state DB answered a query.",
+        "dywatch_state_readable",
+        "gauge",
+        "1 when the state DB answered a query.",
         [((), 1 if counts["readable"] else 0)],
     )
     if counts["readable"]:
         out.add(
-            "dywatch_state_rows", "gauge", "Rows stored in the state DB, by table.",
+            "dywatch_state_rows",
+            "gauge",
+            "Rows stored in the state DB, by table.",
             [
                 ((("table", table),), counts[table])
                 for table in ("authors", "posts", "tombstones", "events")
             ],
         )
         out.add(
-            "dywatch_events_recent", "gauge",
+            "dywatch_events_recent",
+            "gauge",
             f"Events stored within EVENTS_KEEP_DAYS ({keep_days} days), by kind.",
-            [((("kind", kind),), count) for kind, count in sorted(counts["events_by_kind"].items())],
+            [
+                ((("kind", kind),), count)
+                for kind, count in sorted(counts["events_by_kind"].items())
+            ],
         )
         out.add(
-            "dywatch_post_metrics_rows", "gauge",
+            "dywatch_post_metrics_rows",
+            "gauge",
             "Engagement snapshot rows stored (hourly buckets).",
             [((), counts["metric_rows"])],
         )
         out.add(
-            "dywatch_post_metrics_posts", "gauge",
+            "dywatch_post_metrics_posts",
+            "gauge",
             "Distinct posts with at least one engagement snapshot.",
             [((), counts["metric_posts"])],
         )
@@ -469,7 +526,7 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/events":
             self._events(query)
         elif path.startswith("/assets/"):
-            self._asset(path[len("/assets/"):], query)
+            self._asset(path[len("/assets/") :], query)
         elif path == "/api/state":
             self._json(200, read_status(self.settings))
         elif path == "/api/health":
@@ -483,8 +540,11 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/readyz":
             self._readyz()
         elif path == "/metrics":
-            self._send(200, metrics_text(self.settings).encode("utf-8"),
-                       "text/plain; version=0.0.4; charset=utf-8")
+            self._send(
+                200,
+                metrics_text(self.settings).encode("utf-8"),
+                "text/plain; version=0.0.4; charset=utf-8",
+            )
         else:
             self._json(404, {"error": "not found"})
 
@@ -522,7 +582,7 @@ class _Handler(BaseHTTPRequestHandler):
         不解码就永远查不到；解码后的 `..` / `\\` 由 `is_safe_id` 拒绝。
         （这里查的是 SQLite 的参数化语句，本来也没有路径穿越，但没理由放宽这个检查。）
         """
-        raw = urllib.parse.unquote(path[len("/api/user/"):].split("/", 1)[0])
+        raw = urllib.parse.unquote(path[len("/api/user/") :].split("/", 1)[0])
         if not raw or not is_safe_id(raw):
             self._json(400, {"error": "invalid sec_user_id"})
             return
@@ -541,11 +601,15 @@ class _Handler(BaseHTTPRequestHandler):
         checks["state_store"] = _store_ok(self.settings.db_path)
         checks["dtk"] = _dtk_ok(str(self.settings["DTK_BASE_URL"]))
         ready = all(bool(item.get("ok")) for item in checks.values())
-        self._json(200 if ready else 503, {"status": "ok" if ready else "unavailable",
-                                           "components": checks})
+        self._json(
+            200 if ready else 503,
+            {"status": "ok" if ready else "unavailable", "components": checks},
+        )
 
 
-def events_payload(settings: Settings, query: Mapping[str, Sequence[str]]) -> dict[str, Any]:
+def events_payload(
+    settings: Settings, query: Mapping[str, Sequence[str]]
+) -> dict[str, Any]:
     """`/api/events`：与网页同一组过滤条件、同一份摘要文字。
 
     **复用 `page_events` 的视图**而不是另写一套查询：两处各算一遍必然分叉，
@@ -573,7 +637,9 @@ def events_payload(settings: Settings, query: Mapping[str, Sequence[str]]) -> di
         "events": [
             {
                 "id": row.get("id"),
-                "ts": row["ts"].isoformat() if isinstance(row.get("ts"), datetime) else None,
+                "ts": row["ts"].isoformat()
+                if isinstance(row.get("ts"), datetime)
+                else None,
                 "kind": row.get("kind"),
                 "nickname": row.get("nickname") or "",
                 "sec_user_id": row.get("sec_user_id") or "",
@@ -648,11 +714,14 @@ class PanelServer:
 
     def __init__(self, settings: Settings) -> None:
         handler = type("BoundHandler", (_Handler,), {})
-        self._server = _PanelServer((settings["WEB_HOST"], int(settings["WEB_PORT"])), handler)
+        self._server = _PanelServer(
+            (settings["WEB_HOST"], int(settings["WEB_PORT"])), handler
+        )
         self._server.settings = settings  # type: ignore[attr-defined]
         self._server.daemon_threads = True
-        self._thread = threading.Thread(target=self._server.serve_forever, name="dywatch-webui",
-                                       daemon=True)
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, name="dywatch-webui", daemon=True
+        )
 
     def start(self) -> None:
         self._thread.start()

@@ -44,6 +44,7 @@ STATUS_LEGEND = {
 # 渲染路径必须对畸形载荷免疫）。所以读快照的数值一律走这三个函数，认不出来就用
 # "没有"而不是抛。
 
+
 def _as_int(value: Any) -> int:
     """把快照里的值当整数读；认不出来（`"abc"` / 列表 / 字典）就当 0。"""
     try:
@@ -96,14 +97,21 @@ def read_status(settings: Settings) -> dict[str, Any]:
     data["features"] = _as_mapping(data.get("features"))
     notify = _as_mapping(data.get("notify"))
     channels = notify.get("channels")
-    notify["channels"] = [str(item) for item in channels] if isinstance(channels, (list, tuple)) else []
+    notify["channels"] = (
+        [str(item) for item in channels] if isinstance(channels, (list, tuple)) else []
+    )
     data["notify"] = notify
     users = data.get("users")
-    data["users"] = [item for item in users if isinstance(item, dict)] if isinstance(users, (list, tuple)) else []
+    data["users"] = (
+        [item for item in users if isinstance(item, dict)]
+        if isinstance(users, (list, tuple))
+        else []
+    )
     return data
 
 
 # =================== 状态分类 ===================
+
 
 def classify_account(user: Mapping[str, Any], stale_days: int) -> tuple[str, str]:
     """一个账号的 `(颜色 key, 状态文案)`。
@@ -159,6 +167,7 @@ def _overall_line(total: int, ok: int, failing: int, stale: int, never: int) -> 
 
 # =================== LED 阵列与数据条 ===================
 
+
 def _quantize_blocks(counts: Iterable[int], slots: int = LED_SLOTS) -> list[int]:
     """把各类别的账号数按比例分配成正好 `slots` 个整数格子（最大余数法）。
 
@@ -203,7 +212,9 @@ def _render_ledarray(buckets: Mapping[str, int]) -> str:
         cells.extend([f'<span class="led on-{key}"></span>'] * count)
     legend = "".join(
         LEGEND_ITEM.substitute(
-            color=STATUS_LEGEND[key][1], label=STATUS_LEGEND[key][0], count=buckets.get(key, 0)
+            color=STATUS_LEGEND[key][1],
+            label=STATUS_LEGEND[key][0],
+            count=buckets.get(key, 0),
         )
         for key in STATUS_KEYS
         if buckets.get(key, 0)
@@ -219,7 +230,9 @@ def _render_stats(total: int, buckets: Mapping[str, int]) -> str:
         count = buckets.get(key, 0)
         if count or key != "off":  # "已移除 0" 是噪音，其余四项固定成行
             cells.append(
-                STAT_TEMPLATE.substitute(value=count, label=STATUS_LEGEND[key][0], color=key)
+                STAT_TEMPLATE.substitute(
+                    value=count, label=STATUS_LEGEND[key][0], color=key
+                )
             )
     return '<div class="stats">' + "".join(cells) + "</div>"
 
@@ -239,12 +252,16 @@ def _render_row(user: Mapping[str, Any], stale_days: int) -> str:
         status_text=_escape_html(status_text),
         nickname=_escape_html(user.get("nickname") or "-"),
         freq_tag=(
-            FREQ_TAG.substitute(label=_escape_html(str(freq_label)), tip=_escape_html(str(hint)))
+            FREQ_TAG.substitute(
+                label=_escape_html(str(freq_label)), tip=_escape_html(str(hint))
+            )
             if freq_label
             else ""
         ),
         known_posts=_as_int(user.get("known_posts")),
-        post_age_text=_escape_html(_format_post_age(_as_number(user.get("hours_since_newest_post")))),
+        post_age_text=_escape_html(
+            _format_post_age(_as_number(user.get("hours_since_newest_post")))
+        ),
     )
 
 
@@ -289,8 +306,10 @@ def _selfcheck_html(self_check: Mapping[str, Any]) -> str:
     if not self_check or self_check.get("ok", True):
         return ""
     reasons = self_check.get("reasons")
-    labels = [_SELF_CHECK_LABELS.get(str(code), str(code))
-              for code in (reasons if isinstance(reasons, (list, tuple)) else [])]
+    labels = [
+        _SELF_CHECK_LABELS.get(str(code), str(code))
+        for code in (reasons if isinstance(reasons, (list, tuple)) else [])
+    ]
     if not labels:
         return ""
     detail = _self_check_readings(self_check)
@@ -317,7 +336,9 @@ def _self_check_readings(self_check: Mapping[str, Any]) -> str:
     free = self_check.get("free_mb")
     limit = self_check.get("free_limit_mb")
     if isinstance(free, int):
-        parts.append(f"剩余 {free}MB" + (f" / 阈值 {limit}MB" if isinstance(limit, int) else ""))
+        parts.append(
+            f"剩余 {free}MB" + (f" / 阈值 {limit}MB" if isinstance(limit, int) else "")
+        )
     elif isinstance(self_check.get("error"), str):
         # 问不出余量本身不是降级（见 loop._self_check_reasons），但要说出来
         parts.append(f"磁盘余量读不到：{self_check['error']}")
@@ -331,7 +352,11 @@ def _self_check_readings(self_check: Mapping[str, Any]) -> str:
 #
 # 不新增第三张"事件 → 颜色"的全量枚举表：本项目已经有多处按事件分派的地方，每多一处
 # 就多一次"加了事件忘了改"的机会（见 DESIGN 第 10 章）。
-_TONE_BY_SEVERITY: Mapping[str, str] = {"error": "bad", "warning": "warn", "info": "quiet"}
+_TONE_BY_SEVERITY: Mapping[str, str] = {
+    "error": "bad",
+    "warning": "warn",
+    "info": "quiet",
+}
 _TONE_OVERRIDE: Mapping[EventKind, str] = {
     # 新作品是打开面板要问的第一件事，`info` 这一档（灰）配不上它
     EventKind.NEW_POST: "good",

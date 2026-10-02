@@ -36,7 +36,11 @@ MAX_ATTEMPTS = 2
 RETRY_BACKOFF_SECONDS = 1.0
 
 #: Bark 的 level 由严重级别决定：error 要能穿透免打扰
-BARK_LEVELS: Mapping[str, str] = {"error": "timeSensitive", "warning": "active", "info": "passive"}
+BARK_LEVELS: Mapping[str, str] = {
+    "error": "timeSensitive",
+    "warning": "active",
+    "info": "passive",
+}
 
 
 @dataclass(slots=True)
@@ -84,7 +88,9 @@ class HttpChannel:
     #: 该字段等于什么才算成功（其余值都是失败）
     error_ok: Any = 0
 
-    def request(self, message: Message) -> tuple[str, dict[str, Any]]:  # pragma: no cover - abstract
+    def request(
+        self, message: Message
+    ) -> tuple[str, dict[str, Any]]:  # pragma: no cover - abstract
         raise NotImplementedError
 
     @staticmethod

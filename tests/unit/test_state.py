@@ -69,8 +69,13 @@ def sample_state(**overrides) -> AuthorState:
                 absent_is_top=True,
             ),
         ),
-        tombstones=(Tombstone(content_id="old", removed_at=NOW - timedelta(days=1),
-                              reason="scrolled_out"),),
+        tombstones=(
+            Tombstone(
+                content_id="old",
+                removed_at=NOW - timedelta(days=1),
+                reason="scrolled_out",
+            ),
+        ),
     )
     base.update(overrides)
     return AuthorState(**base)
@@ -120,8 +125,13 @@ def test_second_round_replaces_rather_than_appends(store):
 
 def test_events_are_persisted_with_their_payload_and_delivery(store):
     events = (
-        Event(EventKind.NEW_POST, sec_user_id="u1", nickname="A", content_id="p9",
-              payload={"content": {"content_id": "p9"}, "gap_days": 3}),
+        Event(
+            EventKind.NEW_POST,
+            sec_user_id="u1",
+            nickname="A",
+            content_id="p9",
+            payload={"content": {"content_id": "p9"}, "gap_days": 3},
+        ),
         Event(EventKind.GAP_DETECTED, sec_user_id="u1", payload={"fetch_count": 15}),
     )
     ids = store.save_round("u1", sample_state(), events, now=NOW)
@@ -132,19 +142,31 @@ def test_events_are_persisted_with_their_payload_and_delivery(store):
     rows = store.recent_events(limit=10)
     assert len(rows) == 2
     by_kind = {row["kind"]: row for row in rows}
-    assert by_kind["new_post"]["delivery_json"] == '{"sent": ["dingtalk"], "failed": {}}'
+    assert (
+        by_kind["new_post"]["delivery_json"] == '{"sent": ["dingtalk"], "failed": {}}'
+    )
     assert by_kind["gap_detected"]["delivery_json"] is None
 
 
 def test_record_round_summarises_results(store):
     results = [
-        RoundResult(sec_user_id="u1", nickname="A", status="ok", new_count=2, deleted_count=1,
-                    title_changed=1),
-        RoundResult(sec_user_id="u2", nickname="B", status="fail", error_code="RATE_LIMITED"),
+        RoundResult(
+            sec_user_id="u1",
+            nickname="A",
+            status="ok",
+            new_count=2,
+            deleted_count=1,
+            title_changed=1,
+        ),
+        RoundResult(
+            sec_user_id="u2", nickname="B", status="fail", error_code="RATE_LIMITED"
+        ),
         RoundResult(sec_user_id="u3", nickname="C", status="skipped"),
         RoundResult(sec_user_id="u4", nickname="D", status="init"),
     ]
-    summary = store.record_round(now=NOW, results=results, gate_state="open", duration_ms=1234)
+    summary = store.record_round(
+        now=NOW, results=results, gate_state="open", duration_ms=1234
+    )
 
     assert summary == {
         "checked": 3,
@@ -207,8 +229,12 @@ def test_drop_author_removes_posts_and_tombstones(store):
 
 
 def test_maintenance_ages_out_events_and_rounds(store):
-    store.save_round("u1", sample_state(),
-                     events=[Event(EventKind.NEW_POST, sec_user_id="u1")], now=NOW)
+    store.save_round(
+        "u1",
+        sample_state(),
+        events=[Event(EventKind.NEW_POST, sec_user_id="u1")],
+        now=NOW,
+    )
     store.record_round(now=NOW, results=[], gate_state="open", duration_ms=1)
 
     store.maintenance(now=NOW + timedelta(days=100), events_days=90, rounds_days=30)
@@ -236,7 +262,9 @@ def test_a_failed_write_leaves_the_previous_round_intact(store):
             raise RuntimeError("boom")
 
     with pytest.raises(RuntimeError):
-        store.save_round("u1", sample_state(posts=()), events=Boom(), now=NOW + timedelta(minutes=1))
+        store.save_round(
+            "u1", sample_state(posts=()), events=Boom(), now=NOW + timedelta(minutes=1)
+        )
 
     after = store.load_authors()["u1"]
     assert after.known_ids == before.known_ids
@@ -353,9 +381,15 @@ def test_migrate_upgrades_a_v1_database_without_losing_data(tmp_path):
     assert [p.hidden_from_guest_at for p in old.posts] == [None]
 
     with store._tx() as tx:  # noqa: SLF001 —— 验证 v5→v6 建出来的东西
-        tables = {row[0] for row in tx.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        tables = {
+            row[0]
+            for row in tx.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
         assert "post_metrics" in tables
-        indexes = {row[0] for row in tx.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        indexes = {
+            row[0]
+            for row in tx.execute("SELECT name FROM sqlite_master WHERE type='index'")
+        }
         assert "ix_post_metrics_hour" in indexes
         # 老库里没有互动量行——迁移只建表，不凭空造数据
         assert tx.execute("SELECT COUNT(*) FROM post_metrics").fetchone()[0] == 0
@@ -380,18 +414,36 @@ def test_migrate_upgrades_a_v1_database_without_losing_data(tmp_path):
 # 都在这一节里钉住。它们全是"看起来显然、改坏了却不会报错"的那一类：曲线少几个点、
 # 数字悄悄退回旧值，没人能从画面上看出来。
 
+
 def test_metrics_merge_into_an_hour_bucket(store):
     """一小时内的多轮并进同一行（`hour` 是主键的一部分，不是普通一列）。"""
     state = sample_state()
-    store.save_round("u1", state, events=[], now=NOW,
-                     metrics=[PostMetrics(content_id="p1", digg_count=1)])
-    store.save_round("u1", state, events=[], now=NOW + timedelta(minutes=59),
-                     metrics=[PostMetrics(content_id="p1", digg_count=2)])
-    store.save_round("u1", state, events=[], now=NOW + timedelta(hours=1),
-                     metrics=[PostMetrics(content_id="p1", digg_count=3)])
+    store.save_round(
+        "u1",
+        state,
+        events=[],
+        now=NOW,
+        metrics=[PostMetrics(content_id="p1", digg_count=1)],
+    )
+    store.save_round(
+        "u1",
+        state,
+        events=[],
+        now=NOW + timedelta(minutes=59),
+        metrics=[PostMetrics(content_id="p1", digg_count=2)],
+    )
+    store.save_round(
+        "u1",
+        state,
+        events=[],
+        now=NOW + timedelta(hours=1),
+        metrics=[PostMetrics(content_id="p1", digg_count=3)],
+    )
 
     with store._tx() as tx:  # noqa: SLF001
-        hours = [row[0] for row in tx.execute("SELECT hour FROM post_metrics ORDER BY hour")]
+        hours = [
+            row[0] for row in tx.execute("SELECT hour FROM post_metrics ORDER BY hour")
+        ]
     assert hours == ["2026-09-15T12:00:00+00:00", "2026-09-15T13:00:00+00:00"]
 
 
@@ -402,10 +454,20 @@ def test_metrics_never_erase_a_number_we_already_have(store):
     而没人能看出是代码擦的。
     """
     state = sample_state()
-    store.save_round("u1", state, events=[], now=NOW,
-                     metrics=[PostMetrics(content_id="p1", play_count=7, digg_count=111)])
-    store.save_round("u1", state, events=[], now=NOW + timedelta(minutes=20),
-                     metrics=[PostMetrics(content_id="p1", comment_count=7)])
+    store.save_round(
+        "u1",
+        state,
+        events=[],
+        now=NOW,
+        metrics=[PostMetrics(content_id="p1", play_count=7, digg_count=111)],
+    )
+    store.save_round(
+        "u1",
+        state,
+        events=[],
+        now=NOW + timedelta(minutes=20),
+        metrics=[PostMetrics(content_id="p1", comment_count=7)],
+    )
 
     with store._tx() as tx:  # noqa: SLF001
         rows = tx.execute(
@@ -433,8 +495,14 @@ def test_metrics_skip_rows_without_a_single_number(store):
     """五个数全空的行不写：写 0 会在增长曲线里造出一个平台从未说过的悬崖。"""
     state = sample_state()
     store.save_round(
-        "u1", state, events=[], now=NOW,
-        metrics=[PostMetrics(content_id="p1"), PostMetrics(content_id="p2", digg_count=5)],
+        "u1",
+        state,
+        events=[],
+        now=NOW,
+        metrics=[
+            PostMetrics(content_id="p1"),
+            PostMetrics(content_id="p2", digg_count=5),
+        ],
     )
 
     with store._tx() as tx:  # noqa: SLF001
@@ -445,10 +513,16 @@ def test_metrics_skip_rows_without_a_single_number(store):
 def test_metrics_series_sums_per_hour_and_keeps_missing_columns_null(store):
     """读回来的序列按小时合计；整列没有值的字段是 `None`（图上的断点），不是 0。"""
     state = sample_state()
-    store.save_round("u1", state, events=[], now=NOW, metrics=[
-        PostMetrics(content_id="p1", digg_count=100, collect_count=2),
-        PostMetrics(content_id="p2", digg_count=200),
-    ])
+    store.save_round(
+        "u1",
+        state,
+        events=[],
+        now=NOW,
+        metrics=[
+            PostMetrics(content_id="p1", digg_count=100, collect_count=2),
+            PostMetrics(content_id="p2", digg_count=200),
+        ],
+    )
 
     with store._tx() as tx:  # noqa: SLF001
         series = read_metrics_series(tx, sec_user_id="u1")
@@ -466,12 +540,22 @@ def test_events_are_read_newest_first_by_time_not_by_row_id(store):
     """
     state = sample_state()
     # 先写"较新"的（id 小、ts 大），再写"较旧"的（id 大、ts 小）
-    store.save_round("u1", state, now=NOW, events=[
-        Event(kind=EventKind.NEW_POST, sec_user_id="u1", content_id="newer"),
-    ])
-    store.save_round("u1", state, now=NOW - timedelta(hours=3), events=[
-        Event(kind=EventKind.TITLE_CHANGED, sec_user_id="u1", content_id="older"),
-    ])
+    store.save_round(
+        "u1",
+        state,
+        now=NOW,
+        events=[
+            Event(kind=EventKind.NEW_POST, sec_user_id="u1", content_id="newer"),
+        ],
+    )
+    store.save_round(
+        "u1",
+        state,
+        now=NOW - timedelta(hours=3),
+        events=[
+            Event(kind=EventKind.TITLE_CHANGED, sec_user_id="u1", content_id="older"),
+        ],
+    )
 
     with store._tx() as tx:  # noqa: SLF001
         rows = read_events(tx, limit=10)
@@ -481,9 +565,14 @@ def test_events_are_read_newest_first_by_time_not_by_row_id(store):
 
 def test_kind_filter_that_matches_nothing_does_not_fall_back_to_everything(store):
     """传了过滤器但一个类型都不合法 → 结果为空，**不能**退化成"不过滤"。"""
-    store.save_round("u1", sample_state(), now=NOW, events=[
-        Event(kind=EventKind.NEW_POST, sec_user_id="u1", content_id="p1"),
-    ])
+    store.save_round(
+        "u1",
+        sample_state(),
+        now=NOW,
+        events=[
+            Event(kind=EventKind.NEW_POST, sec_user_id="u1", content_id="p1"),
+        ],
+    )
 
     with store._tx() as tx:  # noqa: SLF001
         assert read_events(tx, kinds=("不是事件类型",)) == []

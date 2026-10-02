@@ -137,10 +137,10 @@ class _Log:
     def debug(self, event: str, **fields) -> None:
         self.records.append((event, fields))
 
-    def info(self, event: str, **fields) -> None:      # pragma: no cover - 闸门只打 debug
+    def info(self, event: str, **fields) -> None:  # pragma: no cover - 闸门只打 debug
         self.records.append((event, fields))
 
-    def warning(self, event: str, **fields) -> None:   # pragma: no cover
+    def warning(self, event: str, **fields) -> None:  # pragma: no cover
         self.records.append((event, fields))
 
 
@@ -151,11 +151,15 @@ def test_capping_leaves_a_trace_in_the_log_and_the_snapshot():
 
     g.backoff_for(MonitorError("RATE_LIMITED", retry_after=3600))
 
-    capped = [fields for event, fields in log.records if event == "gate.retry_after_capped"]
+    capped = [
+        fields for event, fields in log.records if event == "gate.retry_after_capped"
+    ]
     assert capped, "封顶时要有日志"
     assert capped[0]["raw"] == 3600 and capped[0]["capped"] == 600
     assert capped[0]["code"] == "RATE_LIMITED"
-    assert g.snapshot()["retry_after_capped"] == 1, "快照里要有计数（面板与 /metrics 靠它）"
+    assert g.snapshot()["retry_after_capped"] == 1, (
+        "快照里要有计数（面板与 /metrics 靠它）"
+    )
 
 
 def test_the_cap_counter_never_moves_when_nothing_was_capped():
@@ -163,7 +167,7 @@ def test_the_cap_counter_never_moves_when_nothing_was_capped():
     g = gate(default_seconds=60, retry_after_max=3600, logger=log)
 
     assert g.backoff_for(MonitorError("RATE_LIMITED", retry_after=120)) == 120
-    assert g.backoff_for(MonitorError("RATE_LIMITED")) == 60          # 没给 retry_after
+    assert g.backoff_for(MonitorError("RATE_LIMITED")) == 60  # 没给 retry_after
 
     assert g.snapshot()["retry_after_capped"] == 0
     assert [e for e, _ in log.records] == [], "没封顶就不该有日志（否则日志会被刷满）"
@@ -224,10 +228,12 @@ def test_the_next_real_incident_still_escalates_after_stragglers():
     g = gate(default_seconds=60, backoff_after=1, backoff_max=600)
     g.trip(MonitorError("QUEUE_FULL"))
     for _ in range(4):
-        g.trip(MonitorError("QUEUE_FULL"))      # 同一次事故的后到者
-    g._until = 0.0                               # 时间过去了，闸门开回来
+        g.trip(MonitorError("QUEUE_FULL"))  # 同一次事故的后到者
+    g._until = 0.0  # 时间过去了，闸门开回来
 
-    assert g.trip(MonitorError("QUEUE_FULL")) == 120, "第二次事故：连续 2 > 阈值 1，翻倍"
+    assert g.trip(MonitorError("QUEUE_FULL")) == 120, (
+        "第二次事故：连续 2 > 阈值 1，翻倍"
+    )
 
 
 def test_a_straggler_with_a_longer_retry_after_extends_the_gate():
@@ -312,7 +318,7 @@ def test_a_straggler_that_really_extends_the_gate_to_the_cap_is_counted():
 
 
 def test_comparing_a_straggler_leaves_no_trace_when_it_does_not_extend():
-    """"只是比较一下要不要延长"不能产生任何副作用：无日志、无计数。"""
+    """ "只是比较一下要不要延长"不能产生任何副作用：无日志、无计数。"""
     log = _Recorder()
     g = gate(retry_after_max=3600, logger=log)
     g.trip(MonitorError("RATE_LIMITED", retry_after=3600))
@@ -322,7 +328,9 @@ def test_comparing_a_straggler_leaves_no_trace_when_it_does_not_extend():
         g.trip(MonitorError("RATE_LIMITED", retry_after=999999))
 
     assert log.events == []
-    assert g.snapshot()["retry_after_capped"] == 0, "第一次的 3600 恰好等于上限，没被封顶"
+    assert g.snapshot()["retry_after_capped"] == 0, (
+        "第一次的 3600 恰好等于上限，没被封顶"
+    )
 
 
 # ------------------------------------------------------------------ 快照

@@ -117,8 +117,13 @@ class GlobalGate:
         if seconds <= self.retry_after_max:
             return seconds
         self._capped += 1
-        self._log("gate.retry_after_capped", raw=seconds,
-                  capped=self.retry_after_max, code=error.code, count=self._capped)
+        self._log(
+            "gate.retry_after_capped",
+            raw=seconds,
+            capped=self.retry_after_max,
+            code=error.code,
+            count=self._capped,
+        )
         return self.retry_after_max
 
     def _log(self, event: str, **fields: Any) -> None:
@@ -160,7 +165,9 @@ class GlobalGate:
         if self.is_open():
             return self.close(self.backoff_for(error), reason=error.code)
         parsed = self._parse_retry_after(error)
-        if parsed is not None and min(parsed, self.retry_after_max) > math.ceil(self.remaining()):
+        if parsed is not None and min(parsed, self.retry_after_max) > math.ceil(
+            self.remaining()
+        ):
             return self.close(self._cap(parsed, error), reason=error.code)
         return max(1, math.ceil(self.remaining()))
 

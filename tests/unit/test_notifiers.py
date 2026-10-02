@@ -36,9 +36,16 @@ telegram bot_token=1:AA chat_id=-100
 
 def make_message(kind: EventKind = EventKind.NEW_POST) -> Message:
     event = Event(
-        kind, sec_user_id="u1", nickname="阿直", content_id="p1",
-        payload={"title": "老标题", "new": "新标题", "kind": "video",
-                 "web_url": "https://www.douyin.com/video/1"},
+        kind,
+        sec_user_id="u1",
+        nickname="阿直",
+        content_id="p1",
+        payload={
+            "title": "老标题",
+            "new": "新标题",
+            "kind": "video",
+            "web_url": "https://www.douyin.com/video/1",
+        },
     )
     return render_event(event, now=datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc))
 
@@ -62,7 +69,9 @@ def test_dingtalk_payload_matches_the_official_shape():
 
 def test_dingtalk_signs_when_a_secret_is_given_and_mentions_people():
     message = make_message()
-    url, body = DingTalkChannel(token="tok", secret="SECx", at_mobiles=("13800000000",)).request(message)
+    url, body = DingTalkChannel(
+        token="tok", secret="SECx", at_mobiles=("13800000000",)
+    ).request(message)
 
     assert "timestamp=" in url and "sign=" in url, "加签是往 URL 上追加参数"
     assert body["at"] == {"atMobiles": ["13800000000"], "isAtAll": False}
@@ -79,15 +88,17 @@ def test_wecom_payload():
 @pytest.mark.parametrize(
     ("kind", "level"),
     [
-        (EventKind.ALL_GONE, "timeSensitive"),      # error
-        (EventKind.POST_REMOVED, "active"),         # warning
-        (EventKind.NEW_POST, "passive"),            # info
+        (EventKind.ALL_GONE, "timeSensitive"),  # error
+        (EventKind.POST_REMOVED, "active"),  # warning
+        (EventKind.NEW_POST, "passive"),  # info
     ],
 )
 def test_bark_level_follows_severity(kind, level):
     """Bark 的 level 决定"会不会响"：error 穿透专注模式，info 连屏幕都不点亮。"""
     message = make_message(kind)
-    url, body = BarkChannel(server="https://api.day.app/", device_key="dev").request(message)
+    url, body = BarkChannel(server="https://api.day.app/", device_key="dev").request(
+        message
+    )
 
     assert url == "https://api.day.app/dev", "服务器地址结尾的斜杠不该叠成两条"
     assert body["level"] == level
@@ -99,7 +110,9 @@ def test_serverchan_truncates_the_title_to_32_bytes():
     url, body = ServerChanChannel(sendkey="SCT123").request(message)
 
     assert url == "https://sctapi.ftqq.com/SCT123.send"
-    assert len(body["title"].encode("utf-8")) <= 32, "Server 酱的标题上限是 **32 字节**，不是 32 个字符"
+    assert len(body["title"].encode("utf-8")) <= 32, (
+        "Server 酱的标题上限是 **32 字节**，不是 32 个字符"
+    )
     assert body["desp"] == message.markdown
 
 
@@ -140,13 +153,21 @@ def test_targets_path_builds_one_channel_per_instance_in_order():
     built = build_channels(settings_with(NOTIFY_TARGETS=TWO_DINGTALK))
 
     assert [c.name for c in built] == ["市场部", "dingtalk-2", "telegram"]
-    assert [type(c).__name__ for c in built] == ["DingTalkChannel", "DingTalkChannel", "TelegramChannel"]
-    assert built[0].token == "tok-A" and built[1].token == "tok-B", "两个实例各用各的凭据"
+    assert [type(c).__name__ for c in built] == [
+        "DingTalkChannel",
+        "DingTalkChannel",
+        "TelegramChannel",
+    ]
+    assert built[0].token == "tok-A" and built[1].token == "tok-B", (
+        "两个实例各用各的凭据"
+    )
     assert built[0].secret == "SECa" and built[1].secret == "SECb"
 
 
 def test_targets_path_passes_the_global_at_mobiles_to_dingtalk():
-    built = build_channels(settings_with(NOTIFY_TARGETS=TWO_DINGTALK, AT_MOBILES="138,139"))
+    built = build_channels(
+        settings_with(NOTIFY_TARGETS=TWO_DINGTALK, AT_MOBILES="138,139")
+    )
 
     assert built[0].at_mobiles == ("138", "139")
 
@@ -155,20 +176,25 @@ def test_legacy_path_still_works_untouched():
     built = build_channels(
         settings_with(
             NOTIFY_CHANNELS="dingtalk,telegram",
-            DINGTALK_TOKEN="old-tok", DINGTALK_SECRET="SECold",
-            TELEGRAM_BOT_TOKEN="1:BB", TELEGRAM_CHAT_ID="42",
+            DINGTALK_TOKEN="old-tok",
+            DINGTALK_SECRET="SECold",
+            TELEGRAM_BOT_TOKEN="1:BB",
+            TELEGRAM_CHAT_ID="42",
         )
     )
 
     assert [(c.name, type(c).__name__) for c in built] == [
-        ("dingtalk", "DingTalkChannel"), ("telegram", "TelegramChannel"),
+        ("dingtalk", "DingTalkChannel"),
+        ("telegram", "TelegramChannel"),
     ]
 
 
 def test_targets_win_when_both_writings_are_configured():
     settings = settings_with(
         NOTIFY_TARGETS="wecom key=new-key",
-        NOTIFY_CHANNELS="dingtalk", DINGTALK_TOKEN="old-tok", DINGTALK_SECRET="SECold",
+        NOTIFY_CHANNELS="dingtalk",
+        DINGTALK_TOKEN="old-tok",
+        DINGTALK_SECRET="SECold",
     )
 
     assert [c.name for c in build_channels(settings)] == ["wecom"]
@@ -178,8 +204,10 @@ def test_targets_win_when_both_writings_are_configured():
 def test_broken_targets_never_fall_back_to_the_legacy_credentials():
     """新写法写错了就该**没有渠道**（进程也起不来），而不是偷偷用旧的凭据发出去。"""
     settings = settings_with(
-        NOTIFY_TARGETS="dingtalk secret=SECx",        # 少了 token
-        NOTIFY_CHANNELS="dingtalk", DINGTALK_TOKEN="old-tok", DINGTALK_SECRET="SECold",
+        NOTIFY_TARGETS="dingtalk secret=SECx",  # 少了 token
+        NOTIFY_CHANNELS="dingtalk",
+        DINGTALK_TOKEN="old-tok",
+        DINGTALK_SECRET="SECold",
     )
 
     assert build_channels(settings) == []
@@ -187,7 +215,9 @@ def test_broken_targets_never_fall_back_to_the_legacy_credentials():
 
 
 def test_malformed_legacy_entries_are_skipped_without_taking_others_down():
-    built = build_channels(settings_with(NOTIFY_CHANNELS="dingtalk,wecom", DINGTALK_TOKEN="t"))
+    built = build_channels(
+        settings_with(NOTIFY_CHANNELS="dingtalk,wecom", DINGTALK_TOKEN="t")
+    )
     # 钉钉缺 secret 也能发（不加签），wecom 没 key 就被跳过
     assert [c.name for c in built] == ["dingtalk"]
 
@@ -208,7 +238,11 @@ class _Channel:
 
 
 async def test_delivery_isolates_a_broken_channel_and_names_the_instances():
-    good_a, bad, good_b = _Channel("市场部"), _Channel("坏的那个", boom=True), _Channel("dingtalk-2")
+    good_a, bad, good_b = (
+        _Channel("市场部"),
+        _Channel("坏的那个", boom=True),
+        _Channel("dingtalk-2"),
+    )
     notifier = Notifier([good_a, bad, good_b], gap_seconds=0)
 
     delivery = await notifier.send(make_message())
@@ -222,7 +256,9 @@ async def test_delivery_isolates_a_broken_channel_and_names_the_instances():
 
 async def test_names_are_unique_so_failed_can_be_a_dict():
     """`failed` 是字典：同名实例会互相覆盖，所以解析阶段就要求名字唯一。"""
-    settings = settings_with(NOTIFY_TARGETS="dingtalk token=a secret=x\ndingtalk token=b secret=y")
+    settings = settings_with(
+        NOTIFY_TARGETS="dingtalk token=a secret=x\ndingtalk token=b secret=y"
+    )
     names = [c.name for c in build_channels(settings)]
 
     assert len(names) == len(set(names)) == 2
@@ -254,7 +290,10 @@ class _FakeClient:
     ("channel", "body"),
     [
         (WeComChannel(key="bad"), {"errcode": 93000, "errmsg": "invalid webhook key"}),
-        (DingTalkChannel(token="t"), {"errcode": 310000, "errmsg": "keywords not in content"}),
+        (
+            DingTalkChannel(token="t"),
+            {"errcode": 310000, "errmsg": "keywords not in content"},
+        ),
         (BarkChannel(device_key="d"), {"code": 400, "message": "bad device token"}),
         (ServerChanChannel(sendkey="s"), {"code": 40001, "message": "bad sendkey"}),
     ],

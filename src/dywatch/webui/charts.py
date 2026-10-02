@@ -141,7 +141,12 @@ def empty_block(message: str) -> str:
 
 
 def metric_legend() -> list[tuple[str, str]]:
-    colors = {"digg": "--blue", "comment": "--green", "collect": "--amber", "share": "--text2"}
+    colors = {
+        "digg": "--blue",
+        "comment": "--green",
+        "collect": "--amber",
+        "share": "--text2",
+    }
     return [(label, colors[key]) for key, label in METRIC_SERIES]
 
 
@@ -151,7 +156,10 @@ def tone_legend() -> list[tuple[str, str]]:
 
 # =================== 数据 → 载荷（纯函数） ===================
 
-def _batch_labels(since: datetime, until: datetime, count: int, *, hourly: bool) -> list[str]:
+
+def _batch_labels(
+    since: datetime, until: datetime, count: int, *, hourly: bool
+) -> list[str]:
     """把一段时间切成 `count` 段，给每段一个短标签。
 
     标签取每段的**起点**（"13:00" 表示 13:00~14:00 这一格），而不是中点：
@@ -232,19 +240,30 @@ def metrics_chart_payload(
     labels: list[str] = []
     for row in series:
         stamp = row.get("hour")
-        labels.append(stamp.astimezone().strftime("%H:%M" if hourly else "%m-%d") if stamp else "")
+        labels.append(
+            stamp.astimezone().strftime("%H:%M" if hourly else "%m-%d") if stamp else ""
+        )
     return {
         "type": "line",
         "labels": labels,
         "datasets": [
-            {"label": label, "color": _series_color(key), "data": [row.get(key) for row in series]}
+            {
+                "label": label,
+                "color": _series_color(key),
+                "data": [row.get(key) for row in series],
+            }
             for key, label in METRIC_SERIES
         ],
     }
 
 
 def _series_color(key: str) -> str:
-    return {"digg": "--blue", "comment": "--green", "collect": "--amber", "share": "--text2"}[key]
+    return {
+        "digg": "--blue",
+        "comment": "--green",
+        "collect": "--amber",
+        "share": "--text2",
+    }[key]
 
 
 # =================== 前端引导 ===================

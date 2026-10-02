@@ -54,14 +54,18 @@ class Client:
 class GateFailingClient:
     """上游在限流：每个账号都撞一次 429，带 `retry_after`。"""
 
-    def __init__(self, code: str = "RATE_LIMITED", retry_after: int | None = 30) -> None:
+    def __init__(
+        self, code: str = "RATE_LIMITED", retry_after: int | None = 30
+    ) -> None:
         self.code = code
         self.retry_after = retry_after
         self.calls = 0
 
     async def author_posts(self, sec_user_id: str, count: int, **kwargs: Any) -> Page:
         self.calls += 1
-        raise MonitorError(self.code, "上游说现在别发请求", retry_after=self.retry_after)
+        raise MonitorError(
+            self.code, "上游说现在别发请求", retry_after=self.retry_after
+        )
 
 
 class SimultaneousFailingClient:
@@ -135,7 +139,9 @@ def make_loop(
     )
 
 
-async def test_round_start_is_logged_before_done_and_both_carry_the_round_number(tmp_path):
+async def test_round_start_is_logged_before_done_and_both_carry_the_round_number(
+    tmp_path,
+):
     logger = Logger()
     loop = make_loop(tmp_path, logger, users=f"{UID}|示例账号\n")
     loop.reload_users(force=True)
@@ -145,7 +151,9 @@ async def test_round_start_is_logged_before_done_and_both_carry_the_round_number
     names = logger.names()
     assert "round.start" in names, "每轮开始要有一行"
     assert "round.done" in names
-    assert names.index("round.start") < names.index("round.done"), "start 必须在 done 之前"
+    assert names.index("round.start") < names.index("round.done"), (
+        "start 必须在 done 之前"
+    )
 
     start = logger.events("round.start")[0]
     done = logger.events("round.done")[0]
@@ -175,7 +183,7 @@ async def test_a_skipped_round_does_not_claim_to_have_started(tmp_path):
 
 async def test_no_users_also_logs_the_round_number(tmp_path):
     logger = Logger()
-    loop = make_loop(tmp_path, logger, users=None)   # 没有 users.conf
+    loop = make_loop(tmp_path, logger, users=None)  # 没有 users.conf
     loop.reload_users(force=True)
 
     await loop.run_round()
@@ -207,7 +215,9 @@ async def test_upstream_rate_limit_actually_closes_the_gate(tmp_path):
     assert loop.gate.remaining() >= 29
 
 
-async def test_one_upstream_incident_hit_by_several_in_flight_accounts_closes_the_gate_once(tmp_path):
+async def test_one_upstream_incident_hit_by_several_in_flight_accounts_closes_the_gate_once(
+    tmp_path,
+):
     """4 个账号同时在途、撞上同一次 503：只算**一次**关闸，退避不叠加。
 
     以前每个失败的请求都各自推进一次"连续失败"计数：第 3 个起 120 秒、第 4 个 240 秒，
@@ -228,7 +238,9 @@ async def test_one_upstream_incident_hit_by_several_in_flight_accounts_closes_th
     assert 55 <= loop.gate.remaining() <= 60, "默认 60 秒，不该被叠加成 120/240"
 
 
-async def test_the_round_after_a_gate_close_is_skipped_without_touching_upstream(tmp_path):
+async def test_the_round_after_a_gate_close_is_skipped_without_touching_upstream(
+    tmp_path,
+):
     """闸门关着的那一轮应当整轮跳过：不再向上游发请求，也不假装这一轮"开始跑过"。"""
     logger = Logger()
     client = GateFailingClient()
@@ -281,6 +293,7 @@ async def test_an_auth_failure_still_stops_everything(tmp_path):
 # `/metrics` 读它），以及**事件只在进入降级时报一次**（条件是持续为真的，按轮报会在
 # `events` 表里每轮堆一行一模一样的记录）。
 
+
 def _snapshot(loop: MonitorLoop) -> dict:
     return json.loads(loop.settings.status_path.read_text(encoding="utf-8"))
 
@@ -290,9 +303,13 @@ async def test_self_check_lands_in_the_snapshot_but_reports_only_once(tmp_path):
     # 阈值抬到不可能达到的值 → 恒定 `disk_low`；顺手把上游探测关掉（`0` = 不取），
     # 这条用例不该顺带验证那台假 client 没有 `system_status` 的异常路径
     loop = make_loop(
-        tmp_path, logger,
+        tmp_path,
+        logger,
         users=f"{UID}|示例账号\n",
-        env={"SELF_CHECK_FREE_MB": "999999999", "UPSTREAM_STATUS_INTERVAL_SECONDS": "0"},
+        env={
+            "SELF_CHECK_FREE_MB": "999999999",
+            "UPSTREAM_STATUS_INTERVAL_SECONDS": "0",
+        },
     )
     loop.reload_users(force=True)
 
@@ -313,21 +330,25 @@ async def test_self_check_lands_in_the_snapshot_but_reports_only_once(tmp_path):
     # **边沿触发本身要看日志，不能只看事件表。** `should_send` 的 6 小时窗口会在落库
     # 之前把多出来的那几次挡掉，于是"每轮都报"在 `events` 表里也长得像"只报了一次"——
     # 这两条断言合起来才真正钉住"事件只在进入降级时报"。
-    assert logger.names().count("self_check.degraded") == 1, "只有进入降级的那一轮该记这条"
-    assert logger.events("self_check.degraded")[0]["reason"] == "disk_low", \
+    assert logger.names().count("self_check.degraded") == 1, (
+        "只有进入降级的那一轮该记这条"
+    )
+    assert logger.events("self_check.degraded")[0]["reason"] == "disk_low", (
         "原因要在日志里出现（抑制窗口就是按它分桶的）"
+    )
 
 
 async def test_self_check_does_not_announce_a_recovery(tmp_path):
     """恢复正常时只记日志、不发事件——横幅跟着快照消失就够了，不用再打扰一次。"""
     logger = Logger()
     loop = make_loop(
-        tmp_path, logger,
+        tmp_path,
+        logger,
         users=f"{UID}|示例账号\n",
         env={"SELF_CHECK_FREE_MB": "0", "UPSTREAM_STATUS_INTERVAL_SECONDS": "0"},
     )
     loop.reload_users(force=True)
-    loop._degraded = {"disk_low"}   # 预置成"上一轮报过"，本轮条件已恢复
+    loop._degraded = {"disk_low"}  # 预置成"上一轮报过"，本轮条件已恢复
 
     await loop.run_round()
 
@@ -338,7 +359,9 @@ async def test_self_check_does_not_announce_a_recovery(tmp_path):
     assert loop._degraded == set()
 
 
-async def test_a_failed_state_store_write_is_visible_in_the_same_round(tmp_path, monkeypatch):
+async def test_a_failed_state_store_write_is_visible_in_the_same_round(
+    tmp_path, monkeypatch
+):
     """回归：状态库写失败必须**当轮**就出现在快照里。
 
     曾经 `_maintenance` 排在 `_run_self_check` 之后：它置的 `_store_write_failed`
@@ -347,7 +370,8 @@ async def test_a_failed_state_store_write_is_visible_in_the_same_round(tmp_path,
     """
     logger = Logger()
     loop = make_loop(
-        tmp_path, logger,
+        tmp_path,
+        logger,
         users=f"{UID}|示例账号\n",
         env={"SELF_CHECK_FREE_MB": "0", "UPSTREAM_STATUS_INTERVAL_SECONDS": "0"},
     )
@@ -365,11 +389,13 @@ async def test_a_failed_state_store_write_is_visible_in_the_same_round(tmp_path,
     assert logger.names().count("state.write_failed") == 1
 
     await loop.run_round()
-    assert _snapshot(loop)["self_check"]["reasons"] == ["state_store_write_failed"], \
+    assert _snapshot(loop)["self_check"]["reasons"] == ["state_store_write_failed"], (
         "持续写不进去就要持续为真，而不是只报一轮"
+    )
 
 
 # ---------------------------------------------------------------- 上游健康读数
+
 
 class StatusClient:
     """`system/status` 的形状按 DTK 5.1.2 抄（含一个 `ok: None` 的组件与一个多余字段）。"""
@@ -388,10 +414,16 @@ class StatusClient:
         return {
             "version": "5.1.2",
             "uptime_seconds": 86400,
-            "components": {"postgres": {"ok": True, "latency_ms": 3},
-                           "browser_rpc": {"ok": None, "latency_ms": None}},
+            "components": {
+                "postgres": {"ok": True, "latency_ms": 3},
+                "browser_rpc": {"ok": None, "latency_ms": None},
+            },
             "pool": {"douyin": {"active": 7, "minting": 1}, "total_active": 7},
-            "storage": {"db_size_bytes": 1024, "identities": 8, "internal_note": "不该被搬运"},
+            "storage": {
+                "db_size_bytes": 1024,
+                "identities": 8,
+                "internal_note": "不该被搬运",
+            },
         }
 
 
@@ -407,7 +439,9 @@ async def test_upstream_readings_are_snapshotted(tmp_path):
     assert upstream["ok"] is True and upstream["version"] == "5.1.2"
     assert upstream["uptime_seconds"] == 86400
     assert upstream["components"]["postgres"]["ok"] is True
-    assert upstream["components"]["browser_rpc"]["ok"] is None, "未配置是'不知道'，不是'坏了'"
+    assert upstream["components"]["browser_rpc"]["ok"] is None, (
+        "未配置是'不知道'，不是'坏了'"
+    )
     assert upstream["pool"]["douyin"]["active"] == 7
     assert upstream["pool"]["total_active"] == 7
     assert "internal_note" not in upstream["storage"], "白名单之外的字段不该被搬进快照"

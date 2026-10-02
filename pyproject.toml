@@ -13,6 +13,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "ruff>=0.16",
 ]
 
 [project.scripts]
@@ -31,3 +32,10 @@ testpaths = ["tests"]
 markers = [
     "live: talks to a real DTK instance; skipped unless --run-live is passed",
 ]
+
+# 只做格式化，不开 lint 规则：这套代码里"为什么这么做"的注释密度很高，
+# 把 lint 打开会逼着人为了过检查去改注释或加 noqa。等真要接 CI 再说。
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+exclude = [".venv", ".tmp", "node_modules", "data", "log"]

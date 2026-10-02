@@ -62,7 +62,11 @@ def diff(
         raise ValueError("diff 需要 page 或 error 之一")
 
     # 一次成功就顺手把"失败"状态收干净——旧项目也是在这里发恢复通知的
-    if prev.consecutive_fails and prev.fail_alerted and prev.consecutive_fails >= cfg.max_consecutive_fails:
+    if (
+        prev.consecutive_fails
+        and prev.fail_alerted
+        and prev.consecutive_fails >= cfg.max_consecutive_fails
+    ):
         events.append(
             Event(
                 EventKind.ACCOUNT_RECOVERED,
@@ -168,7 +172,11 @@ def diff(
                 nickname=prev.nickname,
                 content_id=content_id,
                 # 带上 kind 与 web_url：这两条现在会推送，通知里给得出类型和链接
-                payload={"title": item.title, "kind": item.kind.value, "web_url": item.web_url},
+                payload={
+                    "title": item.title,
+                    "kind": item.kind.value,
+                    "web_url": item.web_url,
+                },
             )
         )
 
@@ -234,8 +242,10 @@ def diff(
     # `hidden_from_guest_at` 标记，访客列表为空是预期内的常态，不是"删光"。不这么判的话，
     # 那个账号每一轮都会满足这个条件，`all_gone_rounds` 会一直往上涨（虽然此刻没有可确认
     # 的条目、发不出事件，但等真有作品进入确认流程时，它会绕过"全体消失等 N 轮"的等待）。
-    all_gone = bool(prev.posts) and not current_ids and (
-        any(p.hidden_from_guest_at is None for p in prev.posts)
+    all_gone = (
+        bool(prev.posts)
+        and not current_ids
+        and (any(p.hidden_from_guest_at is None for p in prev.posts))
     )
     all_gone_rounds = prev.all_gone_rounds + 1 if all_gone else 0
 
@@ -246,7 +256,11 @@ def diff(
     budget = len(new_ids)  # 被新作品挤出窗口的条数不会超过本轮新增数
     ordered = sorted(
         disappeared_ids,
-        key=lambda cid: (posts.get(cid).created_at if posts.get(cid) and posts[cid].created_at else _EPOCH),
+        key=lambda cid: (
+            posts.get(cid).created_at
+            if posts.get(cid) and posts[cid].created_at
+            else _EPOCH
+        ),
     )
 
     for content_id in ordered:
@@ -299,7 +313,9 @@ def diff(
 
     for content_id in scrolled_out:
         posts.pop(content_id, None)
-        tombstones[content_id] = Tombstone(content_id=content_id, removed_at=now, reason=REASON_SCROLLED_OUT)
+        tombstones[content_id] = Tombstone(
+            content_id=content_id, removed_at=now, reason=REASON_SCROLLED_OUT
+        )
         events.append(
             Event(
                 EventKind.SCROLLED_OUT,
@@ -315,7 +331,9 @@ def diff(
                 "content_id": cid,
                 "title": (posts.get(cid).title if posts.get(cid) else ""),
                 "created_at": (
-                    posts[cid].created_at.isoformat() if posts.get(cid) and posts[cid].created_at else None
+                    posts[cid].created_at.isoformat()
+                    if posts.get(cid) and posts[cid].created_at
+                    else None
                 ),
                 "is_top": bool(posts.get(cid) and posts[cid].is_top),
             }
@@ -337,7 +355,7 @@ def diff(
 
     new_ids_ordered = sorted(
         new_ids,
-        key=lambda cid: (current[cid].created_at or _EPOCH),
+        key=lambda cid: current[cid].created_at or _EPOCH,
     )
 
     # ---- 漏检判定（时间连续性，非置顶项之间） ------------------------------
@@ -388,14 +406,19 @@ def diff(
                 )
             )
 
-    content_changed = bool(new_ids_ordered) or bool(confirmed) or bool(scrolled_out) or title_changed > 0
+    content_changed = (
+        bool(new_ids_ordered)
+        or bool(confirmed)
+        or bool(scrolled_out)
+        or title_changed > 0
+    )
 
     # ---- 裁剪已知列表：优先淘汰最旧的非置顶 --------------------------------
     if len(posts) > cfg.known_ids_max:
         overflow = len(posts) - cfg.known_ids_max
         candidates = sorted(
             (p for p in posts.values() if not p.is_top),
-            key=lambda p: (p.created_at or _EPOCH),
+            key=lambda p: p.created_at or _EPOCH,
         )
         for entry in candidates[:overflow]:
             posts.pop(entry.content_id, None)
@@ -487,7 +510,8 @@ def _on_failure(
 
     if fails >= cfg.max_consecutive_fails and not error.is_gate:
         cooldown_ok = (
-            last_alert is None or (now - last_alert).total_seconds() >= cfg.fail_cooldown
+            last_alert is None
+            or (now - last_alert).total_seconds() >= cfg.fail_cooldown
         )
         if cooldown_ok:
             events.append(
@@ -540,7 +564,11 @@ def _gap_days(
     只有拿不到发布时间（全新账号、或上游没给 `created_at`）时才退回观测时间。
     """
     newest = max(
-        (current[cid].created_at for cid in new_ids if current[cid].created_at is not None),
+        (
+            current[cid].created_at
+            for cid in new_ids
+            if current[cid].created_at is not None
+        ),
         default=None,
     )
     if newest is not None and prev.newest_seen_created_at is not None:
@@ -593,4 +621,10 @@ def gap_suspect(prev: AuthorState, page: Page) -> bool:
     )
 
 
-__all__ = ["diff", "gap_suspect", "REASON_CONFIRMED", "REASON_SCROLLED_OUT", "REASON_TRIMMED"]
+__all__ = [
+    "diff",
+    "gap_suspect",
+    "REASON_CONFIRMED",
+    "REASON_SCROLLED_OUT",
+    "REASON_TRIMMED",
+]

@@ -102,7 +102,9 @@ class MonitorLoop:
         if entries:
             self.log.info("users.loaded", count=len(entries), path=str(path))
         else:
-            self.log.warning("users.empty", path=str(path), hint="users.conf 为空或不存在")
+            self.log.warning(
+                "users.empty", path=str(path), hint="users.conf 为空或不存在"
+            )
         self._users = entries
         self._users_mtime = mtime
         return True
@@ -143,33 +145,55 @@ class MonitorLoop:
             self.archive_trigger.start_round()
 
         if not self._users:
-            self.log.warning("round.skipped", round=self._rounds, reason="no users configured")
+            self.log.warning(
+                "round.skipped", round=self._rounds, reason="no users configured"
+            )
             await self._run_self_check(started)
-            return {"checked": 0, "initialized": 0, "new": 0, "deleted": 0,
-                    "title_changed": 0, "failed": 0}
+            return {
+                "checked": 0,
+                "initialized": 0,
+                "new": 0,
+                "deleted": 0,
+                "title_changed": 0,
+                "failed": 0,
+            }
 
         if not self.gate.is_open():
             remaining = round(self.gate.remaining(), 1)
             self.log.warning(
-                "round.skipped", round=self._rounds, reason="gate closed",
-                code=self.gate.reason, remaining=remaining,
+                "round.skipped",
+                round=self._rounds,
+                reason="gate closed",
+                code=self.gate.reason,
+                remaining=remaining,
             )
             try:
                 self.store.record_round(
-                    now=started, results=[], gate_state=f"closed:{self.gate.reason}",
+                    now=started,
+                    results=[],
+                    gate_state=f"closed:{self.gate.reason}",
                     duration_ms=0,
                 )
             except sqlite3.Error as exc:
                 self._store_write_failed = True
-                self.log.error("state.write_failed", table="rounds",
-                               error=f"{type(exc).__name__}: {exc}"[:160])
+                self.log.error(
+                    "state.write_failed",
+                    table="rounds",
+                    error=f"{type(exc).__name__}: {exc}"[:160],
+                )
             # 闸门关着的时候**照样做自身检查并刷新快照**：磁盘满与上游不可用是两件独立的
             # 事，而"上游挂了"这段时间恰恰没人会盯着日志看。快照也照写——否则面板会一直显示
             # 上一次真实轮次的时间戳，看起来像进程已经死了，而它其实活得很好、只是被闸门挡住。
             await self._run_self_check(started)
             self.write_status_snapshot([])
-            return {"checked": 0, "initialized": 0, "new": 0, "deleted": 0,
-                    "title_changed": 0, "failed": 0}
+            return {
+                "checked": 0,
+                "initialized": 0,
+                "new": 0,
+                "deleted": 0,
+                "title_changed": 0,
+                "failed": 0,
+            }
 
         # 这一轮真的开始跑了（被跳过的轮次只会记 `round.skipped`，不会到这里）。
         # 带上轮次号：和 `round.done` 配对看，也能对上面板里的"本次运行第 N 轮"。
@@ -178,7 +202,9 @@ class MonitorLoop:
         states = self.store.load_authors()
         semaphore = asyncio.Semaphore(max(1, int(self.settings["MAX_CONCURRENT"])))
         tasks = [
-            asyncio.create_task(self._one(entry, states.get(entry.sec_user_id), semaphore))
+            asyncio.create_task(
+                self._one(entry, states.get(entry.sec_user_id), semaphore)
+            )
             for entry in self._users
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -186,10 +212,16 @@ class MonitorLoop:
         collected: list[RoundResult] = []
         for entry, result in zip(self._users, results):
             if isinstance(result, BaseException):
-                self.log.error("author.crashed", author=entry.sec_user_id, error=repr(result))
+                self.log.error(
+                    "author.crashed", author=entry.sec_user_id, error=repr(result)
+                )
                 collected.append(
-                    RoundResult(sec_user_id=entry.sec_user_id, nickname=entry.nickname, status="fail",
-                                error_code="INTERNAL")
+                    RoundResult(
+                        sec_user_id=entry.sec_user_id,
+                        nickname=entry.nickname,
+                        status="fail",
+                        error_code="INTERNAL",
+                    )
                 )
             else:
                 collected.append(result)
@@ -216,15 +248,26 @@ class MonitorLoop:
             return self.store.record_round(
                 now=started,
                 results=collected,
-                gate_state="open" if self.gate.is_open() else f"closed:{self.gate.reason}",
+                gate_state="open"
+                if self.gate.is_open()
+                else f"closed:{self.gate.reason}",
                 duration_ms=duration_ms,
             )
         except sqlite3.Error as exc:
             self._store_write_failed = True
-            self.log.error("state.write_failed", table="rounds",
-                           error=f"{type(exc).__name__}: {exc}"[:160])
-            return {"checked": len(collected), "initialized": 0, "new": 0, "deleted": 0,
-                    "title_changed": 0, "failed": 0}
+            self.log.error(
+                "state.write_failed",
+                table="rounds",
+                error=f"{type(exc).__name__}: {exc}"[:160],
+            )
+            return {
+                "checked": len(collected),
+                "initialized": 0,
+                "new": 0,
+                "deleted": 0,
+                "title_changed": 0,
+                "failed": 0,
+            }
 
     def _maintenance(self, started: datetime) -> None:
         try:
@@ -236,8 +279,11 @@ class MonitorLoop:
             )
         except sqlite3.Error as exc:
             self._store_write_failed = True
-            self.log.error("state.write_failed", table="maintenance",
-                           error=f"{type(exc).__name__}: {exc}"[:160])
+            self.log.error(
+                "state.write_failed",
+                table="maintenance",
+                error=f"{type(exc).__name__}: {exc}"[:160],
+            )
 
     # ------------------------------------------------------------------ 上游健康
     async def _refresh_upstream_status(self, now: datetime) -> None:
@@ -256,7 +302,10 @@ class MonitorLoop:
         interval = int(self.settings["UPSTREAM_STATUS_INTERVAL_SECONDS"])
         if interval <= 0:
             return
-        if self._upstream_status_at and time.monotonic() - self._upstream_status_at < interval:
+        if (
+            self._upstream_status_at
+            and time.monotonic() - self._upstream_status_at < interval
+        ):
             return
         self._upstream_status_at = time.monotonic()
         try:
@@ -268,8 +317,9 @@ class MonitorLoop:
             return
         except Exception as exc:  # noqa: BLE001 - 面板的一格读数不该让整轮崩掉
             self._mark_upstream_unavailable(type(exc).__name__, now)
-            self.log.warning("upstream.status_failed",
-                             error=f"{type(exc).__name__}: {exc}"[:160])
+            self.log.warning(
+                "upstream.status_failed", error=f"{type(exc).__name__}: {exc}"[:160]
+            )
             return
         self._upstream_status = summarize_upstream_status(data, checked_at=_iso(now))
 
@@ -335,7 +385,10 @@ class MonitorLoop:
                 Event(
                     EventKind.SELF_DEGRADED,
                     sec_user_id="",
-                    payload={"reason": reason, **{k: v for k, v in checks.items() if k != "path"}},
+                    payload={
+                        "reason": reason,
+                        **{k: v for k, v in checks.items() if k != "path"},
+                    },
                 ),
                 notifier=self.notifier,
                 dedup=self.dedup,
@@ -361,9 +414,13 @@ class MonitorLoop:
     ) -> RoundResult:
         async with semaphore:
             now = datetime.now(timezone.utc)
-            author = state or AuthorState(sec_user_id=entry.sec_user_id, nickname=entry.nickname)
+            author = state or AuthorState(
+                sec_user_id=entry.sec_user_id, nickname=entry.nickname
+            )
             if state is None:
-                author = self.store.ensure_author(entry.sec_user_id, entry.nickname, now)
+                author = self.store.ensure_author(
+                    entry.sec_user_id, entry.nickname, now
+                )
             elif entry.nickname and state.nickname != entry.nickname:
                 self.store.ensure_author(entry.sec_user_id, entry.nickname, now)
                 author = author.with_updates(nickname=entry.nickname)
@@ -480,7 +537,10 @@ class MonitorLoop:
             # `base_url` 是配置事实，后面的字段是主循环定期从 `system/status` 取的读数
             # （取不到时会带着 `ok: false` 与上次的值，见 `_refresh_upstream_status`）。
             # 面板只读这份快照，于是"显示上游健康"这件事不需要面板自己发请求。
-            "upstream": {"base_url": self.settings["DTK_BASE_URL"], **(self._upstream_status or {})},
+            "upstream": {
+                "base_url": self.settings["DTK_BASE_URL"],
+                **(self._upstream_status or {}),
+            },
             "self_check": dict(self._self_check),
             "archive": self._archive_snapshot(),
             "notify": {
@@ -493,7 +553,9 @@ class MonitorLoop:
                 "hidden_check": self.hidden_check is not None,
                 "archive_download": self.archive_trigger is not None,
             },
-            "users": sorted(entries, key=lambda item: item["nickname"] or item["sec_user_id"]),
+            "users": sorted(
+                entries, key=lambda item: item["nickname"] or item["sec_user_id"]
+            ),
         }
 
         path = self.settings.status_path
@@ -554,7 +616,8 @@ def summarize_upstream_status(
                 pool["total_active"] = _int_or_none(value)
             elif isinstance(value, Mapping):
                 pool[str(name)] = {
-                    str(state): _int_or_none(count) or 0 for state, count in value.items()
+                    str(state): _int_or_none(count) or 0
+                    for state, count in value.items()
                 }
 
     storage: dict[str, Any] = {}

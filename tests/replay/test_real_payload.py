@@ -18,7 +18,9 @@ from dywatch.diff import diff
 from dywatch.models import AuthorState, Content, Kind
 
 FIXTURES = Path(__file__).parent / "fixtures"
-REAL = json.loads((FIXTURES / "douyin_user_posts_real.json").read_text(encoding="utf-8"))
+REAL = json.loads(
+    (FIXTURES / "douyin_user_posts_real.json").read_text(encoding="utf-8")
+)
 PINNED_ID = "7328330582012841251"
 
 
@@ -116,6 +118,8 @@ def test_pinned_post_keeps_its_three_round_threshold_from_the_real_payload():
 
     # 下一轮：置顶那条不见了，另一条还在 → 只累计一轮，不确认
     next_page = Page(items=(keep,), cursor=None, has_more=False, raw_included=False)
-    events, state2 = diff(state, now=page.items[0].created_at, cfg=DiffConfig(), page=next_page)
+    events, state2 = diff(
+        state, now=page.items[0].created_at, cfg=DiffConfig(), page=next_page
+    )
     assert EventKind.POST_REMOVED not in [event.kind for event in events]
     assert state2.post(PINNED_ID).absent_rounds == 1

@@ -19,11 +19,11 @@ tail -f /opt/douyin-monitor/log/info/monitor.log    # 实时日志（应用侧�
 
 应用自己不做轮转。但配置**不装进 `/etc/logrotate.d`**，而是单独放：
 
-| 东西     | 位置                                 | 说明                                                |
-| -------- | ------------------------------------- | ------------------------------------------------------ |
-| 轮转配置 | `/etc/dywatch/logrotate.conf`         | 由 `deploy/logrotate.conf` 生成，改"留多久"改这里        |
-| 触发者   | `/etc/cron.d/dywatch`                 | 每小时第 17 分钟跑一次 `logrotate`                       |
-| 状态文件 | `/var/lib/dywatch/logrotate.status`   | 与系统 logrotate 完全隔离                                |
+| 东西     | 位置                                | 说明                                              |
+| -------- | ----------------------------------- | ------------------------------------------------- |
+| 轮转配置 | `/etc/dywatch/logrotate.conf`       | 由 `deploy/logrotate.conf` 生成，改"留多久"改这里 |
+| 触发者   | `/etc/cron.d/dywatch`               | 每小时第 17 分钟跑一次 `logrotate`                |
+| 状态文件 | `/var/lib/dywatch/logrotate.status` | 与系统 logrotate 完全隔离                         |
 
 节奏：`daily` + `maxsize 10M` → 跨天后第一次运行切一次（约等于每天一次），单
 文件涨过 10M 最多延迟 1 小时切；`rotate 14` + `compress` 保留 14 份。

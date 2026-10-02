@@ -139,9 +139,30 @@ def _int_or_none(raw: Any) -> int | None:
 
 
 #: `Retry-After` 里不该出现、但真出现时说明这不是我们预期的秒数（HTTP-date 里全是这些）。
-_RETRY_AFTER_DATE_HINT: Final[tuple[str, ...]] = (" ", ",", "GMT", "Mon", "Tue", "Wed", "Thu",
-                                                  "Fri", "Sat", "Sun", "Jan", "Feb", "Mar", "Apr",
-                                                  "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_RETRY_AFTER_DATE_HINT: Final[tuple[str, ...]] = (
+    " ",
+    ",",
+    "GMT",
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
 
 
 def retry_after_seconds(raw: Any) -> int | None:
@@ -218,7 +239,11 @@ def parse_content(node: Mapping[str, Any], *, raw_included: bool = False) -> Con
     author = node.get("author") if isinstance(node.get("author"), Mapping) else {}
     stats = node.get("stats") if isinstance(node.get("stats"), Mapping) else {}
     raw_tags = node.get("tags")
-    tags = raw_tags if isinstance(raw_tags, Sequence) and not isinstance(raw_tags, (str, bytes)) else []
+    tags = (
+        raw_tags
+        if isinstance(raw_tags, Sequence) and not isinstance(raw_tags, (str, bytes))
+        else []
+    )
 
     return Content(
         content_id=str(node.get("content_id") or ""),
@@ -244,7 +269,9 @@ def parse_content(node: Mapping[str, Any], *, raw_included: bool = False) -> Con
     )
 
 
-def parse_page(payload: Mapping[str, Any], *, raw_included: bool, task_id: str | None) -> Page:
+def parse_page(
+    payload: Mapping[str, Any], *, raw_included: bool, task_id: str | None
+) -> Page:
     """The `{items, cursor, has_more}` shape, shared by content lists and archive."""
     raw_items = payload.get("items")
     if raw_items is None:
@@ -386,8 +413,14 @@ class DtkClient:
         for attempt in range(1, max(1, attempts) + 1):
             try:
                 response = await self._client.request(
-                    method, url, params=query, json=json_body, headers=self._headers,
-                    timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT,
+                    method,
+                    url,
+                    params=query,
+                    json=json_body,
+                    headers=self._headers,
+                    timeout=timeout
+                    if timeout is not None
+                    else httpx.USE_CLIENT_DEFAULT,
                 )
             except httpx.HTTPError as exc:
                 last = exc
@@ -405,21 +438,28 @@ class DtkClient:
                 raise MonitorError(
                     "DTK_MALFORMED",
                     f"HTTP {response.status_code} 且响应不是 JSON",
-                    details={"url": url, "status": response.status_code,
-                             "body_head": response.text[:200]},
+                    details={
+                        "url": url,
+                        "status": response.status_code,
+                        "body_head": response.text[:200],
+                    },
                 ) from None
             if not isinstance(body, dict) or "success" not in body:
                 raise MonitorError(
                     "DTK_MALFORMED",
                     f"HTTP {response.status_code} 且响应不是 DTK 信封",
-                    details={"url": url, "keys": sorted(body)[:10] if isinstance(body, dict) else None},
+                    details={
+                        "url": url,
+                        "keys": sorted(body)[:10] if isinstance(body, dict) else None,
+                    },
                 )
             return response.status_code, body, response.headers
         raise MonitorError("DTK_UNREACHABLE", str(last))  # pragma: no cover
 
     @staticmethod
-    def _raise_for_error(body: Mapping[str, Any],
-                         headers: Mapping[str, str] | None = None) -> None:
+    def _raise_for_error(
+        body: Mapping[str, Any], headers: Mapping[str, str] | None = None
+    ) -> None:
         """把一个失败信封变成 `MonitorError`。
 
         `headers` 是可选的退路：`error.retry_after` 缺失时用 `Retry-After` 头
@@ -550,7 +590,9 @@ class DtkClient:
 
     async def identify_url(self, url: str) -> dict[str, Any]:
         """Share link → `{platform, resource, resource_id, ...}`. Costs no identity."""
-        status, body, headers = await self._request("/api/v1/tools/parse-url", {"url": url})
+        status, body, headers = await self._request(
+            "/api/v1/tools/parse-url", {"url": url}
+        )
         if not body.get("success"):
             self._raise_for_error(body, headers)
         data = body.get("data")
@@ -575,10 +617,14 @@ class DtkClient:
             self._raise_for_error(body, headers)
         data = body.get("data")
         if not isinstance(data, Mapping):
-            raise MonitorError("CONTRACT_VIOLATION", "system/status 返回的 data 不是对象")
+            raise MonitorError(
+                "CONTRACT_VIOLATION", "system/status 返回的 data 不是对象"
+            )
         return dict(data)
 
-    async def archive_of_author(self, sec_user_id: str, *, limit: int = 50) -> dict[str, ArchiveItem]:
+    async def archive_of_author(
+        self, sec_user_id: str, *, limit: int = 50
+    ) -> dict[str, ArchiveItem]:
         """Every archived post of one author, keyed by content_id. Zero identity cost."""
         payload, _status, _task = await self._call(
             "/api/v1/archive",
@@ -609,7 +655,9 @@ class DtkClient:
     async def archive_item(self, content_id: str) -> ArchiveItem | None:
         """One archived post, or None when this instance never saw it."""
         try:
-            status, body, headers = await self._request(f"/api/v1/archive/douyin/{content_id}")
+            status, body, headers = await self._request(
+                f"/api/v1/archive/douyin/{content_id}"
+            )
         except MonitorError:
             raise
         if not body.get("success"):
@@ -687,7 +735,9 @@ class DtkClient:
             self._raise_for_error(body, headers)
         data = body.get("data")
         if not isinstance(data, Mapping):
-            raise MonitorError("CONTRACT_VIOLATION", "downloads/storage 返回的 data 不是对象")
+            raise MonitorError(
+                "CONTRACT_VIOLATION", "downloads/storage 返回的 data 不是对象"
+            )
         return dict(data)
 
 

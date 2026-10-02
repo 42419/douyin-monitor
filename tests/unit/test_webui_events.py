@@ -32,6 +32,7 @@ ID_B = "MS4wLjABAAAAbbbb"
 
 # --------------------------------------------------------------------- 脚手架
 
+
 def make_settings(tmp_path: Path, **overrides: str) -> Settings:
     env = {
         "MONITOR_HOME": str(tmp_path),
@@ -58,10 +59,17 @@ def rows(*triples: tuple[float, str, str]) -> list[tuple[datetime, Event]]:
     """`(小时前, sec_user_id, 类型)` → 事件行。"""
     out = []
     for hours_ago, uid, kind in triples:
-        out.append((
-            NOW - timedelta(hours=hours_ago),
-            Event(EventKind(kind), sec_user_id=uid, nickname="x", payload={"code": "X"}),
-        ))
+        out.append(
+            (
+                NOW - timedelta(hours=hours_ago),
+                Event(
+                    EventKind(kind),
+                    sec_user_id=uid,
+                    nickname="x",
+                    payload={"code": "X"},
+                ),
+            )
+        )
     return out
 
 
@@ -91,6 +99,7 @@ def get(url: str) -> tuple[int, str]:
 
 # --------------------------------------------------------------------- 枚举覆盖
 
+
 def test_every_event_kind_belongs_to_exactly_one_group():
     """16 种事件分到 5 个类别里，**不漏不重**。
 
@@ -103,7 +112,9 @@ def test_every_event_kind_belongs_to_exactly_one_group():
             assert kinds == (), "「全部」不该显式列出类型——它是'不过滤'，不是一份清单"
             continue
         seen.extend(kinds)
-    assert sorted(kind.value for kind in seen) == sorted(kind.value for kind in EventKind)
+    assert sorted(kind.value for kind in seen) == sorted(
+        kind.value for kind in EventKind
+    )
     assert len(seen) == len(set(seen)), "有事件被分到了两个类别里"
 
 
@@ -115,6 +126,7 @@ def test_every_range_is_reachable_and_ordered():
 
 
 # --------------------------------------------------------------------- 过滤
+
 
 @pytest.mark.parametrize(
     "query",
@@ -142,7 +154,7 @@ def test_unknown_kind_is_ignored_but_known_kind_wins_over_group():
 def test_kinds_for_group_lists_every_member():
     parsed = webui.parse_event_filters({"group": ["system"]})
     assert webui.kinds_for(parsed) == ("upstream_degraded", "self_degraded")
-    assert webui.kinds_for(webui.parse_event_filters({})) == ()   # 「全部」== 不过滤
+    assert webui.kinds_for(webui.parse_event_filters({})) == ()  # 「全部」== 不过滤
 
 
 def test_query_string_keeps_defaults_out_and_round_trips():
@@ -156,24 +168,36 @@ def test_query_string_keeps_defaults_out_and_round_trips():
 
 # --------------------------------------------------------------------- 摘要文案
 
+
 def test_summarize_covers_every_kind_without_raising():
     """每种事件都得给出非空的人话——空白会让人以为"这条事件没有载荷"。"""
     payloads = {
-        EventKind.NEW_POST: {"content": {"title": "标题", "content_id": "1"}, "gap_days": 3},
+        EventKind.NEW_POST: {
+            "content": {"title": "标题", "content_id": "1"},
+            "gap_days": 3,
+        },
         EventKind.POST_REMOVED: {"removed": [{"content_id": "1", "title": "没了"}]},
-        EventKind.ALL_GONE: {"removed": [{"content_id": "1", "title": "没了"}], "all_gone": True},
+        EventKind.ALL_GONE: {
+            "removed": [{"content_id": "1", "title": "没了"}],
+            "all_gone": True,
+        },
         EventKind.REVIVED: {"title": "回来了"},
         EventKind.TITLE_CHANGED: {"old": "旧", "new": "新"},
         EventKind.HIDDEN_FROM_GUEST: {"hidden": [{"content_id": "1", "title": "隐"}]},
-        EventKind.GAP_DETECTED: {"oldest_in_page": "2026-09-01T00:00:00+00:00",
-                                 "previous_newest": "2026-08-30T00:00:00+00:00",
-                                 "fetch_count": 20},
+        EventKind.GAP_DETECTED: {
+            "oldest_in_page": "2026-09-01T00:00:00+00:00",
+            "previous_newest": "2026-08-30T00:00:00+00:00",
+            "fetch_count": 20,
+        },
         EventKind.NEVER_SEEN: {"rounds": 90},
         EventKind.STALE_NO_UPDATE: {"days": 20},
         EventKind.ACCOUNT_FAILED: {"fails": 3, "code": "403", "message": "没权限"},
         EventKind.ACCOUNT_RECOVERED: {"fails": 3},
-        EventKind.UPSTREAM_DEGRADED: {"code": "RATE_LIMITED", "message": "限流",
-                                      "gate_seconds": 600},
+        EventKind.UPSTREAM_DEGRADED: {
+            "code": "RATE_LIMITED",
+            "message": "限流",
+            "gate_seconds": 600,
+        },
         EventKind.SELF_DEGRADED: {"reason": "disk_low", "free_mb": 10},
         EventKind.INITIALIZED: {"count": 20},
         EventKind.SCROLLED_OUT: {"content_id": "123"},
@@ -184,14 +208,22 @@ def test_summarize_covers_every_kind_without_raising():
         text = webui.summarize_event(kind.value, payload)
         assert text.strip(), kind
     # 几个具体的：错误码要出现（排障第一眼看的就是它）
-    assert "403" in webui.summarize_event("account_failed", payloads[EventKind.ACCOUNT_FAILED])
-    assert "磁盘" in webui.summarize_event("self_degraded", payloads[EventKind.SELF_DEGRADED])
-    assert "→" in webui.summarize_event("title_changed", payloads[EventKind.TITLE_CHANGED])
+    assert "403" in webui.summarize_event(
+        "account_failed", payloads[EventKind.ACCOUNT_FAILED]
+    )
+    assert "磁盘" in webui.summarize_event(
+        "self_degraded", payloads[EventKind.SELF_DEGRADED]
+    )
+    assert "→" in webui.summarize_event(
+        "title_changed", payloads[EventKind.TITLE_CHANGED]
+    )
 
 
 def test_summarize_flattens_and_clips_hostile_titles():
     """载荷里的标题来自平台：换行会把"一行一条"的列表撑开，长标题会挤掉推送状态。"""
-    text = webui.summarize_event("new_post", {"content": {"title": "第一行\n第二行\r第三行"}})
+    text = webui.summarize_event(
+        "new_post", {"content": {"title": "第一行\n第二行\r第三行"}}
+    )
     assert "\n" not in text and "\r" not in text
     long = webui.summarize_event("new_post", {"content": {"title": "长" * 200}})
     assert len(long) <= 47 and long.endswith("…")
@@ -204,6 +236,7 @@ def test_summarize_unknown_shape_falls_back_to_json_not_blank():
 
 
 # --------------------------------------------------------------------- 分桶
+
 
 def test_bucket_ticks_drops_points_outside_the_window():
     """夹到首尾格会在图上造出一个不存在的高峰，而这张图就是用来"看哪个小时出的问题"的。"""
@@ -219,7 +252,9 @@ def test_bucket_ticks_drops_points_outside_the_window():
 
 def test_bucket_ticks_puts_the_last_edge_inside_the_last_bucket():
     since, until = NOW - timedelta(hours=1), NOW
-    buckets = webui.bucket_ticks([(until, "new_post")], since=since, until=until, count=4)
+    buckets = webui.bucket_ticks(
+        [(until, "new_post")], since=since, until=until, count=4
+    )
     assert buckets["good"] == [0, 0, 0, 1]
 
 
@@ -231,7 +266,9 @@ def test_events_chart_payload_sums_to_the_window_total():
         (since + timedelta(hours=20), "hidden_from_guest"),
         (since + timedelta(hours=20), "self_degraded"),
     ]
-    payload = webui.events_chart_payload(ticks, since=since, until=until, count=24, hourly=True)
+    payload = webui.events_chart_payload(
+        ticks, since=since, until=until, count=24, hourly=True
+    )
     assert [item["label"] for item in payload["datasets"]] == list(
         webui.charts.TONES[key][0] for key in webui.charts.TONE_ORDER
     )
@@ -239,13 +276,24 @@ def test_events_chart_payload_sums_to_the_window_total():
     assert len(payload["labels"]) == 24
     # 静默事件（对访客不可见）不该和"失败"共用一档，否则图上只剩两种颜色
     tones = {item["label"]: sum(item["data"]) for item in payload["datasets"]}
-    assert tones["正向"] == 1 and tones["失败"] == 1 and tones["需注意"] == 1 and tones["静默"] == 1
+    assert (
+        tones["正向"] == 1
+        and tones["失败"] == 1
+        and tones["需注意"] == 1
+        and tones["静默"] == 1
+    )
 
 
 def test_metrics_chart_payload_keeps_gaps_as_null():
     """缺值是断点、不是 0：写 0 会在曲线上造出一个平台从没说过的悬崖。"""
     series = [
-        {"hour": NOW - timedelta(hours=1), "digg": 10, "comment": None, "share": 1, "collect": 2},
+        {
+            "hour": NOW - timedelta(hours=1),
+            "digg": 10,
+            "comment": None,
+            "share": 1,
+            "collect": 2,
+        },
         {"hour": NOW, "digg": None, "comment": 3, "share": 0, "collect": None},
     ]
     payload = webui.metrics_chart_payload(series)
@@ -255,13 +303,17 @@ def test_metrics_chart_payload_keeps_gaps_as_null():
 
 # --------------------------------------------------------------------- 投递状态
 
+
 def test_delivery_state_separates_designed_silence_from_a_lost_push():
     """`静默`（设计如此）和`未推送`（该推没推成）必须分开：混成一个灰点，
     就再也看不出通知链路到底有没有在工作。"""
     silent = {"kind": "hidden_from_guest", "delivery": {}}
     lost = {"kind": "new_post", "delivery": {}}
     sent = {"kind": "new_post", "delivery": {"sent": ["dingtalk"], "failed": {}}}
-    failed = {"kind": "new_post", "delivery": {"sent": [], "failed": {"dingtalk": "HTTP 500"}}}
+    failed = {
+        "kind": "new_post",
+        "delivery": {"sent": [], "failed": {"dingtalk": "HTTP 500"}},
+    }
     assert webui.delivery_state(silent) == "silent"
     assert webui.delivery_state(lost) == "none"
     assert webui.delivery_state(sent) == "sent"
@@ -270,13 +322,17 @@ def test_delivery_state_separates_designed_silence_from_a_lost_push():
 
 # --------------------------------------------------------------------- 页面
 
+
 def test_events_page_renders_rows_chart_and_delivery_state(tmp_path):
     settings = make_settings(tmp_path)
-    seed(settings, rows(
-        (1, ID_A, "new_post"),
-        (2, ID_B, "account_failed"),
-        (30, ID_A, "post_removed"),      # 24 小时窗口外
-    ))
+    seed(
+        settings,
+        rows(
+            (1, ID_A, "new_post"),
+            (2, ID_B, "account_failed"),
+            (30, ID_A, "post_removed"),  # 24 小时窗口外
+        ),
+    )
 
     with panel(settings) as base:
         status, body = get(base + "/events")
@@ -308,11 +364,14 @@ def test_events_fragment_is_not_a_full_page(tmp_path):
 def test_author_filter_narrows_chart_and_list_together(tmp_path):
     """图和列表必须用同一组过滤条件：柱子上 5 根、列表里 1 条，看起来像采集漏了数据。"""
     settings = make_settings(tmp_path)
-    seed(settings, rows(
-        (1, ID_A, "new_post"),
-        (2, ID_B, "account_failed"),
-        (3, ID_B, "new_post"),
-    ))
+    seed(
+        settings,
+        rows(
+            (1, ID_A, "new_post"),
+            (2, ID_B, "account_failed"),
+            (3, ID_B, "new_post"),
+        ),
+    )
     view = webui.build_events_view(settings, filters(author=ID_A))
     assert view["total_rows"] == 1
     assert view["chart_total"] == 1
@@ -355,8 +414,12 @@ def test_events_page_escapes_a_payload_that_tries_to_close_the_script_tag(tmp_pa
     store.migrate()
     store.ensure_author(ID_A, "老徐烤串", NOW)
     store.record_system_event(
-        Event(EventKind.NEW_POST, sec_user_id=ID_A, nickname="老徐烤串",
-              payload={"content": {"title": "</script><img src=x onerror=alert(1)>"}}),
+        Event(
+            EventKind.NEW_POST,
+            sec_user_id=ID_A,
+            nickname="老徐烤串",
+            payload={"content": {"title": "</script><img src=x onerror=alert(1)>"}},
+        ),
         now=NOW - timedelta(minutes=5),
     )
     store.close()
@@ -371,7 +434,7 @@ def test_events_page_escapes_a_payload_that_tries_to_close_the_script_tag(tmp_pa
 
 def test_events_page_hides_nothing_when_the_window_is_empty(tmp_path):
     settings = make_settings(tmp_path)
-    seed(settings, rows((40, ID_A, "new_post")))     # 只在 7 天窗口里
+    seed(settings, rows((40, ID_A, "new_post")))  # 只在 7 天窗口里
     with panel(settings) as base:
         status, body = get(base + "/events?range=24h")
         assert status == 200 and "这个窗口里没有事件" in body

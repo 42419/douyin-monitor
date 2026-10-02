@@ -84,9 +84,18 @@ def _human_duration(value: Any) -> str:
     return f"{minutes} 分钟"
 
 
-def _kv(label: str, value: str, *, dot: str | None = None, note: str = "", mono: bool = False) -> str:
+def _kv(
+    label: str,
+    value: str,
+    *,
+    dot: str | None = None,
+    note: str = "",
+    mono: bool = False,
+) -> str:
     """一格读数。`dot` 给颜色变量名；`mono` 给数字用等宽字体（表格式对齐）。"""
-    dot_html = f'<span class="kv-dot" style="background:var({dot})"></span>' if dot else ""
+    dot_html = (
+        f'<span class="kv-dot" style="background:var({dot})"></span>' if dot else ""
+    )
     cls = "kv-value mono" if mono else "kv-value"
     note_html = f'<div class="kv-note">{_escape_html(note)}</div>' if note else ""
     return (
@@ -130,7 +139,9 @@ def _upstream_html(upstream: Mapping[str, Any]) -> str:
         )
     )
     items.append(_kv("DTK 版本", str(upstream.get("version") or "—"), mono=True))
-    items.append(_kv("上游已运行", _human_duration(upstream.get("uptime_seconds")), mono=True))
+    items.append(
+        _kv("上游已运行", _human_duration(upstream.get("uptime_seconds")), mono=True)
+    )
 
     components = upstream.get("components")
     if isinstance(components, Mapping):
@@ -165,7 +176,11 @@ def _upstream_html(upstream: Mapping[str, Any]) -> str:
                 if _as_int(value.get(state))
             ]
             items.append(
-                _kv(_POOL_LABELS.get(name, name) + "身份池", " · ".join(parts) or "空", mono=True)
+                _kv(
+                    _POOL_LABELS.get(name, name) + "身份池",
+                    " · ".join(parts) or "空",
+                    mono=True,
+                )
             )
         total = _as_int(pool.get("total_active"))
         if total:
@@ -177,7 +192,11 @@ def _upstream_html(upstream: Mapping[str, Any]) -> str:
         items.append(
             _kv(
                 "上游存储",
-                ("身份 " + str(_as_int(identities)) + " 个 · " if identities is not None else "")
+                (
+                    "身份 " + str(_as_int(identities)) + " 个 · "
+                    if identities is not None
+                    else ""
+                )
                 + _human_bytes(storage.get("db_size_bytes")),
                 mono=True,
             )
@@ -201,6 +220,7 @@ def _upstream_html(upstream: Mapping[str, Any]) -> str:
 
 
 # =================== 页面 ===================
+
 
 def render_page(settings: Settings) -> str:
     stale_days = int(settings.get("STALE_FALLBACK_DAYS", 14))
@@ -242,7 +262,9 @@ def render_page(settings: Settings) -> str:
     else:
         list_html = (
             '<div class="section-title">账号列表</div>'
-            '<div class="list">' + "".join(_render_row(user, stale_days) for user in users) + "</div>"
+            '<div class="list">'
+            + "".join(_render_row(user, stale_days) for user in users)
+            + "</div>"
         )
 
     meta = "".join(

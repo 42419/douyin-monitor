@@ -138,7 +138,9 @@ def _link(label: str, url: Any) -> str | None:
     return _item(f"[{label}]({target})") if _URL_OK.match(target) else None
 
 
-def _titles(template: str, plain_name: str, md_name: str, **fields: Any) -> tuple[str, str]:
+def _titles(
+    template: str, plain_name: str, md_name: str, **fields: Any
+) -> tuple[str, str]:
     """同一句话的两种形态：
 
     - **subject**：进通知栏、Bark 标题、Server 酱标题，必须是**纯文本**（不能有 `\\*` 这种
@@ -273,12 +275,17 @@ def _build(
         if content is None:
             # 防御：没有 content 也要给一条**结构完整**的通知（曾经这里直接返回昵称，
             # 那是个裸段落行——钉钉会把它折叠掉，出来的通知等于没有正文）
-            subject, heading = _titles(msg.T_NEW_POST, plain_name, md_name,
-                                       kind_label=msg.KIND_UNKNOWN)
-            return subject, _card(heading, [_item("上游没有返回作品详情，这一轮只有事件记录")])
+            subject, heading = _titles(
+                msg.T_NEW_POST, plain_name, md_name, kind_label=msg.KIND_UNKNOWN
+            )
+            return subject, _card(
+                heading, [_item("上游没有返回作品详情，这一轮只有事件记录")]
+            )
 
         kind_label = msg.kind_label(content.kind, content.image_count)
-        subject, heading = _titles(msg.T_NEW_POST, plain_name, md_name, kind_label=kind_label)
+        subject, heading = _titles(
+            msg.T_NEW_POST, plain_name, md_name, kind_label=kind_label
+        )
 
         published = msg.fmt_time(content.created_at)
         if payload.get("gap_days") is not None:
@@ -298,7 +305,10 @@ def _build(
         tags = msg.fmt_tags(content.tags)
         if tags:
             rows.append(_field(msg.ROW_TAGS, tags))
-        for link in (_link(msg.LINK_COVER, content.cover_url), _link(msg.LINK_POST, content.web_url)):
+        for link in (
+            _link(msg.LINK_COVER, content.cover_url),
+            _link(msg.LINK_POST, content.web_url),
+        ):
             if link:
                 rows.append(link)
         return subject, _card(heading, rows)
@@ -323,13 +333,18 @@ def _build(
 
     if kind is EventKind.REVIVED:
         subject, heading = _titles(msg.T_REVIVED, plain_name, md_name)
-        rows = [_field(msg.ROW_TITLE, _title(payload.get("title"))), *_context_rows(payload)]
+        rows = [
+            _field(msg.ROW_TITLE, _title(payload.get("title"))),
+            *_context_rows(payload),
+        ]
         return subject, _card(heading, rows)
 
     if kind is EventKind.HIDDEN_FROM_GUEST:
         # 静默事件（只落库 + 面板可见）：这里保留可读形态是为了日志与排障
         hidden = _entries(payload, "hidden")
-        subject, heading = _titles(msg.T_HIDDEN_FROM_GUEST, plain_name, md_name, count=len(hidden))
+        subject, heading = _titles(
+            msg.T_HIDDEN_FROM_GUEST, plain_name, md_name, count=len(hidden)
+        )
         return subject, _card(heading, _list_rows(hidden), msg.NOTE_HIDDEN_FROM_GUEST)
 
     if kind is EventKind.TITLE_CHANGED:
@@ -345,7 +360,9 @@ def _build(
         subject, heading = _titles(msg.T_GAP, plain_name, md_name)
         rows = [
             _field(msg.ROW_OLDEST, msg.fmt_time(_parse(payload.get("oldest_in_page")))),
-            _field(msg.ROW_PREVIOUS, msg.fmt_time(_parse(payload.get("previous_newest")))),
+            _field(
+                msg.ROW_PREVIOUS, msg.fmt_time(_parse(payload.get("previous_newest")))
+            ),
         ]
         note = msg.NOTE_GAP.format(fetch_count=payload.get("fetch_count"))
         return subject, _card(heading, rows, note)
@@ -359,19 +376,33 @@ def _build(
         return subject, _card(heading, rows, msg.NOTE_NEVER_SEEN)
 
     if kind is EventKind.ACCOUNT_FAILED:
-        subject, heading = _titles(msg.T_ACCOUNT_FAILED, plain_name, md_name,
-                                   fails=_val(payload.get("fails") or "?", 10))
+        subject, heading = _titles(
+            msg.T_ACCOUNT_FAILED,
+            plain_name,
+            md_name,
+            fails=_val(payload.get("fails") or "?", 10),
+        )
         rows = [
             _field(msg.ROW_FAILS, _val(payload.get("fails") or "?", 10)),
             _field(msg.ROW_CODE, _val(payload.get("code") or "?", 40)),
-            _field(msg.ROW_DETAIL, _val(payload.get("message") or "（上游没有给出详情）")),
+            _field(
+                msg.ROW_DETAIL, _val(payload.get("message") or "（上游没有给出详情）")
+            ),
         ]
-        note = msg.NOTE_CONFIG.format(code=_val(payload.get("code"), 40)) if payload.get("config") else ""
+        note = (
+            msg.NOTE_CONFIG.format(code=_val(payload.get("code"), 40))
+            if payload.get("config")
+            else ""
+        )
         return subject, _card(heading, rows, note)
 
     if kind is EventKind.ACCOUNT_RECOVERED:
         subject, heading = _titles(msg.T_ACCOUNT_RECOVERED, plain_name, md_name)
-        rows = [_item(f"此前连续失败 {_val(payload.get('fails') or '?', 10)} 次，本轮已成功读取")]
+        rows = [
+            _item(
+                f"此前连续失败 {_val(payload.get('fails') or '?', 10)} 次，本轮已成功读取"
+            )
+        ]
         return subject, _card(heading, rows)
 
     if kind is EventKind.STALE_NO_UPDATE:
@@ -390,8 +421,10 @@ def _build(
         rows = [
             _field(msg.ROW_CODE, _val(payload.get("code") or "?", 40)),
             _field(msg.ROW_ROUNDS, _val(payload.get("rounds") or "?", 10)),
-            _field(msg.ROW_IMPACT,
-                   f"全局闸门关闭 {_val(payload.get('gate_seconds') or '?', 10)} 秒，本轮整体跳过"),
+            _field(
+                msg.ROW_IMPACT,
+                f"全局闸门关闭 {_val(payload.get('gate_seconds') or '?', 10)} 秒，本轮整体跳过",
+            ),
         ]
         return subject, _card(heading, rows, msg.NOTE_GATE)
 
@@ -404,7 +437,9 @@ def _build(
     # 一行并转义，否则标题里的反引号/竖线会直接改写这条日志的 markdown
     subject = f"[{kind.value}] {plain_name}"
     heading = f"[{kind.value}] {md_name}"
-    return subject, _card(heading, [_item(f"载荷：{_val(payload, 200) if payload else '（无额外字段）'}")])
+    return subject, _card(
+        heading, [_item(f"载荷：{_val(payload, 200) if payload else '（无额外字段）'}")]
+    )
 
 
 def render_probe() -> Message:

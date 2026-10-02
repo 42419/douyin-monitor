@@ -46,7 +46,9 @@ class StructuredLogger:
         if not self._log.isEnabledFor(level):
             return
         if fields:
-            rendered = " ".join(f"{key}={_short(value)}" for key, value in fields.items())
+            rendered = " ".join(
+                f"{key}={_short(value)}" for key, value in fields.items()
+            )
             self._log.log(level, "%s %s", event, rendered)
         else:
             self._log.log(level, "%s", event)
@@ -65,7 +67,9 @@ class StructuredLogger:
 
     def exception(self, event: str, **fields: Any) -> None:
         if fields:
-            rendered = " ".join(f"{key}={_short(value)}" for key, value in fields.items())
+            rendered = " ".join(
+                f"{key}={_short(value)}" for key, value in fields.items()
+            )
             self._log.exception("%s %s", event, rendered)
         else:
             self._log.exception("%s", event)
@@ -101,14 +105,20 @@ def setup_logging(settings: Settings) -> tuple[StructuredLogger, logging.Logger]
         logger.removeHandler(handler)
         handler.close()
 
-    fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", "%Y-%m-%d %H:%M:%S")
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-7s %(message)s", "%Y-%m-%d %H:%M:%S"
+    )
 
-    info_handler = logging.FileHandler(log_dir / "info" / "monitor.log", encoding="utf-8")
+    info_handler = logging.FileHandler(
+        log_dir / "info" / "monitor.log", encoding="utf-8"
+    )
     info_handler.setLevel(logging.INFO)
     info_handler.setFormatter(fmt)
     logger.addHandler(info_handler)
 
-    debug_handler = logging.FileHandler(log_dir / "debug" / "monitor.log", encoding="utf-8")
+    debug_handler = logging.FileHandler(
+        log_dir / "debug" / "monitor.log", encoding="utf-8"
+    )
     debug_handler.setLevel(logging.DEBUG)
     debug_handler.setFormatter(fmt)
     logger.addHandler(debug_handler)
@@ -207,7 +217,11 @@ class Runtime:
                 else "关闭（新作品不触发媒体下载）"
             ),
             f"  推送渠道      : "
-            + ("静默模式（不推送）" if self.settings["SILENT_MODE"] else ", ".join(self.notifier.names) or "（无）"),
+            + (
+                "静默模式（不推送）"
+                if self.settings["SILENT_MODE"]
+                else ", ".join(self.notifier.names) or "（无）"
+            ),
             f"  隐藏作品核验  : "
             + (
                 f"开启（身份 {str(self.settings['PINNED_IDENTITY_ID'])[:8]}…，"
@@ -236,7 +250,9 @@ def build_runtime(settings: Settings, *, logger: StructuredLogger) -> Runtime:
     pacer = RequestPacer(
         float(settings["REQUEST_INTERVAL_MIN"]), float(settings["REQUEST_INTERVAL_MAX"])
     )
-    waiter = RoundWaiter(int(settings["POLL_INTERVAL_MIN"]), int(settings["POLL_INTERVAL_MAX"]))
+    waiter = RoundWaiter(
+        int(settings["POLL_INTERVAL_MIN"]), int(settings["POLL_INTERVAL_MAX"])
+    )
     gate = GlobalGate(
         default_seconds=60,
         backoff_after=int(settings["BACKOFF_AFTER"]),

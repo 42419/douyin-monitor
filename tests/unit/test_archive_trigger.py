@@ -63,7 +63,9 @@ class Pacer:
 
 
 class Client:
-    def __init__(self, *, fail: Exception | None = None, pin_fail: Exception | None = None) -> None:
+    def __init__(
+        self, *, fail: Exception | None = None, pin_fail: Exception | None = None
+    ) -> None:
         self.calls: list[tuple[str, str]] = []
         self._fail = fail
         self._pin_fail = pin_fail
@@ -72,8 +74,13 @@ class Client:
         self.calls.append(("start", content_id))
         if self._fail is not None:
             raise self._fail
-        return {"download_id": f"d-{content_id}", "task_id": "t1", "state": "queued",
-                "archived": True, "reused": None}
+        return {
+            "download_id": f"d-{content_id}",
+            "task_id": "t1",
+            "state": "queued",
+            "archived": True,
+            "reused": None,
+        }
 
     async def pin_download(self, download_id: str, pinned: bool) -> dict[str, Any]:
         self.calls.append(("pin", download_id))
@@ -82,10 +89,19 @@ class Client:
         return {"download_id": download_id, "pinned": pinned}
 
 
-def make_trigger(client: Client, *, pin: bool = False, max_per_round: int = 10,
-                 pacer: Pacer | None = None, logger: Logger | None = None) -> ArchiveTrigger:
+def make_trigger(
+    client: Client,
+    *,
+    pin: bool = False,
+    max_per_round: int = 10,
+    pacer: Pacer | None = None,
+    logger: Logger | None = None,
+) -> ArchiveTrigger:
     return ArchiveTrigger(
-        client=client, pacer=pacer or Pacer(), pin=pin, max_per_round=max_per_round,
+        client=client,
+        pacer=pacer or Pacer(),
+        pin=pin,
+        max_per_round=max_per_round,
         logger=logger or Logger(),
     )
 
@@ -96,17 +112,20 @@ def new_post(content_id: str, sec_user_id: str = "u1") -> Event:
 
 # --------------------------------------------------------------------- 触发范围
 
+
 async def test_only_new_post_events_are_queued():
     client, logger = Client(), Logger()
     trigger = make_trigger(client, logger=logger)
 
-    await trigger.trigger([
-        new_post("c1"),
-        Event(EventKind.POST_REMOVED, sec_user_id="u1", content_id="c2"),
-        Event(EventKind.TITLE_CHANGED, sec_user_id="u1", content_id="c3"),
-        Event(EventKind.REVIVED, sec_user_id="u1", content_id="c4"),
-        new_post("c5"),
-    ])
+    await trigger.trigger(
+        [
+            new_post("c1"),
+            Event(EventKind.POST_REMOVED, sec_user_id="u1", content_id="c2"),
+            Event(EventKind.TITLE_CHANGED, sec_user_id="u1", content_id="c3"),
+            Event(EventKind.REVIVED, sec_user_id="u1", content_id="c4"),
+            new_post("c5"),
+        ]
+    )
 
     assert [cid for _kind, cid in client.calls] == ["c1", "c5"]
 
@@ -114,7 +133,9 @@ async def test_only_new_post_events_are_queued():
 async def test_event_without_content_id_is_ignored():
     client = Client()
     trigger = make_trigger(client)
-    await trigger.trigger([Event(EventKind.NEW_POST, sec_user_id="u1", content_id=None)])
+    await trigger.trigger(
+        [Event(EventKind.NEW_POST, sec_user_id="u1", content_id=None)]
+    )
     assert client.calls == []
 
 
@@ -129,6 +150,7 @@ async def test_same_content_id_is_queued_once():
 
 
 # --------------------------------------------------------------------- 节奏
+
 
 async def test_every_request_goes_through_the_pacer():
     pacer = Pacer()
@@ -165,6 +187,7 @@ async def test_pin_failure_does_not_label_the_download_as_failed():
 
 
 # --------------------------------------------------------------------- 不丢档
+
 
 async def test_invalid_param_drops_the_item_without_retrying():
     """这条作品确实没有可下载的媒体，重试一百次也一样。"""
@@ -204,7 +227,10 @@ async def test_item_is_given_up_after_max_attempts():
         await trigger.trigger([new_post("c1")])
 
     assert trigger.pending == 0
-    assert logger.events("archive.download_given_up")[0]["attempts"] == ARCHIVE_MAX_ATTEMPTS
+    assert (
+        logger.events("archive.download_given_up")[0]["attempts"]
+        == ARCHIVE_MAX_ATTEMPTS
+    )
 
 
 async def test_unexpected_client_error_still_never_propagates():
@@ -224,7 +250,9 @@ async def test_cancellation_is_not_swallowed():
     import asyncio
 
     class CancellingClient(Client):
-        async def start_download(self, content_id: str, **kwargs: Any) -> dict[str, Any]:
+        async def start_download(
+            self, content_id: str, **kwargs: Any
+        ) -> dict[str, Any]:
             raise asyncio.CancelledError()
 
     trigger = make_trigger(CancellingClient())
@@ -234,8 +262,11 @@ async def test_cancellation_is_not_swallowed():
 
 # --------------------------------------------------------------------- 退避
 
+
 async def test_capacity_failure_mutes_the_whole_path(monkeypatch):
-    client = Client(fail=MonitorError("QUEUE_FULL", "storage at capacity", retry_after=300))
+    client = Client(
+        fail=MonitorError("QUEUE_FULL", "storage at capacity", retry_after=300)
+    )
     logger = Logger()
     trigger = make_trigger(client, logger=logger)
 
@@ -273,6 +304,7 @@ async def test_config_failure_mutes_for_an_hour():
 
 
 # --------------------------------------------------------------------- 预算
+
 
 async def test_budget_is_per_round_not_per_account(logger=None):
     client, log = Client(), Logger()
@@ -336,6 +368,7 @@ async def test_pending_survives_a_muted_round_and_is_reported():
 
 # ------------------------------------------------------- 与 run_author 的集成
 
+
 class Delivery:
     def as_dict(self) -> dict[str, Any]:
         return {"sent": 1, "failed": 0}
@@ -344,20 +377,33 @@ class Delivery:
 class RoundClient:
     """同时扮演"抓列表"与"触发下载"两个角色，并按发生顺序记下来。"""
 
-    def __init__(self, order: list[tuple[str, Any]], *, download_error: Exception | None = None) -> None:
+    def __init__(
+        self, order: list[tuple[str, Any]], *, download_error: Exception | None = None
+    ) -> None:
         self.order = order
         self._download_error = download_error
 
     async def author_posts(self, sec_user_id: str, count: int, **kwargs: Any):
         return Page(
-            items=(Content(content_id="new1", title="新作品", created_at=datetime.now(timezone.utc)),),
+            items=(
+                Content(
+                    content_id="new1",
+                    title="新作品",
+                    created_at=datetime.now(timezone.utc),
+                ),
+            ),
         )
 
     async def start_download(self, content_id: str, **kwargs: Any) -> dict[str, Any]:
         self.order.append(("download", content_id))
         if self._download_error is not None:
             raise self._download_error
-        return {"download_id": "d1", "state": "queued", "archived": True, "reused": None}
+        return {
+            "download_id": "d1",
+            "state": "queued",
+            "archived": True,
+            "reused": None,
+        }
 
 
 class Notifier:
@@ -375,19 +421,32 @@ async def _run_one_round(tmp_path, *, download_error: Exception | None = None):
     store.migrate()
     now = datetime.now(timezone.utc)
     author = AuthorState(
-        sec_user_id="u1", nickname="示例", initialized_at=now - timedelta(days=30),
-        ever_had_posts=True, runs=5, last_seen_at=now - timedelta(minutes=1),
+        sec_user_id="u1",
+        nickname="示例",
+        initialized_at=now - timedelta(days=30),
+        ever_had_posts=True,
+        runs=5,
+        last_seen_at=now - timedelta(minutes=1),
         posts=(PostState(content_id="old1", created_at=now - timedelta(days=2)),),
     )
     client = RoundClient(order, download_error=download_error)
-    pacer = Pacer()   # 只数次数；节奏本身由 test_pacer.py 负责
+    pacer = Pacer()  # 只数次数；节奏本身由 test_pacer.py 负责
     gate = GlobalGate(default_seconds=60, backoff_after=2, backoff_max=600)
     trigger = ArchiveTrigger(client=client, pacer=pacer, logger=Logger())
 
     result = await run_author(
-        author=author, nickname="示例", client=client, store=store,
-        notifier=Notifier(order), dedup=Deduplicator(), pacer=pacer, gate=gate,
-        cfg=DiffConfig(), now=now, archive_enabled=False, archive_trigger=trigger,
+        author=author,
+        nickname="示例",
+        client=client,
+        store=store,
+        notifier=Notifier(order),
+        dedup=Deduplicator(),
+        pacer=pacer,
+        gate=gate,
+        cfg=DiffConfig(),
+        now=now,
+        archive_enabled=False,
+        archive_trigger=trigger,
         logger=Logger(),
     )
     return result, order, store, gate, pacer, trigger

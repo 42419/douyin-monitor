@@ -132,7 +132,9 @@ class PinClient:
         return Page(items=self.posts_items)
 
 
-def make_content(content_id: str, *, created_at: datetime | None = None, title: str = "作品") -> Content:
+def make_content(
+    content_id: str, *, created_at: datetime | None = None, title: str = "作品"
+) -> Content:
     return Content(
         content_id=content_id,
         title=title,
@@ -165,7 +167,9 @@ async def _run(
     """跑一轮。`store` 可以传进来复用，用于"连续几轮"的用例。"""
     store = store or StateStore(tmp_path / "db.sqlite")
     store.migrate()
-    store.ensure_author(author.sec_user_id, author.nickname, now or datetime.now(timezone.utc))
+    store.ensure_author(
+        author.sec_user_id, author.nickname, now or datetime.now(timezone.utc)
+    )
     notifier = Notifier()
     pacer = Pacer()
     gate = GlobalGate(default_seconds=60, backoff_after=2, backoff_max=600)
@@ -189,7 +193,9 @@ async def _run(
 
 # --------------------------------------------------------------------- 解析
 def test_parse_author_profile_reads_content_count():
-    profile = parse_author_profile({"stats": {"content_count": 42, "follower_count": 999}})
+    profile = parse_author_profile(
+        {"stats": {"content_count": 42, "follower_count": 999}}
+    )
     assert profile.content_count == 42
 
 
@@ -210,16 +216,22 @@ def _author_with_one_post_about_to_be_confirmed_removed(now: datetime) -> Author
     """
     cfg = DiffConfig()
     return AuthorState(
-        sec_user_id="u1", nickname="示例", ever_had_posts=True, runs=10,
+        sec_user_id="u1",
+        nickname="示例",
+        ever_had_posts=True,
+        runs=10,
         initialized_at=now - timedelta(days=30),
         last_update_at=now - timedelta(days=1),
         last_seen_at=now - timedelta(minutes=1),
-        baseline_content_count=5, baseline_content_count_at=now - timedelta(hours=2),
+        baseline_content_count=5,
+        baseline_content_count_at=now - timedelta(hours=2),
         posts=(
             PostState(content_id="staying", created_at=now - timedelta(days=2)),
             PostState(
-                content_id="gone1", created_at=now - timedelta(days=5),
-                absent_rounds=cfg.delete_rounds - 1, absent_is_top=False,
+                content_id="gone1",
+                created_at=now - timedelta(days=5),
+                absent_rounds=cfg.delete_rounds - 1,
+                absent_is_top=False,
             ),
         ),
     )
@@ -230,18 +242,25 @@ def _staying_post(now: datetime) -> Content:
     return make_content("staying", created_at=now - timedelta(days=2))
 
 
-def _author_with_a_hidden_post(now: datetime, *, hidden_since: datetime | None = None) -> AuthorState:
+def _author_with_a_hidden_post(
+    now: datetime, *, hidden_since: datetime | None = None
+) -> AuthorState:
     """两条已知帖子：一条访客能看到的 `visible1`，一条**已标记为对访客不可见**的 `hidden1`。"""
     return AuthorState(
-        sec_user_id="u1", nickname="示例", ever_had_posts=True, runs=10,
+        sec_user_id="u1",
+        nickname="示例",
+        ever_had_posts=True,
+        runs=10,
         initialized_at=now - timedelta(days=30),
         last_update_at=now - timedelta(minutes=2),
         last_seen_at=now - timedelta(minutes=1),
-        baseline_content_count=2, baseline_content_count_at=now - timedelta(hours=2),
+        baseline_content_count=2,
+        baseline_content_count_at=now - timedelta(hours=2),
         posts=(
             PostState(content_id="visible1", created_at=now - timedelta(days=2)),
             PostState(
-                content_id="hidden1", created_at=now - timedelta(days=1),
+                content_id="hidden1",
+                created_at=now - timedelta(days=1),
                 hidden_from_guest_at=hidden_since or now - timedelta(hours=1),
             ),
         ),
@@ -257,7 +276,11 @@ async def test_initialization_round_establishes_baseline_without_verifying(tmp_p
     pin = PinClient()
 
     _result, store, _notifier, _pacer = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
     assert client.profile_calls == 1
@@ -265,22 +288,34 @@ async def test_initialization_round_establishes_baseline_without_verifying(tmp_p
     assert store.load_authors()["u1"].baseline_content_count == 3
 
 
-async def test_plain_round_with_only_new_posts_refreshes_baseline_but_does_not_verify(tmp_path):
+async def test_plain_round_with_only_new_posts_refreshes_baseline_but_does_not_verify(
+    tmp_path,
+):
     """纯新作品的一轮：刷新基准值（否则基准会漂移），但不定向核验。"""
     now = datetime.now(timezone.utc)
     author = AuthorState(
-        sec_user_id="u1", nickname="示例", ever_had_posts=True,
-        baseline_content_count=1, baseline_content_count_at=now - timedelta(hours=1),
+        sec_user_id="u1",
+        nickname="示例",
+        ever_had_posts=True,
+        baseline_content_count=1,
+        baseline_content_count_at=now - timedelta(hours=1),
         posts=(PostState(content_id="old1", created_at=now - timedelta(days=1)),),
     )
     client = Client(
-        posts_items=(make_content("new1", created_at=now), make_content("old1", created_at=now - timedelta(days=1))),
+        posts_items=(
+            make_content("new1", created_at=now),
+            make_content("old1", created_at=now - timedelta(days=1)),
+        ),
         content_count=2,
     )
     pin = PinClient()
 
     result, store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
     assert any(e.kind is EventKind.NEW_POST for e in result.events)
@@ -296,7 +331,11 @@ async def test_numbers_match_after_deletion_does_not_trigger_verification(tmp_pa
     pin = PinClient()
 
     result, _store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
     assert any(e.kind is EventKind.POST_REMOVED for e in result.events)
@@ -327,21 +366,28 @@ async def test_mismatch_marks_the_post_hidden_from_guest(tmp_path):
     pin = PinClient(posts_items=(hidden,))
 
     result, store, notifier, pacer = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
     assert pin.calls == ["identity-abc"], "数字对不上才应该定向核验"
     kinds = [e.kind for e in result.events]
     assert EventKind.HIDDEN_FROM_GUEST in kinds
-    assert EventKind.NEW_POST not in kinds, "被隐藏的作品不该报成新作品——用户该做的事不一样"
+    assert EventKind.NEW_POST not in kinds, (
+        "被隐藏的作品不该报成新作品——用户该做的事不一样"
+    )
     assert EventKind.REVIVED not in kinds
     event = next(e for e in result.events if e.kind is EventKind.HIDDEN_FROM_GUEST)
     assert [item["content_id"] for item in event.payload["hidden"]] == ["hidden1"]
     # 这个事件**不推送**（`SILENT_KINDS`）：平台对访客的展示限制不是账号故障。上面那句
     # `notifier.sent >= 1` 曾经是靠同轮的 `post_removed` 蒙对的，注释则说成"这条要推送出去"
     assert notifier.sent, "本轮应该有别的推送（确认消失那条）"
-    assert all(m.event is not EventKind.HIDDEN_FROM_GUEST for m in notifier.sent), \
+    assert all(m.event is not EventKind.HIDDEN_FROM_GUEST for m in notifier.sent), (
         "静默事件不该出现在投递记录里"
+    )
 
     state = store.load_authors()["u1"]
     assert state.baseline_content_count == 5
@@ -351,23 +397,39 @@ async def test_mismatch_marks_the_post_hidden_from_guest(tmp_path):
     assert pacer.calls >= 3
 
 
-async def test_hidden_post_cancels_the_contradicting_removal_in_the_same_round(tmp_path):
+async def test_hidden_post_cancels_the_contradicting_removal_in_the_same_round(
+    tmp_path,
+):
     """同一轮里 `diff` 刚确认 `gone1` 消失、核验又证明它只是对访客不可见：
     那条"作品消失"必须被撤销，否则会同时推出两条互相打脸的通知。"""
     now = datetime.now(timezone.utc)
     author = _author_with_one_post_about_to_be_confirmed_removed(now)
     client = Client(posts_items=(_staying_post(now),), content_count=5)
-    pin = PinClient(posts_items=(_staying_post(now), make_content("gone1", created_at=now - timedelta(days=5))))
+    pin = PinClient(
+        posts_items=(
+            _staying_post(now),
+            make_content("gone1", created_at=now - timedelta(days=5)),
+        )
+    )
 
     result, store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
     assert EventKind.POST_REMOVED not in [e.kind for e in result.events]
     assert any(e.kind is EventKind.HIDDEN_FROM_GUEST for e in result.events)
     state = store.load_authors()["u1"]
-    assert any(p.content_id == "gone1" and p.hidden_from_guest_at is not None for p in state.posts)
-    assert all(t.content_id != "gone1" for t in state.tombstones), "它不是消失了，不该留墓碑"
+    assert any(
+        p.content_id == "gone1" and p.hidden_from_guest_at is not None
+        for p in state.posts
+    )
+    assert all(t.content_id != "gone1" for t in state.tombstones), (
+        "它不是消失了，不该留墓碑"
+    )
 
 
 async def test_removal_kept_when_other_posts_in_the_same_event_are_real(tmp_path):
@@ -377,18 +439,32 @@ async def test_removal_kept_when_other_posts_in_the_same_event_are_real(tmp_path
     author = _author_with_one_post_about_to_be_confirmed_removed(now).with_updates(
         posts=(
             PostState(content_id="staying", created_at=now - timedelta(days=2)),
-            PostState(content_id="hidden1", created_at=now - timedelta(days=3),
-                      absent_rounds=cfg.delete_rounds - 1),
-            PostState(content_id="gone2", created_at=now - timedelta(days=6),
-                      absent_rounds=cfg.delete_rounds - 1),
+            PostState(
+                content_id="hidden1",
+                created_at=now - timedelta(days=3),
+                absent_rounds=cfg.delete_rounds - 1,
+            ),
+            PostState(
+                content_id="gone2",
+                created_at=now - timedelta(days=6),
+                absent_rounds=cfg.delete_rounds - 1,
+            ),
         )
     )
     client = Client(posts_items=(_staying_post(now),), content_count=5)
-    pin = PinClient(posts_items=(_staying_post(now),
-                                 make_content("hidden1", created_at=now - timedelta(days=3))))
+    pin = PinClient(
+        posts_items=(
+            _staying_post(now),
+            make_content("hidden1", created_at=now - timedelta(days=3)),
+        )
+    )
 
     result, _store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
     removed_events = [e for e in result.events if e.kind is EventKind.POST_REMOVED]
@@ -405,7 +481,11 @@ async def test_mismatch_with_nothing_new_in_verification_page_is_not_an_error(tm
     pin = PinClient(posts_items=())  # 核验页面也是空的
 
     result, store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
     assert not any(e.kind is EventKind.HIDDEN_FROM_GUEST for e in result.events)
@@ -431,20 +511,30 @@ async def test_hidden_post_stops_accumulating_absences_across_rounds(tmp_path):
         baseline_content_count_at=now - timedelta(minutes=1)
     )
     store.ensure_author("u1", "示例", now)
-    client = Client(posts_items=(make_content("visible1", created_at=now - timedelta(days=2)),), content_count=2)
+    client = Client(
+        posts_items=(make_content("visible1", created_at=now - timedelta(days=2)),),
+        content_count=2,
+    )
     pin = PinClient(posts_items=())
 
     for round_no in range(3):
         # 第 1 轮用构造好的状态（库里那行是 `ensure_author` 刚建的空壳），之后从库里读
         state = author if round_no == 0 else store.load_authors()["u1"]
         result, store, _n, _p = await _run(
-            tmp_path=tmp_path, author=state, client=client, hidden_check=_hidden_check(pin),
-            now=now + timedelta(minutes=round_no), store=store,
+            tmp_path=tmp_path,
+            author=state,
+            client=client,
+            hidden_check=_hidden_check(pin),
+            now=now + timedelta(minutes=round_no),
+            store=store,
         )
-        assert not any(e.kind in (EventKind.POST_REMOVED, EventKind.ALL_GONE) for e in result.events), (
-            f"第 {round_no + 1} 轮又把它判成消失了 —— 死循环回来了"
+        assert not any(
+            e.kind in (EventKind.POST_REMOVED, EventKind.ALL_GONE)
+            for e in result.events
+        ), f"第 {round_no + 1} 轮又把它判成消失了 —— 死循环回来了"
+        assert not any(e.kind is EventKind.HIDDEN_FROM_GUEST for e in result.events), (
+            "只该标记一次"
         )
-        assert not any(e.kind is EventKind.HIDDEN_FROM_GUEST for e in result.events), "只该标记一次"
 
     assert client.profile_calls == 0, "没有新作品也没有消失，不该去查总数"
     assert pin.calls == [], "更不该动用登录身份"
@@ -457,25 +547,45 @@ async def test_hidden_post_stops_accumulating_absences_across_rounds(tmp_path):
 async def test_hidden_post_reappearing_clears_the_marker_after_confirmation(tmp_path):
     """重新出现在访客列表里要**连续两轮**才清标记（分级确认）；刻意不发事件。"""
     now = datetime.now(timezone.utc)
-    seen = (make_content("visible1", created_at=now - timedelta(days=2)),
-            make_content("hidden1", created_at=now - timedelta(days=1)))
+    seen = (
+        make_content("visible1", created_at=now - timedelta(days=2)),
+        make_content("hidden1", created_at=now - timedelta(days=1)),
+    )
     store = _store(tmp_path)
 
-    first = await _run(tmp_path=tmp_path, store=store, author=_author_with_a_hidden_post(now),
-                       client=Client(posts_items=seen, content_count=2), hidden_check=None, now=now)
+    first = await _run(
+        tmp_path=tmp_path,
+        store=store,
+        author=_author_with_a_hidden_post(now),
+        client=Client(posts_items=seen, content_count=2),
+        hidden_check=None,
+        now=now,
+    )
     after_first = store.load_authors()["u1"]
-    assert all(p.hidden_from_guest_at is not None for p in after_first.posts
-               if p.content_id == "hidden1"), "只见到 1 轮还不清"
-    assert not any(e.kind in (EventKind.REVIVED, EventKind.POST_REMOVED)
-                   for e in first[0].events)
+    assert all(
+        p.hidden_from_guest_at is not None
+        for p in after_first.posts
+        if p.content_id == "hidden1"
+    ), "只见到 1 轮还不清"
+    assert not any(
+        e.kind in (EventKind.REVIVED, EventKind.POST_REMOVED) for e in first[0].events
+    )
 
-    second = await _run(tmp_path=tmp_path, store=store, author=after_first,
-                        client=Client(posts_items=seen, content_count=2), hidden_check=None,
-                        now=now + timedelta(minutes=1))
+    second = await _run(
+        tmp_path=tmp_path,
+        store=store,
+        author=after_first,
+        client=Client(posts_items=seen, content_count=2),
+        hidden_check=None,
+        now=now + timedelta(minutes=1),
+    )
     state = store.load_authors()["u1"]
-    assert all(p.hidden_from_guest_at is None for p in state.posts if p.content_id == "hidden1")
-    assert not any(e.kind in (EventKind.REVIVED, EventKind.POST_REMOVED)
-                   for e in second[0].events)
+    assert all(
+        p.hidden_from_guest_at is None for p in state.posts if p.content_id == "hidden1"
+    )
+    assert not any(
+        e.kind in (EventKind.REVIVED, EventKind.POST_REMOVED) for e in second[0].events
+    )
 
 
 async def test_flapping_guest_view_does_not_restart_the_hidden_loop(tmp_path):
@@ -486,17 +596,31 @@ async def test_flapping_guest_view_does_not_restart_the_hidden_loop(tmp_path):
     → 定向核验 → 重新标记。这条用 [看得见, 看不见, 看不见] 的抖动模式把它钉住。
     """
     now = datetime.now(timezone.utc)
-    visible = (make_content("v1", created_at=now - timedelta(days=2)),
-               make_content("v2", created_at=now - timedelta(days=1)))
+    visible = (
+        make_content("v1", created_at=now - timedelta(days=2)),
+        make_content("v2", created_at=now - timedelta(days=1)),
+    )
     hidden = make_content("h4", created_at=now - timedelta(hours=1))
     store = _store(tmp_path)
     author = AuthorState(
-        sec_user_id="u1", nickname="示例", ever_had_posts=True, runs=1,
+        sec_user_id="u1",
+        nickname="示例",
+        ever_had_posts=True,
+        runs=1,
         initialized_at=now - timedelta(days=30),
-        last_update_at=now - timedelta(minutes=1), last_seen_at=now - timedelta(minutes=1),
-        baseline_content_count=2, baseline_content_count_at=now - timedelta(minutes=1),
-        posts=tuple(PostState(content_id=c.content_id, title=c.title, created_at=c.created_at,
-                              last_seen_at=now) for c in visible),
+        last_update_at=now - timedelta(minutes=1),
+        last_seen_at=now - timedelta(minutes=1),
+        baseline_content_count=2,
+        baseline_content_count_at=now - timedelta(minutes=1),
+        posts=tuple(
+            PostState(
+                content_id=c.content_id,
+                title=c.title,
+                created_at=c.created_at,
+                last_seen_at=now,
+            )
+            for c in visible
+        ),
     )
     pattern = [True, False, False]
     profile_calls = pin_calls = 0
@@ -507,8 +631,12 @@ async def test_flapping_guest_view_does_not_restart_the_hidden_loop(tmp_path):
         client = Client(posts_items=guest, content_count=3)
         pin = PinClient(posts_items=visible + (hidden,))
         result, store, _n, _p = await _run(
-            tmp_path=tmp_path, store=store, author=state, client=client,
-            hidden_check=_hidden_check(pin), now=now + timedelta(minutes=i),
+            tmp_path=tmp_path,
+            store=store,
+            author=state,
+            client=client,
+            hidden_check=_hidden_check(pin),
+            now=now + timedelta(minutes=i),
         )
         profile_calls += client.profile_calls
         pin_calls += len(pin.calls)
@@ -532,12 +660,21 @@ async def test_total_drop_reports_the_hidden_post_as_removed(tmp_path):
     只有用登录视角核对才能发现，而且必须报出来。"""
     now = datetime.now(timezone.utc)
     author = _author_with_a_hidden_post(now)
-    client = Client(posts_items=(make_content("visible1", created_at=now - timedelta(days=2)),), content_count=1)
+    client = Client(
+        posts_items=(make_content("visible1", created_at=now - timedelta(days=2)),),
+        content_count=1,
+    )
     # 登录视角里只剩 visible1：hidden1 确实被作者删了
-    pin = PinClient(posts_items=(make_content("visible1", created_at=now - timedelta(days=2)),))
+    pin = PinClient(
+        posts_items=(make_content("visible1", created_at=now - timedelta(days=2)),)
+    )
 
     result, store, notifier, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
     assert pin.calls == ["identity-abc"]
@@ -547,7 +684,9 @@ async def test_total_drop_reports_the_hidden_post_as_removed(tmp_path):
     assert len(notifier.sent) >= 1
     state = store.load_authors()["u1"]
     assert all(p.content_id != "hidden1" for p in state.posts)
-    assert any(t.content_id == "hidden1" and t.reason == "confirmed" for t in state.tombstones)
+    assert any(
+        t.content_id == "hidden1" and t.reason == "confirmed" for t in state.tombstones
+    )
     assert state.baseline_content_count == 1
 
 
@@ -555,14 +694,23 @@ async def test_total_drop_keeps_the_hidden_post_when_login_still_sees_it(tmp_pat
     """总数少了，但那条隐藏作品在登录视角里还在 ⇒ 少的是别的（本工具看不到的），不动它。"""
     now = datetime.now(timezone.utc)
     author = _author_with_a_hidden_post(now)
-    client = Client(posts_items=(make_content("visible1", created_at=now - timedelta(days=2)),), content_count=1)
-    pin = PinClient(posts_items=(
-        make_content("visible1", created_at=now - timedelta(days=2)),
-        make_content("hidden1", created_at=now - timedelta(days=1)),
-    ))
+    client = Client(
+        posts_items=(make_content("visible1", created_at=now - timedelta(days=2)),),
+        content_count=1,
+    )
+    pin = PinClient(
+        posts_items=(
+            make_content("visible1", created_at=now - timedelta(days=2)),
+            make_content("hidden1", created_at=now - timedelta(days=1)),
+        )
+    )
 
     result, _store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
     assert not any(e.kind is EventKind.POST_REMOVED for e in result.events)
@@ -574,15 +722,27 @@ async def test_total_drop_ignores_hidden_post_outside_the_login_window(tmp_path)
     author = _author_with_a_hidden_post(now).with_updates(
         posts=(
             PostState(content_id="visible1", created_at=now - timedelta(days=1)),
-            PostState(content_id="hidden1", created_at=now - timedelta(days=400),
-                      hidden_from_guest_at=now - timedelta(days=390)),
+            PostState(
+                content_id="hidden1",
+                created_at=now - timedelta(days=400),
+                hidden_from_guest_at=now - timedelta(days=390),
+            ),
         )
     )
-    client = Client(posts_items=(make_content("visible1", created_at=now - timedelta(days=1)),), content_count=1)
-    pin = PinClient(posts_items=(make_content("visible1", created_at=now - timedelta(days=1)),))
+    client = Client(
+        posts_items=(make_content("visible1", created_at=now - timedelta(days=1)),),
+        content_count=1,
+    )
+    pin = PinClient(
+        posts_items=(make_content("visible1", created_at=now - timedelta(days=1)),)
+    )
 
     result, _store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
     assert not any(e.kind is EventKind.POST_REMOVED for e in result.events), (
@@ -602,8 +762,11 @@ async def test_an_ancient_pinned_post_does_not_define_the_window_bottom(tmp_path
     author = _author_with_a_hidden_post(now).with_updates(
         posts=(
             PostState(content_id="visible1", created_at=now - timedelta(days=1)),
-            PostState(content_id="hidden1", created_at=now - timedelta(days=30),
-                      hidden_from_guest_at=now - timedelta(days=25)),
+            PostState(
+                content_id="hidden1",
+                created_at=now - timedelta(days=30),
+                hidden_from_guest_at=now - timedelta(days=25),
+            ),
         )
     )
     visible = make_content("visible1", created_at=now - timedelta(days=1))
@@ -612,7 +775,11 @@ async def test_an_ancient_pinned_post_does_not_define_the_window_bottom(tmp_path
     pin = PinClient(posts_items=(visible, pinned))
 
     result, _store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
     assert any(e.kind is EventKind.POST_REMOVED for e in result.events), (
@@ -637,10 +804,16 @@ async def test_profile_fetch_failure_does_not_break_the_round(tmp_path):
     pin = PinClient()
 
     result, store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
-    assert any(e.kind is EventKind.POST_REMOVED for e in result.events), "主判定不受影响"
+    assert any(e.kind is EventKind.POST_REMOVED for e in result.events), (
+        "主判定不受影响"
+    )
     assert pin.calls == [], "总数都读不到，不该再花一次定向核验"
     assert store.load_authors()["u1"].baseline_content_count == 4
 
@@ -669,8 +842,13 @@ async def test_profile_fetch_failure_backs_off_instead_of_polling_every_round(tm
     cfg = DiffConfig(delete_rounds=99)
 
     _r1, store, _n, _p = await _run(
-        tmp_path=tmp_path, store=store, author=author, client=client, cfg=cfg,
-        hidden_check=_hidden_check(PinClient()), now=now,
+        tmp_path=tmp_path,
+        store=store,
+        author=author,
+        client=client,
+        cfg=cfg,
+        hidden_check=_hidden_check(PinClient()),
+        now=now,
     )
     assert client.profile_calls == 1, "保底触发，试了一次"
     attempted_at = store.load_authors()["u1"].baseline_content_count_at
@@ -681,16 +859,26 @@ async def test_profile_fetch_failure_backs_off_instead_of_polling_every_round(tm
     # 紧接着的下一轮：还在退避窗口内，不该再敲总数接口
     later = now + timedelta(minutes=1)
     _r2, store, _n, _p = await _run(
-        tmp_path=tmp_path, store=store, author=store.load_authors()["u1"], client=client,
-        cfg=cfg, hidden_check=_hidden_check(PinClient()), now=later,
+        tmp_path=tmp_path,
+        store=store,
+        author=store.load_authors()["u1"],
+        client=client,
+        cfg=cfg,
+        hidden_check=_hidden_check(PinClient()),
+        now=later,
     )
     assert client.profile_calls == 1, "同一 interval 内失败一次就够了，不能每轮重试"
 
     # 但退避不是永久放弃：越过 interval 之后要重新试
     after_interval = now + timedelta(minutes=31)
     _r3, _s, _n, _p = await _run(
-        tmp_path=tmp_path, store=store, author=store.load_authors()["u1"], client=client,
-        cfg=cfg, hidden_check=_hidden_check(PinClient()), now=after_interval,
+        tmp_path=tmp_path,
+        store=store,
+        author=store.load_authors()["u1"],
+        client=client,
+        cfg=cfg,
+        hidden_check=_hidden_check(PinClient()),
+        now=after_interval,
     )
     assert client.profile_calls == 2, "越过保底间隔应当重试"
 
@@ -714,8 +902,13 @@ async def test_a_profile_without_a_content_count_also_backs_off(tmp_path):
     cfg = DiffConfig(delete_rounds=99)
 
     _r1, store, _n, _p = await _run(
-        tmp_path=tmp_path, store=store, author=author, client=client, cfg=cfg,
-        hidden_check=_hidden_check(PinClient()), now=now,
+        tmp_path=tmp_path,
+        store=store,
+        author=author,
+        client=client,
+        cfg=cfg,
+        hidden_check=_hidden_check(PinClient()),
+        now=now,
     )
     assert client.profile_calls == 1, "保底触发，试了一次"
     attempted_at = store.load_authors()["u1"].baseline_content_count_at
@@ -728,8 +921,13 @@ async def test_a_profile_without_a_content_count_also_backs_off(tmp_path):
 
     later = now + timedelta(minutes=1)
     _r2, store, _n, _p = await _run(
-        tmp_path=tmp_path, store=store, author=store.load_authors()["u1"], client=client,
-        cfg=cfg, hidden_check=_hidden_check(PinClient()), now=later,
+        tmp_path=tmp_path,
+        store=store,
+        author=store.load_authors()["u1"],
+        client=client,
+        cfg=cfg,
+        hidden_check=_hidden_check(PinClient()),
+        now=later,
     )
     assert client.profile_calls == 1, "同一 interval 内不该每轮重试"
 
@@ -745,8 +943,10 @@ async def test_profile_fetch_failure_still_folds_new_posts_into_the_baseline(tmp
         posts=(
             PostState(content_id="staying", created_at=now - timedelta(days=2)),
             PostState(
-                content_id="gone1", created_at=now - timedelta(days=5),
-                absent_rounds=0, absent_is_top=False,
+                content_id="gone1",
+                created_at=now - timedelta(days=5),
+                absent_rounds=0,
+                absent_is_top=False,
             ),
         ),
         baseline_content_count=5,
@@ -758,8 +958,11 @@ async def test_profile_fetch_failure_still_folds_new_posts_into_the_baseline(tmp
     )
 
     result, store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client,
-        hidden_check=_hidden_check(PinClient()), now=now,
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(PinClient()),
+        now=now,
     )
 
     assert any(e.kind is EventKind.NEW_POST for e in result.events)
@@ -776,7 +979,11 @@ async def test_pinned_verification_failure_does_not_break_the_round(tmp_path):
     pin = PinClient(error=MonitorError("PINNED_UNAVAILABLE", "identity retired"))
 
     result, store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
     assert any(e.kind is EventKind.POST_REMOVED for e in result.events)
@@ -785,14 +992,19 @@ async def test_pinned_verification_failure_does_not_break_the_round(tmp_path):
     assert state.content_count_drift_rounds == 1
 
 
-async def test_baseline_stays_accurate_across_a_new_post_round_then_a_removal_round(tmp_path):
+async def test_baseline_stays_accurate_across_a_new_post_round_then_a_removal_round(
+    tmp_path,
+):
     """跨轮：新作品轮刷新基准 → 删除轮的预期值仍然算得对（这是"基准值漂移"那个 bug 的回归）。"""
     now = datetime.now(timezone.utc)
     store = StateStore(tmp_path / "db.sqlite")
     store.migrate()
     author = AuthorState(
-        sec_user_id="u1", nickname="示例", ever_had_posts=True,
-        baseline_content_count=2, baseline_content_count_at=now - timedelta(hours=2),
+        sec_user_id="u1",
+        nickname="示例",
+        ever_had_posts=True,
+        baseline_content_count=2,
+        baseline_content_count_at=now - timedelta(hours=2),
         posts=(PostState(content_id="p1", created_at=now - timedelta(days=3)),),
     )
     store.ensure_author("u1", "示例", now)
@@ -800,12 +1012,19 @@ async def test_baseline_stays_accurate_across_a_new_post_round_then_a_removal_ro
 
     # 第 1 轮：新作品 p2 出现（访客可见），总数 3
     round1_client = Client(
-        posts_items=(make_content("p2", created_at=now), make_content("p1", created_at=now - timedelta(days=3))),
+        posts_items=(
+            make_content("p2", created_at=now),
+            make_content("p1", created_at=now - timedelta(days=3)),
+        ),
         content_count=3,
     )
     result1, store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=round1_client,
-        hidden_check=_hidden_check(PinClient(posts_items=())), now=now, store=store,
+        tmp_path=tmp_path,
+        author=author,
+        client=round1_client,
+        hidden_check=_hidden_check(PinClient(posts_items=())),
+        now=now,
+        store=store,
     )
     assert any(e.kind is EventKind.NEW_POST for e in result1.events)
     assert store.load_authors()["u1"].baseline_content_count == 3
@@ -813,15 +1032,23 @@ async def test_baseline_stays_accurate_across_a_new_post_round_then_a_removal_ro
     # 第 2 轮：p1 连续第 2 轮缺席 → 确认删除，预期 3 − 1 = 2，实际也是 2 → 不该核验
     state = store.load_authors()["u1"].with_updates(
         posts=tuple(
-            p.with_updates(absent_rounds=cfg.delete_rounds - 1) if p.content_id == "p1" else p
+            p.with_updates(absent_rounds=cfg.delete_rounds - 1)
+            if p.content_id == "p1"
+            else p
             for p in store.load_authors()["u1"].posts
         )
     )
     pin2 = PinClient(posts_items=())
-    round2_client = Client(posts_items=(make_content("p2", created_at=now),), content_count=2)
+    round2_client = Client(
+        posts_items=(make_content("p2", created_at=now),), content_count=2
+    )
     result2, store, _n, _p = await _run(
-        tmp_path=tmp_path, author=state, client=round2_client,
-        hidden_check=_hidden_check(pin2), now=now + timedelta(minutes=1), store=store,
+        tmp_path=tmp_path,
+        author=state,
+        client=round2_client,
+        hidden_check=_hidden_check(pin2),
+        now=now + timedelta(minutes=1),
+        store=store,
     )
     assert any(e.kind is EventKind.POST_REMOVED for e in result2.events)
     assert pin2.calls == [], "账目对得上，不该白跑一次定向核验"
@@ -842,7 +1069,11 @@ async def test_unresolved_drift_gives_up_after_max_rounds(tmp_path):
     pin = PinClient(posts_items=())  # 解释不了
 
     _result, store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client, hidden_check=_hidden_check(pin), now=now
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
     state = store.load_authors()["u1"]
@@ -861,21 +1092,31 @@ def test_strip_from_removals_never_breaks_an_event_with_a_hostile_payload():
     from dywatch.pipeline import _strip_from_removals
 
     def ev(payload):
-        return Event(EventKind.POST_REMOVED, sec_user_id="u1", nickname="n", payload=payload)
+        return Event(
+            EventKind.POST_REMOVED, sec_user_id="u1", nickname="n", payload=payload
+        )
 
     malformed = ev({"removed": "字符串不是列表"})
-    assert _strip_from_removals((malformed,), {"h1"}) == (malformed,), "畸形载荷原样放行"
-    assert _strip_from_removals((ev({}),), {"h1"})[0].payload == {}, "缺 removed 也要放行"
+    assert _strip_from_removals((malformed,), {"h1"}) == (malformed,), (
+        "畸形载荷原样放行"
+    )
+    assert _strip_from_removals((ev({}),), {"h1"})[0].payload == {}, (
+        "缺 removed 也要放行"
+    )
 
     mixed = ev({"removed": [None, 1, {"content_id": "h1"}]})
     kept = _strip_from_removals((mixed,), {"h1"})[0].payload["removed"]
     assert kept == [None, 1], "只摘掉真正的字典条目，其它原样留着"
 
     untouched = ev({"removed": [{"content_id": "real"}]})
-    assert _strip_from_removals((untouched,), {"h1"})[0] is untouched, "没摘到东西就不该重建事件"
+    assert _strip_from_removals((untouched,), {"h1"})[0] is untouched, (
+        "没摘到东西就不该重建事件"
+    )
 
     all_hidden = ev({"removed": [{"content_id": "h1"}]})
-    assert _strip_from_removals((all_hidden,), {"h1"}) == (), "整条都是假象时撤销这条事件"
+    assert _strip_from_removals((all_hidden,), {"h1"}) == (), (
+        "整条都是假象时撤销这条事件"
+    )
 
 
 async def test_fallback_engages_even_before_any_baseline_exists(tmp_path):
@@ -886,19 +1127,37 @@ async def test_fallback_engages_even_before_any_baseline_exists(tmp_path):
     """
     now = datetime.now(timezone.utc)
     author = AuthorState(
-        sec_user_id="u1", nickname="示例", ever_had_posts=True, runs=99,
-        initialized_at=now - timedelta(days=30),          # 早就初始化过，不会再发 INITIALIZED
-        last_update_at=now - timedelta(minutes=1), last_seen_at=now - timedelta(minutes=1),
-        baseline_content_count=None, baseline_content_count_at=None,   # 从没核验过
-        posts=(PostState(content_id="v1", title="标题v1", created_at=now - timedelta(days=2),
-                         last_seen_at=now),),
+        sec_user_id="u1",
+        nickname="示例",
+        ever_had_posts=True,
+        runs=99,
+        initialized_at=now - timedelta(days=30),  # 早就初始化过，不会再发 INITIALIZED
+        last_update_at=now - timedelta(minutes=1),
+        last_seen_at=now - timedelta(minutes=1),
+        baseline_content_count=None,
+        baseline_content_count_at=None,  # 从没核验过
+        posts=(
+            PostState(
+                content_id="v1",
+                title="标题v1",
+                created_at=now - timedelta(days=2),
+                last_seen_at=now,
+            ),
+        ),
     )
-    client = Client(posts_items=(make_content("v1", created_at=now - timedelta(days=2),
-                                              title="标题v1"),), content_count=1)
+    client = Client(
+        posts_items=(
+            make_content("v1", created_at=now - timedelta(days=2), title="标题v1"),
+        ),
+        content_count=1,
+    )
 
     _result, store, _n, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client,
-        hidden_check=_hidden_check(PinClient()), now=now,
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(PinClient()),
+        now=now,
     )
 
     assert client.profile_calls == 1, "没有基准值也该被保底拉起来核对一次"
@@ -915,26 +1174,42 @@ async def test_emptied_account_clears_the_marked_records(tmp_path):
     """
     now = datetime.now(timezone.utc)
     author = AuthorState(
-        sec_user_id="u1", nickname="示例", ever_had_posts=True, runs=5,
+        sec_user_id="u1",
+        nickname="示例",
+        ever_had_posts=True,
+        runs=5,
         initialized_at=now - timedelta(days=30),
-        last_update_at=now - timedelta(minutes=1), last_seen_at=now - timedelta(minutes=1),
-        baseline_content_count=2, baseline_content_count_at=now - timedelta(minutes=1),
+        last_update_at=now - timedelta(minutes=1),
+        last_seen_at=now - timedelta(minutes=1),
+        baseline_content_count=2,
+        baseline_content_count_at=now - timedelta(minutes=1),
         posts=(
-            PostState(content_id="v1", title="标题v1", created_at=now - timedelta(days=2),
-                      last_seen_at=now - timedelta(minutes=1)),
-            PostState(content_id="h2", title="标题h2", created_at=now - timedelta(days=1),
-                      last_seen_at=now - timedelta(minutes=1),
-                      hidden_from_guest_at=now - timedelta(hours=1)),
+            PostState(
+                content_id="v1",
+                title="标题v1",
+                created_at=now - timedelta(days=2),
+                last_seen_at=now - timedelta(minutes=1),
+            ),
+            PostState(
+                content_id="h2",
+                title="标题h2",
+                created_at=now - timedelta(days=1),
+                last_seen_at=now - timedelta(minutes=1),
+                hidden_from_guest_at=now - timedelta(hours=1),
+            ),
         ),
     )
-    client = Client(posts_items=(), content_count=0)      # 访客列表空 + Douyin 说 0 条
-    pin = PinClient(posts_items=())                       # 登录视角也是空页
+    client = Client(posts_items=(), content_count=0)  # 访客列表空 + Douyin 说 0 条
+    pin = PinClient(posts_items=())  # 登录视角也是空页
     # 让保底到期，这样这一轮就会去核对总数（否则要等"全体消失"确认出事件才触发）
     author = author.with_updates(baseline_content_count_at=now - timedelta(hours=1))
 
     result, store, _notifier, _p = await _run(
-        tmp_path=tmp_path, author=author, client=client,
-        hidden_check=_hidden_check(pin), now=now,
+        tmp_path=tmp_path,
+        author=author,
+        client=client,
+        hidden_check=_hidden_check(pin),
+        now=now,
     )
 
     state = store.load_authors()["u1"]
@@ -942,8 +1217,12 @@ async def test_emptied_account_clears_the_marked_records(tmp_path):
     # 这条测试只管带标记的
     assert all(p.content_id != "h2" for p in state.posts), "带标记的记录不能永久留着"
     assert "h2" in {t.content_id for t in state.tombstones}
-    removed = [item["content_id"] for e in result.events
-               if e.kind is EventKind.POST_REMOVED for item in (e.payload.get("removed") or [])]
+    removed = [
+        item["content_id"]
+        for e in result.events
+        if e.kind is EventKind.POST_REMOVED
+        for item in (e.payload.get("removed") or [])
+    ]
     assert "h2" in removed, "它确实没了，要报出来"
 
 
@@ -955,16 +1234,27 @@ async def test_verified_log_records_post_count_and_direction(tmp_path):
     now = datetime.now(timezone.utc)
     author = _author_with_one_post_about_to_be_confirmed_removed(now)
     client = Client(posts_items=(_staying_post(now),), content_count=5)
-    pin = PinClient(posts_items=(
-        make_content("hidden1", created_at=now, title="看不见 A"),
-        make_content("hidden2", created_at=now, title="看不见 B"),
-    ))
+    pin = PinClient(
+        posts_items=(
+            make_content("hidden1", created_at=now, title="看不见 A"),
+            make_content("hidden2", created_at=now, title="看不见 B"),
+        )
+    )
     logger = Logger()
     await run_author(
-        author=author, nickname=author.nickname, client=client,
-        store=_store(tmp_path), notifier=Notifier(), dedup=Deduplicator(),
-        pacer=Pacer(), gate=GlobalGate(), cfg=DiffConfig(), now=now, archive_enabled=False,
-        hidden_check=_hidden_check(pin), logger=logger,
+        author=author,
+        nickname=author.nickname,
+        client=client,
+        store=_store(tmp_path),
+        notifier=Notifier(),
+        dedup=Deduplicator(),
+        pacer=Pacer(),
+        gate=GlobalGate(),
+        cfg=DiffConfig(),
+        now=now,
+        archive_enabled=False,
+        hidden_check=_hidden_check(pin),
+        logger=logger,
     )
     verified = logger.events("hidden_check.verified")
     assert len(verified) == 1
@@ -977,19 +1267,34 @@ async def test_sample_due_is_logged_when_only_the_fallback_triggers(tmp_path):
     """只有低频保底能解释这次核对时，记一条 debug —— 排障时要能回答"这轮为什么去查总数"。"""
     now = datetime.now(timezone.utc)
     author = _author_with_a_hidden_post(now).with_updates(
-        baseline_content_count_at=now - timedelta(hours=2)   # 保底到期
+        baseline_content_count_at=now - timedelta(hours=2)  # 保底到期
     )
     client = Client(
-        posts_items=(make_content("visible1", created_at=now - timedelta(days=2), title="标题visible1"),
-                     make_content("hidden1", created_at=now - timedelta(days=1), title="标题hidden1")),
+        posts_items=(
+            make_content(
+                "visible1", created_at=now - timedelta(days=2), title="标题visible1"
+            ),
+            make_content(
+                "hidden1", created_at=now - timedelta(days=1), title="标题hidden1"
+            ),
+        ),
         content_count=2,
     )
     logger = Logger()
     await run_author(
-        author=author, nickname=author.nickname, client=client,
-        store=_store(tmp_path), notifier=Notifier(), dedup=Deduplicator(),
-        pacer=Pacer(), gate=GlobalGate(), cfg=DiffConfig(), now=now, archive_enabled=False,
-        hidden_check=_hidden_check(PinClient()), logger=logger,
+        author=author,
+        nickname=author.nickname,
+        client=client,
+        store=_store(tmp_path),
+        notifier=Notifier(),
+        dedup=Deduplicator(),
+        pacer=Pacer(),
+        gate=GlobalGate(),
+        cfg=DiffConfig(),
+        now=now,
+        archive_enabled=False,
+        hidden_check=_hidden_check(PinClient()),
+        logger=logger,
     )
     assert client.profile_calls == 1, "保底到期 → 查一次总数"
     assert logger.events("hidden_check.sample_due"), "只有保底触发时要留下痕迹"
@@ -1004,11 +1309,15 @@ def test_hidden_from_guest_has_no_suppression_window():
     窗口唯一能压掉的只有"6 小时内又发现**另一条**被藏的作品"，而那条通知不会补发
     （标记已落库 → 不会再核验），所以窗口不是兜重复，是丢新信息。这条测试钉住这个结论。
     """
+
     def event(title: str) -> Event:
         return Event(
             EventKind.HIDDEN_FROM_GUEST,
-            sec_user_id="u1", nickname="示例",
-            payload={"hidden": [{"content_id": "x", "title": title, "created_at": None}]},
+            sec_user_id="u1",
+            nickname="示例",
+            payload={
+                "hidden": [{"content_id": "x", "title": title, "created_at": None}]
+            },
         )
 
     dedup = Deduplicator()

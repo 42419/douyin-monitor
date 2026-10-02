@@ -30,9 +30,27 @@ from .theme import TL_ITEM, masthead, page
 
 #: 时间窗口。`count` 是柱状图的格子数（每格一个柱子），`hourly` 决定标签是"13:00"还是"09-24"。
 RANGES: Mapping[str, Mapping[str, Any]] = {
-    "24h": {"label": "24 小时", "span": timedelta(hours=24), "count": 24, "hourly": True, "limit": 200},
-    "7d": {"label": "7 天", "span": timedelta(days=7), "count": 7, "hourly": False, "limit": 300},
-    "30d": {"label": "30 天", "span": timedelta(days=30), "count": 30, "hourly": False, "limit": 600},
+    "24h": {
+        "label": "24 小时",
+        "span": timedelta(hours=24),
+        "count": 24,
+        "hourly": True,
+        "limit": 200,
+    },
+    "7d": {
+        "label": "7 天",
+        "span": timedelta(days=7),
+        "count": 7,
+        "hourly": False,
+        "limit": 300,
+    },
+    "30d": {
+        "label": "30 天",
+        "span": timedelta(days=30),
+        "count": 30,
+        "hourly": False,
+        "limit": 600,
+    },
 }
 DEFAULT_RANGE = "24h"
 
@@ -62,7 +80,10 @@ GROUPS: Mapping[str, tuple[str, tuple[EventKind, ...]]] = {
         ),
     ),
     "system": ("系统", (EventKind.UPSTREAM_DEGRADED, EventKind.SELF_DEGRADED)),
-    "mech": ("窗口挪动", (EventKind.SCROLLED_OUT, EventKind.TRIMMED, EventKind.INITIALIZED)),
+    "mech": (
+        "窗口挪动",
+        (EventKind.SCROLLED_OUT, EventKind.TRIMMED, EventKind.INITIALIZED),
+    ),
 }
 DEFAULT_GROUP = "all"
 
@@ -72,12 +93,14 @@ _CLIP = 46
 
 # =================== URL 参数 ===================
 
+
 def parse_filters(query: Mapping[str, Sequence[str]]) -> dict[str, Any]:
     """URL 查询串 → 过滤条件。**认不出来的值一律退回默认**，不报错。
 
     这一页的链接会被收藏、会被别的地方拼出来，一个过期的 `?range=90d` 应该是"给你看
     默认的 24 小时"，而不是 400 —— 面板是排查问题时打开的东西，它自己不该先出问题。
     """
+
     def first(key: str) -> str:
         values = query.get(key) or ()
         return str(values[0]).strip() if values else ""
@@ -136,6 +159,7 @@ def _quote(value: str) -> str:
 
 # =================== 载荷 → 一行人话 ===================
 
+
 def summarize_payload(kind: str, payload: Mapping[str, Any]) -> str:
     """事件的载荷 → 列表里那一行的正文。
 
@@ -164,21 +188,43 @@ def _summarize(kind: EventKind, data: Mapping[str, Any]) -> str:
         return f"{title}（距上一条 {gap} 天）" if gap else title
     if kind in (EventKind.POST_REMOVED, EventKind.ALL_GONE):
         removed = data.get("removed")
-        rows = [row for row in removed if isinstance(row, Mapping)] if isinstance(removed, list) else []
-        titles = "、".join(_clip(str(row.get("title") or row.get("content_id") or "")) for row in rows[:3])
+        rows = (
+            [row for row in removed if isinstance(row, Mapping)]
+            if isinstance(removed, list)
+            else []
+        )
+        titles = "、".join(
+            _clip(str(row.get("title") or row.get("content_id") or ""))
+            for row in rows[:3]
+        )
         head = f"{len(rows)} 条" if len(rows) > 1 else ""
         if kind is EventKind.ALL_GONE:
             head = "全部消失" + (f"（{len(rows)} 条）" if rows else "")
-        return f"{head}：{titles}" if head and titles else (head or titles or "有作品消失")
+        return (
+            f"{head}：{titles}" if head and titles else (head or titles or "有作品消失")
+        )
     if kind is EventKind.REVIVED:
         return _clip(str(data.get("title") or ""))
     if kind is EventKind.TITLE_CHANGED:
-        return f"{_clip(str(data.get('old') or ''))} → {_clip(str(data.get('new') or ''))}"
+        return (
+            f"{_clip(str(data.get('old') or ''))} → {_clip(str(data.get('new') or ''))}"
+        )
     if kind is EventKind.HIDDEN_FROM_GUEST:
         rows = data.get("hidden")
-        rows = [row for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
-        titles = "、".join(_clip(str(row.get("title") or row.get("content_id") or "")) for row in rows[:3])
-        return f"{len(rows)} 条登录可见、访客看不到：{titles}" if titles else f"{len(rows)} 条登录可见、访客看不到"
+        rows = (
+            [row for row in rows if isinstance(row, Mapping)]
+            if isinstance(rows, list)
+            else []
+        )
+        titles = "、".join(
+            _clip(str(row.get("title") or row.get("content_id") or ""))
+            for row in rows[:3]
+        )
+        return (
+            f"{len(rows)} 条登录可见、访客看不到：{titles}"
+            if titles
+            else f"{len(rows)} 条登录可见、访客看不到"
+        )
     if kind is EventKind.GAP_DETECTED:
         return (
             f"上次最新 {_short_time(data.get('previous_newest'))}"
@@ -244,6 +290,7 @@ def _json_ish(data: Mapping[str, Any]) -> str:
 
 # =================== 视图 ===================
 
+
 def build_view(settings: Settings, filters: Mapping[str, Any]) -> dict[str, Any]:
     """把过滤条件变成渲染要用的全部东西。纯读，不写任何状态。"""
     now = datetime.now(timezone.utc)
@@ -254,13 +301,19 @@ def build_view(settings: Settings, filters: Mapping[str, Any]) -> dict[str, Any]
     author = str(filters.get("author") or "")
 
     # 多取一条只为知道"是不是被截断了"；截断必须说出来，否则"最近 200 条"看起来像"一共 200 条"
-    rows = events(settings, since=since, until=now, kinds=kinds, author=author, limit=limit + 1)
+    rows = events(
+        settings, since=since, until=now, kinds=kinds, author=author, limit=limit + 1
+    )
     truncated = len(rows) > limit
     rows = rows[:limit]
     ticks = event_ticks(settings, since=since, until=now, kinds=kinds, author=author)
 
     payload = charts.events_chart_payload(
-        ticks, since=since, until=now, count=int(spec["count"]), hourly=bool(spec["hourly"])
+        ticks,
+        since=since,
+        until=now,
+        count=int(spec["count"]),
+        hourly=bool(spec["hourly"]),
     )
     total_ticks = sum(sum(item["data"]) for item in payload["datasets"])
 
@@ -315,13 +368,17 @@ def _sent_html(row: Mapping[str, Any]) -> str:
     delivery = row.get("delivery")
     delivery = delivery if isinstance(delivery, Mapping) else {}
     sent = delivery.get("sent") if isinstance(delivery.get("sent"), list) else []
-    failed = delivery.get("failed") if isinstance(delivery.get("failed"), Mapping) else {}
+    failed = (
+        delivery.get("failed") if isinstance(delivery.get("failed"), Mapping) else {}
+    )
     tip = ""
     if sent:
         tip = "已送达：" + "、".join(str(x) for x in sent)
     if failed:
-        tip += ("；" if tip else "") + "失败：" + "、".join(
-            f"{name}（{reason}）" for name, reason in failed.items()
+        tip += (
+            ("；" if tip else "")
+            + "失败："
+            + "、".join(f"{name}（{reason}）" for name, reason in failed.items())
         )
     text = {
         "sent": "已推送",
@@ -329,8 +386,12 @@ def _sent_html(row: Mapping[str, Any]) -> str:
         "silent": "静默",
         "none": "未推送",
     }[state]
-    color = {"sent": "var(--green)", "failed": "var(--red)", "silent": "var(--text3)",
-             "none": "var(--amber)"}[state]
+    color = {
+        "sent": "var(--green)",
+        "failed": "var(--red)",
+        "silent": "var(--text3)",
+        "none": "var(--amber)",
+    }[state]
     title = f' title="{_escape_html(tip)}"' if tip else ""
     return f'<span class="tl-sent mono" style="color:{color}"{title}>{text}</span>'
 
@@ -344,9 +405,9 @@ def render_row(row: Mapping[str, Any]) -> str:
         label = kind or "未知"
     sec_user_id = str(row.get("sec_user_id") or "")
     if sec_user_id:
-        who = f'{str(row.get("nickname") or "") or sec_user_id} · {sec_user_id[:8]}…'
+        who = f"{str(row.get('nickname') or '') or sec_user_id} · {sec_user_id[:8]}…"
     else:
-        who = "系统"   # 上游 / 自身降级这类不属于任何账号
+        who = "系统"  # 上游 / 自身降级这类不属于任何账号
     payload = row.get("payload")
     payload = payload if isinstance(payload, Mapping) else {}
     text = summarize_payload(kind, payload)
@@ -375,9 +436,7 @@ def render_fragment(view: Mapping[str, Any]) -> str:
     """汇总行 + 图表 + 列表。局部刷新换的就是这一块。"""
     spec = view["spec"]
     since, until = view["since"], view["until"]
-    window = (
-        f"{since.astimezone().strftime('%m-%d %H:%M')} → {until.astimezone().strftime('%m-%d %H:%M')}"
-    )
+    window = f"{since.astimezone().strftime('%m-%d %H:%M')} → {until.astimezone().strftime('%m-%d %H:%M')}"
     if not view["has_store"]:
         body = (
             '<div class="empty"><div class="headline">状态库还没有数据</div>'
@@ -419,7 +478,9 @@ def render_fragment(view: Mapping[str, Any]) -> str:
         parts.append(f"只显示最近 {view['total_rows']} 条")
     parts.append("点击任意一行看载荷原文")
     meta = "".join(
-        f'<span class="sep">·</span><span>{_escape_html(part)}</span>' if index else f"<span>{_escape_html(part)}</span>"
+        f'<span class="sep">·</span><span>{_escape_html(part)}</span>'
+        if index
+        else f"<span>{_escape_html(part)}</span>"
         for index, part in enumerate(parts)
     )
     return f'<div class="meta mono">{meta}</div>{chart}{body}'
@@ -440,9 +501,16 @@ def render_page(settings: Settings, filters: Mapping[str, Any]) -> str:
         on = key == active_group and not active_kind
         group_chips.append(_chip("group", key, label, on, {**filters, "kind": ""}))
 
-    reset = '<div class="tl-filter mono"><a href="/events">清除过滤</a></div>' if (
-        active_kind or author or active_range != DEFAULT_RANGE or active_group != DEFAULT_GROUP
-    ) else ""
+    reset = (
+        '<div class="tl-filter mono"><a href="/events">清除过滤</a></div>'
+        if (
+            active_kind
+            or author
+            or active_range != DEFAULT_RANGE
+            or active_group != DEFAULT_GROUP
+        )
+        else ""
+    )
 
     filter_html = (
         '<div class="tl-filter mono">'
@@ -478,7 +546,7 @@ def render_page(settings: Settings, filters: Mapping[str, Any]) -> str:
             '<div class="footer mono">'
             "<span>只读 · 无鉴权 · 静默事件也在列表里（它们不推送但是落库）</span>"
             '<span><a href="/">/</a>&nbsp;&nbsp;<a href="/api/events">/api/events</a>'
-            "&nbsp;&nbsp;<a href=\"/metrics\">/metrics</a></span>"
+            '&nbsp;&nbsp;<a href="/metrics">/metrics</a></span>'
             "</div>"
         )
     )
@@ -486,10 +554,12 @@ def render_page(settings: Settings, filters: Mapping[str, Any]) -> str:
     return page(title="dywatch · 事件时间线", body=body, scripts=after, refresh=0)
 
 
-def _chip(kind_key: str, value: str, label: str, on: bool, filters: Mapping[str, Any]) -> str:
+def _chip(
+    kind_key: str, value: str, label: str, on: bool, filters: Mapping[str, Any]
+) -> str:
     query = query_string(filters, **{kind_key: value})
     href = f"/events?{query}" if query else "/events"
-    cls = " class=\"on\"" if on else ""
+    cls = ' class="on"' if on else ""
     return f'<a href="{href}"{cls}>{_escape_html(label)}</a>'
 
 

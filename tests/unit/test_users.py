@@ -87,9 +87,16 @@ def test_is_safe_id_bounds():
 
 def test_resolve_input_accepts_a_link_tail():
     assert resolve_input("MS4wLjABAAAA_x") == "MS4wLjABAAAA_x"
-    assert resolve_input("https://www.douyin.com/user/MS4wLjABAAAA_x") == "MS4wLjABAAAA_x"
-    assert resolve_input("https://www.douyin.com/user/MS4wLjABAAAA_x/") == "MS4wLjABAAAA_x"
-    assert resolve_input("https://www.douyin.com/user/MS4wLjABAAAA_x?from=web") == "MS4wLjABAAAA_x"
+    assert (
+        resolve_input("https://www.douyin.com/user/MS4wLjABAAAA_x") == "MS4wLjABAAAA_x"
+    )
+    assert (
+        resolve_input("https://www.douyin.com/user/MS4wLjABAAAA_x/") == "MS4wLjABAAAA_x"
+    )
+    assert (
+        resolve_input("https://www.douyin.com/user/MS4wLjABAAAA_x?from=web")
+        == "MS4wLjABAAAA_x"
+    )
 
 
 ID = "MS4wLjABAAAA" + "x" * 20
@@ -118,4 +125,3 @@ def test_strip_inline_comment_rule():
     assert strip_inline_comment("账号#1") == "账号#1"
     assert strip_inline_comment("#开头") == "#开头", "第 0 位没有前一个字符，不算注释"
     assert strip_inline_comment("") == ""
-

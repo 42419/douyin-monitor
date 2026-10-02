@@ -65,6 +65,7 @@ def has_store(settings: Settings) -> bool:
 
 # =================== 账号详情 ===================
 
+
 def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
     """一个账号的详情：作者行 + 作品 + 已消失作品 + 最近事件 + 互动量曲线。
 
@@ -126,7 +127,9 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
         "ever_had_posts": bool(author["ever_had_posts"]),
         "hours_since_newest_post": hours,
     }
-    color, status_text = classify_account(row, int(settings.get("STALE_FALLBACK_DAYS", 14)))
+    color, status_text = classify_account(
+        row, int(settings.get("STALE_FALLBACK_DAYS", 14))
+    )
 
     freq = frequency_stats(post_states)
 
@@ -259,6 +262,7 @@ def _parse_dt(value: Any) -> datetime | None:
 
 # =================== 事件 ===================
 
+
 def author_names(conn: sqlite3.Connection) -> dict[str, str]:
     """`sec_user_id → 昵称`。事件表里只存 id（当时没存昵称），列表要显示人看得懂的名字。"""
     return {
@@ -285,7 +289,12 @@ def events(
         return []
     with open_store(settings) as conn:
         rows = read_events(
-            conn, since=since, until=until, kinds=kinds, sec_user_id=author or None, limit=limit
+            conn,
+            since=since,
+            until=until,
+            kinds=kinds,
+            sec_user_id=author or None,
+            limit=limit,
         )
         names = author_names(conn)
     for row in rows:
@@ -323,6 +332,7 @@ def event_ticks(
 
 # =================== 给 /metrics 用的统计 ===================
 
+
 def store_counts(
     settings: Settings, *, events_since: datetime | None = None
 ) -> dict[str, Any]:
@@ -346,9 +356,15 @@ def store_counts(
         return out
     try:
         with open_store(settings) as conn:
-            for key, table in (("authors", "authors"), ("posts", "posts"),
-                               ("tombstones", "tombstones"), ("events", "events")):
-                out[key] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            for key, table in (
+                ("authors", "authors"),
+                ("posts", "posts"),
+                ("tombstones", "tombstones"),
+                ("events", "events"),
+            ):
+                out[key] = int(
+                    conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                )
             rows = conn.execute(
                 "SELECT kind, COUNT(*) AS n FROM events"
                 + (" WHERE ts >= ?" if events_since else "")
@@ -356,9 +372,13 @@ def store_counts(
                 ((events_since.isoformat(),) if events_since else ()),
             ).fetchall()
             out["events_by_kind"] = {str(row["kind"]): int(row["n"]) for row in rows}
-            out["metric_rows"] = int(conn.execute("SELECT COUNT(*) FROM post_metrics").fetchone()[0])
+            out["metric_rows"] = int(
+                conn.execute("SELECT COUNT(*) FROM post_metrics").fetchone()[0]
+            )
             out["metric_posts"] = int(
-                conn.execute("SELECT COUNT(DISTINCT content_id) FROM post_metrics").fetchone()[0]
+                conn.execute(
+                    "SELECT COUNT(DISTINCT content_id) FROM post_metrics"
+                ).fetchone()[0]
             )
     except sqlite3.Error:
         out["readable"] = False

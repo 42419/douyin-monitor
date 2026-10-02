@@ -28,25 +28,61 @@ HOSTILE: list[dict] = [
     {"removed": None, "hidden": None},
     {"removed": [None, 1, "不是字典"]},
     {"hidden": [None, {"content_id": "1", "title": "看不见的", "created_at": None}]},
-    {"title": "带 * 星号与 [方括号](x) 还有 `反引号`", "kind": "不存在的类型", "web_url": None},
+    {
+        "title": "带 * 星号与 [方括号](x) 还有 `反引号`",
+        "kind": "不存在的类型",
+        "web_url": None,
+    },
     {"web_url": "javascript:alert(1)", "kind": "video"},
     {"web_url": "https://www.douyin.com/video/1)", "kind": "video"},
-    {"code": None, "message": None, "fails": None, "rounds": None, "days": None,
-     "reason": None, "gate_seconds": None, "fetch_count": None},
-    {"code": "403_FORBIDDEN_SCOPE", "message": "上游返回的原始报错\n第二行", "config": True},
+    {
+        "code": None,
+        "message": None,
+        "fails": None,
+        "rounds": None,
+        "days": None,
+        "reason": None,
+        "gate_seconds": None,
+        "fetch_count": None,
+    },
+    {
+        "code": "403_FORBIDDEN_SCOPE",
+        "message": "上游返回的原始报错\n第二行",
+        "config": True,
+    },
     {"content": None},
-    {"content": Content(
-        content_id="1", kind=Kind.VIDEO, title="x" * 500,
-        web_url="https://www.douyin.com/video/1", created_at=datetime.now(timezone.utc),
-        cover_url="https://p3-pc.douyinpic.com/cover.jpg", tags=("话题",) * 12,
-    )},
-    {"content": Content(
-        content_id="1", kind=Kind.IMAGE_ALBUM, title="。", image_count=9,
-        web_url="https://www.douyin.com/video/1", created_at=None,
-    )},
-    {"removed": [{"content_id": str(i), "title": "条" * 300,
-                  "created_at": "2026-09-19T00:20:00+00:00", "is_top": i % 2 == 0}
-                 for i in range(30)]},
+    {
+        "content": Content(
+            content_id="1",
+            kind=Kind.VIDEO,
+            title="x" * 500,
+            web_url="https://www.douyin.com/video/1",
+            created_at=datetime.now(timezone.utc),
+            cover_url="https://p3-pc.douyinpic.com/cover.jpg",
+            tags=("话题",) * 12,
+        )
+    },
+    {
+        "content": Content(
+            content_id="1",
+            kind=Kind.IMAGE_ALBUM,
+            title="。",
+            image_count=9,
+            web_url="https://www.douyin.com/video/1",
+            created_at=None,
+        )
+    },
+    {
+        "removed": [
+            {
+                "content_id": str(i),
+                "title": "条" * 300,
+                "created_at": "2026-09-19T00:20:00+00:00",
+                "is_top": i % 2 == 0,
+            }
+            for i in range(30)
+        ]
+    },
 ]
 
 KINDS = list(EventKind)
@@ -63,8 +99,12 @@ def unescaped(markdown: str, char: str) -> bool:
 
 
 def make(kind: EventKind, payload: dict) -> str:
-    event = Event(kind, sec_user_id="MS4wLjABAAAAxxxx", nickname="ζωευώ", payload=payload)
-    return render_event(event, now=datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc)).markdown
+    event = Event(
+        kind, sec_user_id="MS4wLjABAAAAxxxx", nickname="ζωευώ", payload=payload
+    )
+    return render_event(
+        event, now=datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc)
+    ).markdown
 
 
 @pytest.mark.parametrize("kind", KINDS)
@@ -77,7 +117,9 @@ def test_every_line_is_a_block_element(kind):
         for line in make(kind, payload).split("\n"):
             if not line.strip():
                 continue
-            assert line.startswith(ALLOWED_PREFIX), f"{kind.value} 出现裸段落行：{line[:60]!r}"
+            assert line.startswith(ALLOWED_PREFIX), (
+                f"{kind.value} 出现裸段落行：{line[:60]!r}"
+            )
 
 
 @pytest.mark.parametrize("kind", KINDS)
@@ -89,7 +131,9 @@ def test_no_row_has_an_empty_value(kind):
     """
     for payload in HOSTILE:
         for line in make(kind, payload).splitlines():
-            assert not line.rstrip().endswith("："), f"{kind.value} 出现空值字段行：{line!r}"
+            assert not line.rstrip().endswith("："), (
+                f"{kind.value} 出现空值字段行：{line!r}"
+            )
 
 
 @pytest.mark.parametrize("kind", KINDS)
@@ -134,7 +178,9 @@ def test_only_constructs_both_channels_support(kind):
         assert not unescaped(md, "`"), f"{kind.value} 用了行内代码（钉钉不支持）"
         assert not unescaped(md, "|"), f"{kind.value} 用了表格（两个渠道都不支持）"
         assert "```" not in md, f"{kind.value} 用了代码块"
-        assert not any(line.startswith("---") for line in md.split("\n")), f"{kind.value} 用了分隔线"
+        assert not any(line.startswith("---") for line in md.split("\n")), (
+            f"{kind.value} 用了分隔线"
+        )
         # 斜体只在钉钉支持，企业微信 markdown 不支持 → 我们不产出单个未转义的星号
         assert not re.search(r"(?<!\\)(?<!\*)\*(?!\*)", md), f"{kind.value} 用了斜体"
 
@@ -161,13 +207,20 @@ def test_body_stays_within_the_channel_byte_limit(kind):
 
 def test_a_long_title_is_clipped_before_escaping():
     """超长标题按原始值截断，且截断点不会切坏转义序列。"""
-    title = "あ" * TITLE_CLIP + "*"          # 截断点正好落在会被转义的字符附近
+    title = "あ" * TITLE_CLIP + "*"  # 截断点正好落在会被转义的字符附近
     event = Event(
-        EventKind.NEW_POST, sec_user_id="u1", nickname="阿直",
-        payload={"content": Content(
-            content_id="1", kind=Kind.VIDEO, title=title,
-            web_url="https://www.douyin.com/video/1", created_at=None,
-        )},
+        EventKind.NEW_POST,
+        sec_user_id="u1",
+        nickname="阿直",
+        payload={
+            "content": Content(
+                content_id="1",
+                kind=Kind.VIDEO,
+                title=title,
+                web_url="https://www.douyin.com/video/1",
+                created_at=None,
+            )
+        },
     )
     md = render_event(event).markdown
     assert "…" in md, "超长标题要截断"
@@ -184,10 +237,14 @@ def test_subject_stays_plain_text():
     """
     for kind in KINDS:
         for payload in HOSTILE:
-            event = Event(kind, sec_user_id="u1", nickname="阿直*直#话题", payload=payload)
+            event = Event(
+                kind, sec_user_id="u1", nickname="阿直*直#话题", payload=payload
+            )
             subject = render_event(event).subject
             assert subject.strip()
-            assert "\\" not in subject, f"{kind.value} 的 subject 里有转义残留：{subject!r}"
+            assert "\\" not in subject, (
+                f"{kind.value} 的 subject 里有转义残留：{subject!r}"
+            )
             assert "\n" not in subject, "通知栏标题必须是单行"
             assert "\u200b" not in subject, "零宽空格只对 markdown 渠道有意义"
             assert len(subject) <= 120, f"{kind.value} 的 subject 过长：{len(subject)}"

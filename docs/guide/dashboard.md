@@ -12,7 +12,7 @@ WEB_PORT=8787
 
 ![面板：LED 状态阵列、数据条与账号列表](/img/panel-list.png)
 
-*图中 6 个账号正好覆盖全部 5 种状态：正常、请求失败、长期无更新、从未有作品、已移除。*
+_图中 6 个账号正好覆盖全部 5 种状态：正常、请求失败、长期无更新、从未有作品、已移除。_
 
 ## 面板内容
 
@@ -36,7 +36,7 @@ WEB_PORT=8787
 
 ![账号详情弹窗](/img/panel-detail.png)
 
-*列表里点任意一行打开详情。*
+_列表里点任意一行打开详情。_
 
 ## 事件时间线（`/events`）
 
@@ -89,15 +89,15 @@ WEB_PORT=8787
 
 ## 机器接口
 
-| 路径                          | 用途                          |
-| ----------------------------- | ----------------------------- |
-| `/api/state`                  | 快照原文                      |
-| `/api/health`                 | 小结                          |
-| `/api/user/<sec_user_id>`     | 单账号详情（作品 + 互动量曲线 + 最近事件） |
-| `/api/events`                 | 事件列表，认 `range` / `group` / `kind` / `author` 四个参数（与事件页同一套过滤） |
-| `/assets/chart.umd.min.js`    | 图表库，带内容哈希版本号（对不上就 `no-store`） |
-| `/metrics`                    | Prometheus 格式               |
-| `/healthz` `/readyz`          | 探针（`/readyz` 同时检查状态库与上游） |
+| 路径                       | 用途                                                                              |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| `/api/state`               | 快照原文                                                                          |
+| `/api/health`              | 小结                                                                              |
+| `/api/user/<sec_user_id>`  | 单账号详情（作品 + 互动量曲线 + 最近事件）                                        |
+| `/api/events`              | 事件列表，认 `range` / `group` / `kind` / `author` 四个参数（与事件页同一套过滤） |
+| `/assets/chart.umd.min.js` | 图表库，带内容哈希版本号（对不上就 `no-store`）                                   |
+| `/metrics`                 | Prometheus 格式                                                                   |
+| `/healthz` `/readyz`       | 探针（`/readyz` 同时检查状态库与上游）                                            |
 
 ::: warning `/metrics` 的 `author` label 变了
 账号相关指标（`dywatch_known_posts`、`dywatch_account_failures`）的 `author` label 现在是
@@ -109,4 +109,5 @@ WEB_PORT=8787
 ```text
 dywatch_known_posts{author=~".*[|]市场部"}
 ```
+
 :::

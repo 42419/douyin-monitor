@@ -74,7 +74,9 @@ class RoundWaiter:
 
     __slots__ = ("_min", "_max", "_rng")
 
-    def __init__(self, min_seconds: int, max_seconds: int, *, rng: random.Random | None = None) -> None:
+    def __init__(
+        self, min_seconds: int, max_seconds: int, *, rng: random.Random | None = None
+    ) -> None:
         self._min = int(min_seconds)
         self._max = int(max_seconds)
         self._rng = rng or random.Random()

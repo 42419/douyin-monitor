@@ -1,0 +1,24 @@
+# 依赖与构建产物
+node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+.venv/
+
+# 临时/调试产物
+.tmp/
+
+# 运行时状态、日志与凭据（本来就不在版本控制里）
+data/
+log/
+.env
+
+# 截图与文档配图（二进制/手工排版）
+screenshots/
+
+# 工具自己的目录（`.tv` / `.uvcache` 是 uv 的本地环境与下载缓存，
+# 里面自带 `*` 的 .gitignore；不写在这里的话 prettier 会顺着 `**/*.md`
+# 去改 site-packages 里的 LICENSE.md）
+.workbuddy/
+.pytest_cache/
+.tv/
+.uvcache/

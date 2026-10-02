@@ -37,7 +37,11 @@ def _parser() -> argparse.ArgumentParser:
         prog="dywatch",
         description="抖音账号视频监控（基于 Douyin_TikTok_Download_API v5，只读客户端）",
     )
-    parser.add_argument("--env", metavar="PATH", help="指定 .env 路径（默认 $MONITOR_HOME/.env 或 ./.env）")
+    parser.add_argument(
+        "--env",
+        metavar="PATH",
+        help="指定 .env 路径（默认 $MONITOR_HOME/.env 或 ./.env）",
+    )
     parser.add_argument("--version", action="version", version=f"dywatch {__version__}")
     sub = parser.add_subparsers(dest="command")
 
@@ -50,7 +54,9 @@ def _parser() -> argparse.ArgumentParser:
 
     add = sub.add_parser("add", help="把账号加进 users.conf")
     add.add_argument("target", help="抖音主页链接，或 sec_user_id")
-    add.add_argument("nickname", nargs="?", default="", help="展示用昵称（默认取 ID 尾部）")
+    add.add_argument(
+        "nickname", nargs="?", default="", help="展示用昵称（默认取 ID 尾部）"
+    )
 
     # `--env` 也接受写在子命令**后面**（`dywatch doctor --env /srv/x/.env`）。
     # 文档说"所有命令都接受 --env"，而只在顶层注册的话这种写法会被 argparse 拒掉。
@@ -61,7 +67,9 @@ def _parser() -> argparse.ArgumentParser:
     # 顶层那份得以保留；两处都写时子命令那份（后解析）生效。
     for name, child in sub.choices.items():
         child.add_argument(
-            "--env", metavar="PATH", default=argparse.SUPPRESS,
+            "--env",
+            metavar="PATH",
+            default=argparse.SUPPRESS,
             help="指定 .env 路径（等价于写在子命令前面；两处都给时以子命令后面这个为准）",
         )
     return parser
@@ -121,11 +129,15 @@ def cmd_status(settings: Settings) -> int:
     # 面板把"文件损坏"当成"没有数据"，命令行不该比它更脆（同一份文件、同一种坏法）。
     data = read_status(settings)
     if not data:
-        print(f"状态快照读不出来（{path} 损坏或不是 JSON 对象），等下一轮覆盖，或直接删掉它")
+        print(
+            f"状态快照读不出来（{path} 损坏或不是 JSON 对象），等下一轮覆盖，或直接删掉它"
+        )
         return 1
     print(f"快照时间: {data.get('timestamp')}  PID: {data.get('pid')}")
     gate = data.get("gate") or {}
-    print(f"上游闸门: {'正常' if gate.get('open', True) else '已关闭(' + str(gate.get('reason')) + ')'}")
+    print(
+        f"上游闸门: {'正常' if gate.get('open', True) else '已关闭(' + str(gate.get('reason')) + ')'}"
+    )
     notify = data.get("notify") or {}
     print(f"推送渠道: {', '.join(notify.get('channels') or []) or '（静默/无）'}")
     # 两个轮次数并排显示并标口径：只给"本次运行"会让人以为轮数被重置了
@@ -172,7 +184,9 @@ async def cmd_doctor(settings: Settings) -> int:
         print("✗ DTK_API_KEY 未配置")
         return 2
     if not settings["DTK_API_KEY"].startswith("dtk_"):
-        print("! DTK_API_KEY 不以 dtk_ 开头 —— DTK 的 Key 是 dtk_<12位hex>_<32位base64url>，共 49 字符")
+        print(
+            "! DTK_API_KEY 不以 dtk_ 开头 —— DTK 的 Key 是 dtk_<12位hex>_<32位base64url>，共 49 字符"
+        )
 
     async with DtkClient(
         settings["DTK_BASE_URL"],
@@ -187,13 +201,17 @@ async def cmd_doctor(settings: Settings) -> int:
         except MonitorError as exc:
             print(f"✗ 凭据不可用：{exc.code} —— {exc.message}")
             if exc.code == "UNAUTHENTICATED":
-                print("  这不是权限不足（那是 403 FORBIDDEN_SCOPE），而是 Key 本身没被接受。")
+                print(
+                    "  这不是权限不足（那是 403 FORBIDDEN_SCOPE），而是 Key 本身没被接受。"
+                )
                 print("  请确认复制的是完整的 dtk_... 字符串，且未被吊销/过期。")
             return 2
 
         user = me.get("user") or {}
         scopes = set(user.get("scopes") or [])
-        print(f"✓ 凭据有效：username={user.get('username')} role={user.get('role')} via={user.get('via')}")
+        print(
+            f"✓ 凭据有效：username={user.get('username')} role={user.get('role')} via={user.get('via')}"
+        )
         print(f"  scopes: {', '.join(sorted(scopes))}")
         # `archive:read` **只在用得上它的时候才算必需**：它在配置里的开关就是
         # `ARCHIVE_ENABLED`（关掉之后删除判定只是少一个零成本的第二信源）。
@@ -201,18 +219,22 @@ async def cmd_doctor(settings: Settings) -> int:
         # "✓ 自检通过"并 exit 0（一个把 exit code 当门禁的 CI 会放过去，而归档交叉
         # 确认实际上一直在失败）；反过来 `ARCHIVE_ENABLED=false` 时还在报 ✗。
         required = [
-            scope for scope in REQUIRED_SCOPES
+            scope
+            for scope in REQUIRED_SCOPES
             if scope != "archive:read" or settings["ARCHIVE_ENABLED"]
         ]
         missing = [scope for scope in required if scope not in scopes]
         optional_missing = [
-            scope for scope in REQUIRED_SCOPES
+            scope
+            for scope in REQUIRED_SCOPES
             if scope not in required and scope not in scopes
         ]
         if missing:
             print(f"✗ 缺少必需的 scope: {', '.join(missing)}")
             print("  douyin:read  -> user/posts、video、tools/parse-url、tasks/{id}")
-            print("  archive:read -> 归档交叉确认（可在配置里用 ARCHIVE_ENABLED=false 关掉）")
+            print(
+                "  archive:read -> 归档交叉确认（可在配置里用 ARCHIVE_ENABLED=false 关掉）"
+            )
             for scope in missing:
                 problems.append(f"缺少 {scope}")
         else:
@@ -243,7 +265,9 @@ async def cmd_doctor(settings: Settings) -> int:
                     if pct >= 90:
                         print("  ! 存储已接近上限，未 pin 的旧下载很快会被自动淘汰")
                     if not downloader.get("available"):
-                        print("  ! 下载器当前离线：新的归档下载会一直排队，不会报错也不会成功")
+                        print(
+                            "  ! 下载器当前离线：新的归档下载会一直排队，不会报错也不会成功"
+                        )
                         problems.append("下载器离线")
                 except MonitorError as exc:
                     print(f"! 读取存储用量失败：{exc.code}")
@@ -271,12 +295,18 @@ async def cmd_doctor(settings: Settings) -> int:
                         problems.append("PIN_DTK_API_KEY 不可用")
                         pin_scopes = set()
                 else:
-                    pin_scopes = scopes  # 没配独立 Key，复用主 Key，scopes 前面已经查过了
+                    pin_scopes = (
+                        scopes  # 没配独立 Key，复用主 Key，scopes 前面已经查过了
+                    )
 
                 if "identity:manage" not in pin_scopes:
                     which = "PIN_DTK_API_KEY" if pin_key_configured else "DTK_API_KEY"
-                    print(f"✗ HIDDEN_POST_CHECK_ENABLED=true，但 {which} 缺少 identity:manage scope")
-                    print("  这个 scope 能解密查看任意身份的 cookie 明文，建议单独开一把 Key 只给这一处用")
+                    print(
+                        f"✗ HIDDEN_POST_CHECK_ENABLED=true，但 {which} 缺少 identity:manage scope"
+                    )
+                    print(
+                        "  这个 scope 能解密查看任意身份的 cookie 明文，建议单独开一把 Key 只给这一处用"
+                    )
                     problems.append("缺少 identity:manage（隐藏作品核验需要）")
                 else:
                     print(
@@ -285,7 +315,9 @@ async def cmd_doctor(settings: Settings) -> int:
                     )
 
         rate = me.get("rate_limit_per_min")
-        print(f"  速率上限: {rate if rate is not None else '未单独设置（用实例默认 120/分钟）'}")
+        print(
+            f"  速率上限: {rate if rate is not None else '未单独设置（用实例默认 120/分钟）'}"
+        )
 
         # 2) 实例健康与身份池
         try:
@@ -311,12 +343,16 @@ async def cmd_doctor(settings: Settings) -> int:
         if not users:
             print("! users.conf 里没有账号，跳过账号检查")
         else:
-            print(f"检查 {len(users)} 个账号（每个消耗 1 个身份，本轮带 include_raw 以验证置顶链路）…")
+            print(
+                f"检查 {len(users)} 个账号（每个消耗 1 个身份，本轮带 include_raw 以验证置顶链路）…"
+            )
             for entry in users:
                 started = asyncio.get_running_loop().time()
                 try:
                     page = await client.author_posts(
-                        entry.sec_user_id, int(settings["FETCH_COUNT"]), include_raw=True
+                        entry.sec_user_id,
+                        int(settings["FETCH_COUNT"]),
+                        include_raw=True,
                     )
                 except MonitorError as exc:
                     print(f"  ✗ {entry.nickname}: {exc.code} {exc.message[:60]}")
@@ -332,7 +368,9 @@ async def cmd_doctor(settings: Settings) -> int:
                     problems.append(f"{entry.nickname} 返回空列表，请核实 ID")
                 elif not page.raw_included:
                     note = "  ← 没拿到 raw，置顶标志不可用"
-                    problems.append(f"{entry.nickname} 的 raw 缺失，置顶分级会退化为统一 2 轮")
+                    problems.append(
+                        f"{entry.nickname} 的 raw 缺失，置顶分级会退化为统一 2 轮"
+                    )
                 print(
                     f"  ✓ {entry.nickname}: {len(page.items)} 条"
                     f"（非置顶 {non_top} / 置顶 {pinned}，count={settings['FETCH_COUNT']}）"
@@ -340,7 +378,10 @@ async def cmd_doctor(settings: Settings) -> int:
                 )
 
     # 4) 速率余量
-    avg = (float(settings["REQUEST_INTERVAL_MIN"]) + float(settings["REQUEST_INTERVAL_MAX"])) / 2
+    avg = (
+        float(settings["REQUEST_INTERVAL_MIN"])
+        + float(settings["REQUEST_INTERVAL_MAX"])
+    ) / 2
     per_min = 60.0 / avg if avg else 0
     print(f"请求节奏: 约 {per_min:.1f} 次/分钟（pacer 决定，与账号数无关）")
     if problems:
@@ -360,7 +401,9 @@ async def cmd_doctor(settings: Settings) -> int:
 async def cmd_add(settings: Settings, target: str, nickname: str) -> int:
     candidate = resolve_input(target)
     if not candidate.startswith("MS4wLjAB") and "://" in target:
-        async with DtkClient(settings["DTK_BASE_URL"], settings["DTK_API_KEY"], wait=0) as client:
+        async with DtkClient(
+            settings["DTK_BASE_URL"], settings["DTK_API_KEY"], wait=0
+        ) as client:
             try:
                 info = await client.identify_url(target)
             except MonitorError as exc:
@@ -405,10 +448,11 @@ async def cmd_add(settings: Settings, target: str, nickname: str) -> int:
     path = settings.users_conf
     # 去重按**整行 ID 字段**比，不用子串匹配：所有真实 ID 都以 `MS4wLjABAAAA` 开头，
     # 子串匹配会把"与某个已有 ID 前缀相同"的新账号误判成重复而拒绝写入。
-    existing = {
-        entry.sec_user_id
-        for entry in load_users_conf(path)
-    } if path.is_file() else set()
+    existing = (
+        {entry.sec_user_id for entry in load_users_conf(path)}
+        if path.is_file()
+        else set()
+    )
     if candidate in existing:
         print(f"! 该账号已在 users.conf 中：{candidate}")
         return 1
@@ -449,12 +493,17 @@ async def cmd_run(settings: Settings, *, once: bool) -> int:
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
             loop.add_signal_handler(sig, _request_stop, int(sig))
-        except (NotImplementedError, AttributeError):  # pragma: no cover - dev on Windows
+        except (
+            NotImplementedError,
+            AttributeError,
+        ):  # pragma: no cover - dev on Windows
             signal.signal(sig, lambda s, _f: _request_stop(int(s)))
 
     started = datetime.now(timezone.utc)
     logger.info("=" * 60)
-    logger.info("dywatch.started", version=__version__, pid=__import__("os").getpid(), once=once)
+    logger.info(
+        "dywatch.started", version=__version__, pid=__import__("os").getpid(), once=once
+    )
     for line in runtime.describe():
         logger.info("config", line=line.strip())
     if settings["WEB_ENABLED"]:
@@ -474,7 +523,7 @@ async def cmd_run(settings: Settings, *, once: bool) -> int:
                     "panel.exposed",
                     host=str(settings["WEB_HOST"]),
                     hint="按这个地址监听等于把面板摊在网络上，而它没有鉴权；"
-                         "云服务器还要记得放通端口时自己评估",
+                    "云服务器还要记得放通端口时自己评估",
                 )
         except OSError as exc:
             logger.error("panel.failed", error=str(exc))
@@ -499,7 +548,9 @@ async def cmd_test_notify(settings: Settings) -> int:
         # 于是照着自己配好的凭据反复核对，而真实原因（SILENT_MODE=true）从未被提到。
         if settings["SILENT_MODE"]:
             print("SILENT_MODE=true：推送被整体关掉了，所以没有渠道可测。")
-            print("  想验证渠道凭据，先把 SILENT_MODE 设为 false 再跑一次（测完可以改回来）。")
+            print(
+                "  想验证渠道凭据，先把 SILENT_MODE 设为 false 再跑一次（测完可以改回来）。"
+            )
             return 2
         print("没有任何可用渠道（检查 NOTIFY_CHANNELS / NOTIFY_TARGETS 与对应的凭据）")
         return 2

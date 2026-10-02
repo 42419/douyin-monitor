@@ -70,3 +70,19 @@ loop.py（热加载 users.conf，MAX_CONCURRENT 并发调度）
 想了解每一条规则的来历、以及"为什么不那样做"的取舍记录，可以直接读仓库里的
 [`DESIGN.md`](https://github.com/42419/douyin-monitor/blob/main/DESIGN.md)——
 真实接口契约（含实测数据）在它的第 2 章。
+
+## 代码风格
+
+格式化工具都在 dev 依赖里，两条命令：
+
+```bash
+ruff format src tests   # Python，行宽 88
+npm run format:docs     # Markdown、站点配置与 package.json
+```
+
+对应的检查是 `ruff format --check src tests` 与 `npm run check:docs`。
+
+两点是刻意的：`.prettierrc.json` 把 `proseWrap` 钉在 `preserve`——文档里的中文段落是手写的
+换行，让 prettier 按列宽重排会把它切成七零八落；表格会被 prettier 按**字符数**重新对齐，
+而中文一个字占两格，所以源码里中文表格看着不齐是正常的，渲染完全不受影响。
+修改生成的 `docs/reference/message-templates.md` 时先改代码里的渲染，别手改文档。

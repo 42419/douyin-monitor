@@ -50,6 +50,7 @@ ID_FAIL = "MS4wLjABAAAAfail"
 
 # --------------------------------------------------------------------- 脚手架
 
+
 def make_settings(tmp_path: Path, **overrides: str) -> Settings:
     env = {
         "MONITOR_HOME": str(tmp_path),
@@ -88,14 +89,21 @@ def write_status(settings: Settings, **overrides: Any) -> Path:
         "pid": 4321,
         "rounds": 137,
         "rounds_total": 3214,
-        "gate": {"open": True, "reason": None, "remaining_seconds": 0, "times_closed": 0},
+        "gate": {
+            "open": True,
+            "reason": None,
+            "remaining_seconds": 0,
+            "times_closed": 0,
+        },
         "upstream": {"base_url": "http://192.168.20.4:8000"},
         "notify": {"channels": ["dingtalk"], "silent": False},
         "users": [user_entry()],
     }
     snapshot.update(overrides)
     settings.status_path.parent.mkdir(parents=True, exist_ok=True)
-    settings.status_path.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+    settings.status_path.write_text(
+        json.dumps(snapshot, ensure_ascii=False), encoding="utf-8"
+    )
     return settings.status_path
 
 
@@ -105,7 +113,9 @@ def seed_db(settings: Settings) -> None:
     store.ensure_author(ID_OK, "示例账号", NOW)
     store.ensure_author(ID_FAIL, "失败的账号", NOW)
     store.ensure_author(ID_WRONG, "疑似写错的 ID", NOW)
-    settings.users_conf.write_text(f"{ID_OK}|示例账号\n{ID_FAIL}|失败的账号\n", encoding="utf-8")
+    settings.users_conf.write_text(
+        f"{ID_OK}|示例账号\n{ID_FAIL}|失败的账号\n", encoding="utf-8"
+    )
 
     posts = tuple(
         PostState(
@@ -114,7 +124,9 @@ def seed_db(settings: Settings) -> None:
             title=f"第 {index} 条",
             # 第 3 条故意没有发布时间：抖音偶尔不给 created_at，它不该因此排到最新；
             # 置顶那条故意是最旧的（30 天前）——"置顶排最前"不能靠"它碰巧最新"来蒙对
-            created_at=None if index == 3 else NOW - timedelta(days=30 if index == 0 else index),
+            created_at=None
+            if index == 3
+            else NOW - timedelta(days=30 if index == 0 else index),
             is_top=index == 0,
             first_seen_at=NOW - timedelta(days=index),
             absent_rounds=1 if index == 2 else 0,
@@ -132,23 +144,46 @@ def seed_db(settings: Settings) -> None:
             runs=120,
             posts=posts,
             tombstones=(
-                Tombstone(content_id="741", removed_at=NOW - timedelta(days=2), reason="confirmed"),
-                Tombstone(content_id="742", removed_at=NOW - timedelta(days=6),
-                          reason="scrolled_out"),
+                Tombstone(
+                    content_id="741",
+                    removed_at=NOW - timedelta(days=2),
+                    reason="confirmed",
+                ),
+                Tombstone(
+                    content_id="742",
+                    removed_at=NOW - timedelta(days=6),
+                    reason="scrolled_out",
+                ),
             ),
         ),
         [
-            Event(kind=EventKind.NEW_POST, sec_user_id=ID_OK, nickname="示例账号", content_id="743"),
-            Event(kind=EventKind.POST_REMOVED, sec_user_id=ID_OK, nickname="示例账号",
-                  content_id="741"),
+            Event(
+                kind=EventKind.NEW_POST,
+                sec_user_id=ID_OK,
+                nickname="示例账号",
+                content_id="743",
+            ),
+            Event(
+                kind=EventKind.POST_REMOVED,
+                sec_user_id=ID_OK,
+                nickname="示例账号",
+                content_id="741",
+            ),
         ],
         now=NOW,
     )
     store.save_round(
         ID_FAIL,
-        AuthorState(sec_user_id=ID_FAIL, nickname="失败的账号", initialized_at=NOW,
-                    ever_had_posts=True, consecutive_fails=3, last_error="上游返回 403",
-                    last_error_code="403_FORBIDDEN_SCOPE", runs=88),
+        AuthorState(
+            sec_user_id=ID_FAIL,
+            nickname="失败的账号",
+            initialized_at=NOW,
+            ever_had_posts=True,
+            consecutive_fails=3,
+            last_error="上游返回 403",
+            last_error_code="403_FORBIDDEN_SCOPE",
+            runs=88,
+        ),
         [],
         now=NOW,
     )
@@ -174,6 +209,7 @@ def get(url: str) -> tuple[int, str]:
 
 
 # --------------------------------------------------------------------- 转义
+
 
 def test_escape_html_escapes_everything_once():
     escaped = _escape_html("""<script>alert('x")</script>&""")
@@ -274,18 +310,25 @@ def test_panel_and_metrics_survive_a_hand_edited_snapshot(tmp_path):
 
 # --------------------------------------------------------------------- 状态分级
 
+
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
         ({"configured": False}, "已移除"),
         ({"configured": False, "consecutive_fails": 3}, "已移除"),  # 已移出配置的先说
         ({"consecutive_fails": 2}, "失败 2 次"),
-        ({"consecutive_fails": 2, "ever_had_posts": False}, "失败 2 次"),  # 失败比无作品更急
+        (
+            {"consecutive_fails": 2, "ever_had_posts": False},
+            "失败 2 次",
+        ),  # 失败比无作品更急
         ({"ever_had_posts": False, "hours_since_newest_post": None}, "从未有作品"),
         ({"hours_since_newest_post": 24 * 20}, "20 天无新作品"),
         # 关键差异：即使"刚刚检测到变化"（比如删了一条作品），只要最新作品是 20 天前的，
         # 就该标成"长期无新作品"——旧口径（看 last_update_at）在这里会显示成正常
-        ({"hours_since_newest_post": 24 * 20, "hours_since_update": 1}, "20 天无新作品"),
+        (
+            {"hours_since_newest_post": 24 * 20, "hours_since_update": 1},
+            "20 天无新作品",
+        ),
         ({"hours_since_newest_post": 24 * 20, "ever_had_posts": False}, "从未有作品"),
         ({}, "正常"),
     ],
@@ -312,10 +355,17 @@ def test_led_array_and_stats_render(tmp_path):
         settings,
         users=[
             user_entry(),
-            user_entry(sec_user_id=ID_WRONG, nickname="写错的", ever_had_posts=False,
-                       hours_since_newest_post=None, update_frequency=None),
+            user_entry(
+                sec_user_id=ID_WRONG,
+                nickname="写错的",
+                ever_had_posts=False,
+                hours_since_newest_post=None,
+                update_frequency=None,
+            ),
             user_entry(sec_user_id=ID_FAIL, nickname="失败的", consecutive_fails=3),
-            user_entry(sec_user_id="MS4wLjABAAAAgone", nickname="老的", configured=False),
+            user_entry(
+                sec_user_id="MS4wLjABAAAAgone", nickname="老的", configured=False
+            ),
         ],
     )
 
@@ -354,7 +404,9 @@ def test_metrics_stay_parseable_with_hostile_nicknames(tmp_path):
         status, body = get(base + "/metrics")
 
     assert status == 200
-    lines = [line for line in body.splitlines() if line.startswith("dywatch_known_posts{")]
+    lines = [
+        line for line in body.splitlines() if line.startswith("dywatch_known_posts{")
+    ]
     assert len(lines) == 1, "换行没被转义，样本被拆成了多行"
     # label 现在是 `id|昵称`：id 在前，所以断言里面的昵称那一段
     assert 'nl\\nq\\"\\\\x"' in lines[0]
@@ -395,7 +447,13 @@ def test_metrics_label_never_ends_with_a_half_escape():
     """
     from dywatch.webui import _label
 
-    for raw in ("a" * 95 + '"' + "b", "a" * 94 + '"' + "b", "长" * 95 + '"', "\\" * 60, '"' * 60):
+    for raw in (
+        "a" * 95 + '"' + "b",
+        "a" * 94 + '"' + "b",
+        "长" * 95 + '"',
+        "\\" * 60,
+        '"' * 60,
+    ):
         label = _label(raw)
         trailing = len(label) - len(label.rstrip("\\"))
         assert trailing % 2 == 0, f"{raw[-3:]!r} 截出了半个转义：{label[-4:]!r}"
@@ -403,8 +461,15 @@ def test_metrics_label_never_ends_with_a_half_escape():
 
 def test_gate_closed_renders_warning_strip(tmp_path):
     settings = make_settings(tmp_path)
-    write_status(settings, gate={"open": False, "reason": "IDENTITY_POOL_EXHAUSTED",
-                                 "remaining_seconds": 240.0, "times_closed": 1})
+    write_status(
+        settings,
+        gate={
+            "open": False,
+            "reason": "IDENTITY_POOL_EXHAUSTED",
+            "remaining_seconds": 240.0,
+            "times_closed": 1,
+        },
+    )
     html = render_page(settings)
     assert "闸门关闭" in html
     assert "IDENTITY_POOL_EXHAUSTED" in html
@@ -434,6 +499,7 @@ def test_silent_mode_is_visible_in_meta(tmp_path):
 
 # --------------------------------------------------------------------- 详情
 
+
 def test_user_detail_reports_posts_tombstones_and_events(tmp_path):
     settings = make_settings(tmp_path)
     seed_db(settings)
@@ -457,7 +523,10 @@ def test_user_detail_reports_posts_tombstones_and_events(tmp_path):
     assert detail["newest_post_at"] != "未知"
     assert detail["posts"][0]["kind"] in ("视频", "图文")
     assert [p["absent_rounds"] for p in detail["posts"]].count(1) == 1
-    assert {row["reason"] for row in detail["removed"]} == {"已确认消失", "被新作品挤出窗口"}
+    assert {row["reason"] for row in detail["removed"]} == {
+        "已确认消失",
+        "被新作品挤出窗口",
+    }
     assert {event["label"] for event in detail["events"]} == {"新作品", "作品消失"}
 
 
@@ -489,9 +558,14 @@ def test_user_detail_counts_all_tombstones_beyond_the_listing_limit(tmp_path):
     store.save_round(
         ID_OK,
         AuthorState(
-            sec_user_id=ID_OK, nickname="示例账号", initialized_at=NOW, ever_had_posts=True,
+            sec_user_id=ID_OK,
+            nickname="示例账号",
+            initialized_at=NOW,
+            ever_had_posts=True,
             tombstones=tuple(
-                Tombstone(content_id=f"75{index:017d}", removed_at=NOW - timedelta(days=index))
+                Tombstone(
+                    content_id=f"75{index:017d}", removed_at=NOW - timedelta(days=index)
+                )
                 for index in range(25)
             ),
         ),
@@ -525,11 +599,17 @@ def test_user_detail_hidden_count_matches_the_per_post_badges(tmp_path):
             initialized_at=NOW - timedelta(days=30),
             last_update_at=NOW - timedelta(minutes=1),
             posts=(
-                PostState(content_id="visible", title="看得见的",
-                          created_at=NOW - timedelta(days=2)),
-                PostState(content_id="hidden", title="看不见的",
-                          created_at=NOW - timedelta(days=1),
-                          hidden_from_guest_at=NOW - timedelta(hours=1)),
+                PostState(
+                    content_id="visible",
+                    title="看得见的",
+                    created_at=NOW - timedelta(days=2),
+                ),
+                PostState(
+                    content_id="hidden",
+                    title="看不见的",
+                    created_at=NOW - timedelta(days=1),
+                    hidden_from_guest_at=NOW - timedelta(hours=1),
+                ),
             ),
         ),
         [],
@@ -603,8 +683,13 @@ def test_metrics_report_how_often_an_upstream_retry_after_was_capped(tmp_path):
     settings = make_settings(tmp_path)
     write_status(
         settings,
-        gate={"open": False, "reason": "RATE_LIMITED", "remaining_seconds": 600.0,
-              "times_closed": 3, "retry_after_capped": 7},
+        gate={
+            "open": False,
+            "reason": "RATE_LIMITED",
+            "remaining_seconds": 600.0,
+            "times_closed": 3,
+            "retry_after_capped": 7,
+        },
     )
 
     with panel(settings) as base:
@@ -618,8 +703,10 @@ def test_metrics_report_how_often_an_upstream_retry_after_was_capped(tmp_path):
 def test_a_snapshot_without_the_new_gate_field_still_scrapes(tmp_path):
     """旧版本写下的快照里没有 `retry_after_capped`：那一项按 0 处理，不能让整次抓取失败。"""
     settings = make_settings(tmp_path)
-    write_status(settings, gate={"open": True, "reason": None, "remaining_seconds": 0,
-                                 "times_closed": 0})
+    write_status(
+        settings,
+        gate={"open": True, "reason": None, "remaining_seconds": 0, "times_closed": 0},
+    )
 
     with panel(settings) as base:
         status, body = get(base + "/metrics")
@@ -631,7 +718,9 @@ def test_a_snapshot_without_the_new_gate_field_still_scrapes(tmp_path):
 def test_readyz_reports_unreachable_upstream(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     monkeypatch.setattr(
-        webui.server, "_dtk_ok", lambda *a, **k: {"ok": False, "reason": "URLError: refused"}
+        webui.server,
+        "_dtk_ok",
+        lambda *a, **k: {"ok": False, "reason": "URLError: refused"},
     )
     with panel(settings) as base:
         status, body = get(base + "/readyz")
@@ -655,14 +744,24 @@ def test_readyz_does_not_create_the_state_store(tmp_path, monkeypatch):
         status, body = get(base + "/readyz")
 
     assert status == 503
-    assert json.loads(body)["components"]["state_store"]["reason"] == "state store not found"
+    assert (
+        json.loads(body)["components"]["state_store"]["reason"]
+        == "state store not found"
+    )
     assert not settings.db_path.exists(), "探针在数据目录里留下了空库"
-    assert not settings.db_path.parent.exists() or list(settings.db_path.parent.iterdir()) == []
+    assert (
+        not settings.db_path.parent.exists()
+        or list(settings.db_path.parent.iterdir()) == []
+    )
 
 
 def test_health_defaults_to_no_data(tmp_path):
     settings = make_settings(tmp_path)
-    assert webui.build_health(settings) == {"status": "no_data", "users": 0, "failed_users": 0}
+    assert webui.build_health(settings) == {
+        "status": "no_data",
+        "users": 0,
+        "failed_users": 0,
+    }
 
 
 def test_user_endpoint_accepts_ids_with_equals_and_plus(tmp_path):
@@ -766,7 +865,9 @@ def test_panel_server_starts_and_stops_cleanly(tmp_path):
     host, port = server.address
     assert (host, port)[1] > 0
     server.stop()
-    assert threading.active_count() <= before + 1  # 后台是 daemon 线程，stop 会关 socket
+    assert (
+        threading.active_count() <= before + 1
+    )  # 后台是 daemon 线程，stop 会关 socket
 
 
 def test_parse_dt_accepts_z_suffix_and_naive_values():
@@ -781,7 +882,9 @@ def test_urllib_parse_roundtrip_for_ids():
     raw = "MS4wLjABAAAA+a=b/c"
     assert urllib.parse.unquote(urllib.parse.quote(raw, safe="")) == raw
 
+
 # --------------------------------------------------- 上游健康卡片 / 自身降级横幅
+
 
 def upstream_snapshot(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
@@ -796,7 +899,13 @@ def upstream_snapshot(**overrides: Any) -> dict[str, Any]:
             "browser_rpc": {"ok": None, "latency_ms": None},
         },
         "pool": {
-            "douyin": {"minting": 1, "active": 7, "cooling": 2, "degraded": 0, "retired": 4},
+            "douyin": {
+                "minting": 1,
+                "active": 7,
+                "cooling": 2,
+                "degraded": 0,
+                "retired": 4,
+            },
             "total_active": 7,
         },
         "storage": {"db_size_bytes": 402_653_184, "identities": 14},
@@ -811,10 +920,10 @@ def test_status_page_shows_the_upstream_card(tmp_path):
     html = render_page(settings)
     assert "上游 DTK" in html
     assert "5.1.2" in html
-    assert "9 天 7 小时" in html          # uptime 要人话，不是秒数
-    assert "384.0 MB" in html             # 存储用量要人话
+    assert "9 天 7 小时" in html  # uptime 要人话，不是秒数
+    assert "384.0 MB" in html  # 存储用量要人话
     assert "身份池" in html and "活跃 7" in html
-    assert "未配置" in html               # browser_rpc 的 ok 是 None == 不知道，不是坏了
+    assert "未配置" in html  # browser_rpc 的 ok 是 None == 不知道，不是坏了
 
 
 def test_status_page_says_so_when_the_upstream_reading_is_missing(tmp_path):
@@ -829,9 +938,14 @@ def test_status_page_says_so_when_the_upstream_reading_is_missing(tmp_path):
 def test_status_page_marks_a_stale_upstream_reading(tmp_path):
     """取不到时保留上一次的值（比抹掉更有用），但必须说清它是旧的。"""
     settings = make_settings(tmp_path)
-    write_status(settings, upstream=upstream_snapshot(
-        ok=False, error="UPSTREAM_UNREACHABLE", version="5.1.2",
-    ))
+    write_status(
+        settings,
+        upstream=upstream_snapshot(
+            ok=False,
+            error="UPSTREAM_UNREACHABLE",
+            version="5.1.2",
+        ),
+    )
     html = render_page(settings)
     assert "不可用（UPSTREAM_UNREACHABLE）" in html
     assert "上一次取到的读数" in html
@@ -840,10 +954,16 @@ def test_status_page_marks_a_stale_upstream_reading(tmp_path):
 
 def test_self_check_banner_renders_reasons_and_readings(tmp_path):
     settings = make_settings(tmp_path)
-    write_status(settings, self_check={
-        "ok": False, "reasons": ["disk_low"], "free_mb": 138, "free_limit_mb": 200,
-        "writable": True,
-    })
+    write_status(
+        settings,
+        self_check={
+            "ok": False,
+            "reasons": ["disk_low"],
+            "free_mb": 138,
+            "free_limit_mb": 200,
+            "writable": True,
+        },
+    )
     html = render_page(settings)
     assert "[ 自身降级 ]" in html
     assert "磁盘剩余空间不足" in html
@@ -872,13 +992,14 @@ def test_health_report_includes_self_and_upstream_state(tmp_path):
 
 # --------------------------------------------------- /metrics
 
+
 def parse_exposition(text: str) -> tuple[dict[str, str], list[str]]:
     """极简 Prometheus 文本解析：只取 `# TYPE` 表和样本名。"""
     types: dict[str, str] = {}
     samples: list[str] = []
     for line in text.splitlines():
         if line.startswith("# TYPE "):
-            name, _, kind = line[len("# TYPE "):].partition(" ")
+            name, _, kind = line[len("# TYPE ") :].partition(" ")
             types[name] = kind
         elif line and not line.startswith("#"):
             samples.append(line.split("{")[0].split(" ")[0])
@@ -909,13 +1030,17 @@ def test_metrics_cover_upstream_pool_archive_and_features(tmp_path):
         features={"metrics": True, "hidden_check": False, "archive_download": True},
     )
     text = webui.metrics_text(settings)
-    assert 'dywatch_upstream_pool_identities{platform="douyin",state="active"} 7' in text
+    assert (
+        'dywatch_upstream_pool_identities{platform="douyin",state="active"} 7' in text
+    )
     assert "dywatch_upstream_pool_active 7" in text
     assert "dywatch_upstream_component_latency_ms" in text
     assert "dywatch_upstream_storage_db_bytes 402653184" in text
     assert "dywatch_archive_pending 3" in text
     assert "dywatch_archive_muted 0" in text
-    assert "dywatch_self_check_ok 0" in text and "dywatch_self_check_free_mb 138" in text
+    assert (
+        "dywatch_self_check_ok 0" in text and "dywatch_self_check_free_mb 138" in text
+    )
     assert 'dywatch_feature_enabled{name="hidden_check"} 0' in text
     assert "dywatch_upstream_checked_timestamp_seconds" in text
 
@@ -932,7 +1057,9 @@ def test_metrics_skip_unknown_upstream_components_instead_of_reporting_zero(tmp_
     text = webui.metrics_text(settings)
 
     ok_lines = [
-        line for line in text.splitlines() if line.startswith("dywatch_upstream_component_ok")
+        line
+        for line in text.splitlines()
+        if line.startswith("dywatch_upstream_component_ok")
     ]
     assert ok_lines == [
         'dywatch_upstream_component_ok{component="postgres"} 1',
@@ -941,7 +1068,8 @@ def test_metrics_skip_unknown_upstream_components_instead_of_reporting_zero(tmp_
 
     # 延迟那一组同理：值为 None 的样本不该出现（不是写成 0）
     latency_lines = [
-        line for line in text.splitlines()
+        line
+        for line in text.splitlines()
         if line.startswith("dywatch_upstream_component_latency_ms")
     ]
     assert latency_lines == [
@@ -984,6 +1112,7 @@ def test_metrics_omit_db_metrics_when_there_is_no_database_at_all(tmp_path):
 
 # --------------------------------------------------- 图表资源
 
+
 def test_chart_asset_is_served_with_a_content_hash_and_cached(tmp_path):
     settings = make_settings(tmp_path)
     write_status(settings)
@@ -1019,26 +1148,42 @@ def test_unknown_asset_and_traversal_are_not_found(tmp_path):
 
 # --------------------------------------------------- 互动量落库 → 面板
 
+
 def seed_metrics(settings: Settings) -> None:
     """给 `seed_db` 的那个账号补两轮互动量（跨两个不同的小时桶）。"""
     store = StateStore(settings.db_path)
     store.migrate()
     posts = tuple(
-        PostState(content_id=f"74{index:017d}", kind=Kind.VIDEO, title=f"第 {index} 条",
-                  created_at=NOW - timedelta(days=index))
+        PostState(
+            content_id=f"74{index:017d}",
+            kind=Kind.VIDEO,
+            title=f"第 {index} 条",
+            created_at=NOW - timedelta(days=index),
+        )
         for index in range(4)
     )
     for hour, factor in ((2, 100), (1, 180)):
         store.save_round(
             ID_OK,
-            AuthorState(sec_user_id=ID_OK, nickname="示例账号", initialized_at=NOW,
-                        ever_had_posts=True, runs=120, posts=posts),
+            AuthorState(
+                sec_user_id=ID_OK,
+                nickname="示例账号",
+                initialized_at=NOW,
+                ever_had_posts=True,
+                runs=120,
+                posts=posts,
+            ),
             [],
             now=NOW - timedelta(hours=hour),
             metrics=[
-                PostMetrics(content_id=f"74{index:017d}", play_count=factor * 10,
-                            digg_count=factor, comment_count=index,
-                            share_count=None, collect_count=factor * 2)
+                PostMetrics(
+                    content_id=f"74{index:017d}",
+                    play_count=factor * 10,
+                    digg_count=factor,
+                    comment_count=index,
+                    share_count=None,
+                    collect_count=factor * 2,
+                )
                 for index in range(4)
             ],
         )
@@ -1053,9 +1198,14 @@ def test_user_detail_includes_the_engagement_series_and_chart(tmp_path):
     assert len(detail["metrics_series"]) == 2
     assert detail["metrics_chart"]["type"] == "line"
     assert [item["label"] for item in detail["metrics_chart"]["datasets"]] == [
-        "点赞", "评论", "收藏", "分享",
+        "点赞",
+        "评论",
+        "收藏",
+        "分享",
     ]
-    digg = next(item for item in detail["metrics_chart"]["datasets"] if item["label"] == "点赞")
+    digg = next(
+        item for item in detail["metrics_chart"]["datasets"] if item["label"] == "点赞"
+    )
     # 同一小时里 4 条作品求和：100 → 180
     assert digg["data"] == [400, 720]
     # 逐条作品的"最新一行"要挂在作品上，而不是每个作品各查一次
@@ -1113,7 +1263,12 @@ def test_metrics_json_normalises_only_the_timestamp():
     """`_metrics_json` 只把 `hour` 转成字符串，其余字段（含以后新加的）原样带走。"""
     raw = {"hour": NOW, "play": 7, "digg": None, "将来新增的字段": "x"}
     out = webui.queries._metrics_json(raw)
-    assert out == {"hour": NOW.isoformat(), "play": 7, "digg": None, "将来新增的字段": "x"}
+    assert out == {
+        "hour": NOW.isoformat(),
+        "play": 7,
+        "digg": None,
+        "将来新增的字段": "x",
+    }
     # 复制一份再改：调用方手里那份不能被就地改掉
     assert raw["hour"] is NOW
     assert webui.queries._metrics_json(None) is None
@@ -1124,6 +1279,8 @@ def test_json_body_degrades_unknown_types_instead_of_dropping_the_response():
 
     这是"失败方式"的选择——一个读数显示成 ISO 时间戳，好过一个点不动的详情弹窗。
     """
-    payload = json.loads(webui.json_body({"t": NOW, "nested": {"d": timedelta(days=1)}}))
+    payload = json.loads(
+        webui.json_body({"t": NOW, "nested": {"d": timedelta(days=1)}})
+    )
     assert isinstance(payload["t"], str)
     assert isinstance(payload["nested"]["d"], str)

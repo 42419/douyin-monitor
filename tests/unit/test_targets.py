@@ -29,7 +29,9 @@ def test_one_target_per_line_with_comments():
     assert [t.kind for t in parsed.targets] == ["dingtalk", "dingtalk", "telegram"]
     assert [t.name for t in parsed.targets] == ["市场部", "dingtalk-2", "telegram"]
     assert parsed.targets[0].fields == {"token": "tok-A", "secret": "SECa"}
-    assert parsed.targets[1].fields == {"token": "tok-B"}, "没写 secret 就不该凭空补一个"
+    assert parsed.targets[1].fields == {"token": "tok-B"}, (
+        "没写 secret 就不该凭空补一个"
+    )
     assert parsed.targets[2].fields == {"bot_token": "1:AA", "chat_id": "-100"}
 
 
@@ -91,10 +93,16 @@ def test_the_same_field_twice_is_an_error():
 
 
 def test_auto_numbering_is_per_type():
-    parsed = parse_targets("dingtalk token=a\ndingtalk token=b\ndingtalk token=c\nwecom key=k\nwecom key=k2")
+    parsed = parse_targets(
+        "dingtalk token=a\ndingtalk token=b\ndingtalk token=c\nwecom key=k\nwecom key=k2"
+    )
 
     assert [t.name for t in parsed.targets] == [
-        "dingtalk", "dingtalk-2", "dingtalk-3", "wecom", "wecom-2",
+        "dingtalk",
+        "dingtalk-2",
+        "dingtalk-3",
+        "wecom",
+        "wecom-2",
     ]
 
 
@@ -153,7 +161,7 @@ def test_unclosed_quote_is_reported_instead_of_swallowing_the_rest():
     [
         ("telegrm bot_token=x", "未知渠道类型"),
         ("telegram chat_id=-100", "缺少必填字段：bot_token"),
-        ("dingtalk token=x token2=y", "不认识字段"),          # 拼错字段名要说出来
+        ("dingtalk token=x token2=y", "不认识字段"),  # 拼错字段名要说出来
         ("dingtalk token=x bogus", "不是 key=value 形式"),
         ("dingtalk name=群 token=a\ntelegram name=群 bot_token=b chat_id=1", "重复"),
     ],
@@ -175,7 +183,9 @@ def test_an_unknown_type_that_looks_like_a_field_gets_a_hint():
 
 def test_the_earliest_comma_form_still_works():
     """第一版我写的 `类型:字段=值,字段=值;类型:…` 现在依然能被解析（变成兼容写法）。"""
-    parsed = parse_targets("dingtalk:token=A,secret=S;telegram:bot_token=1:AA,chat_id=-100")
+    parsed = parse_targets(
+        "dingtalk:token=A,secret=S;telegram:bot_token=1:AA,chat_id=-100"
+    )
 
     assert not parsed.errors, parsed.errors
     assert [t.kind for t in parsed.targets] == ["dingtalk", "telegram"]

@@ -67,7 +67,9 @@ async def test_add_refuses_an_id_with_a_zero_width_character(add_home, capsys):
     assert "不合法" in capsys.readouterr().out
 
 
-async def test_add_folds_a_newline_in_the_nickname_instead_of_injecting_a_line(add_home, capsys):
+async def test_add_folds_a_newline_in_the_nickname_instead_of_injecting_a_line(
+    add_home, capsys
+):
     """昵称里的换行会写成一整行格式里的第二条记录——那是往配置里注入账号。"""
     settings = settings_for(add_home)
 
@@ -88,10 +90,14 @@ async def test_add_refuses_a_nickname_the_parser_would_truncate(add_home, capsys
 
     assert code == 2
     assert "空白 + #" in capsys.readouterr().out
-    assert (add_home / "users.conf").read_text(encoding="utf-8").strip() == "", "拒绝就不能写任何东西"
+    assert (add_home / "users.conf").read_text(encoding="utf-8").strip() == "", (
+        "拒绝就不能写任何东西"
+    )
 
 
-async def test_add_accepts_a_hash_that_is_glued_to_the_text_and_reads_it_back_intact(add_home):
+async def test_add_accepts_a_hash_that_is_glued_to_the_text_and_reads_it_back_intact(
+    add_home,
+):
     settings = settings_for(add_home)
 
     code = await cli.cmd_add(settings, GOOD_ID, "账号#1")
@@ -113,7 +119,7 @@ async def test_add_detects_a_duplicate_by_whole_id_not_by_substring(add_home, ca
     """所有真实 ID 都以 `MS4wLjABAAAA` 开头：子串匹配会把新账号误判成重复而拒绝写入。"""
     settings = settings_for(add_home)
     (add_home / "users.conf").write_text(f"{GOOD_ID}|已有账号\n", encoding="utf-8")
-    shorter = GOOD_ID[:20]          # 是已有 ID 的前缀，但不是同一个账号
+    shorter = GOOD_ID[:20]  # 是已有 ID 的前缀，但不是同一个账号
 
     duplicate = await cli.cmd_add(settings, GOOD_ID, "重复")
     fresh = await cli.cmd_add(settings, shorter, "另一个")
@@ -162,7 +168,8 @@ def test_status_survives_hostile_field_types(tmp_path, capsys):
     settings = settings_for(tmp_path)
     settings.status_path.parent.mkdir(parents=True, exist_ok=True)
     settings.status_path.write_text(
-        json.dumps(_snapshot(gate="closed", notify=["dingtalk"], users="nope")), encoding="utf-8"
+        json.dumps(_snapshot(gate="closed", notify=["dingtalk"], users="nope")),
+        encoding="utf-8",
     )
 
     assert cli.cmd_status(settings) == 0
@@ -207,7 +214,9 @@ def test_explicit_env_that_does_not_exist_refuses_to_run(tmp_path, capsys):
     assert "配置文件不存在" in captured.err
 
 
-def test_without_explicit_env_a_missing_file_is_still_fine(tmp_path, monkeypatch, capsys):
+def test_without_explicit_env_a_missing_file_is_still_fine(
+    tmp_path, monkeypatch, capsys
+):
     """没写 `--env` 时，`.env` 不存在是**正常**的（用户可以完全用环境变量），不该报错。"""
     monkeypatch.chdir(tmp_path)
 
@@ -237,7 +246,8 @@ def test_config_check_masks_the_identity_key_and_webhook_url(tmp_path, capsys):
 #: 读回来仍是 0o666），所以这两个断言只在 POSIX 上成立。这不是"跳过没意义的东西"——
 #: 部署目标就是 Ubuntu，而这条要求（0600 / 0700）在 Linux 上才是真的能挡人的。
 posix_only = pytest.mark.skipif(
-    os.name != "posix", reason="NTFS 没有 POSIX 权限位，chmod 是空操作；这条断言只在 Linux 上有意义"
+    os.name != "posix",
+    reason="NTFS 没有 POSIX 权限位，chmod 是空操作；这条断言只在 Linux 上有意义",
 )
 
 
@@ -266,7 +276,9 @@ def test_state_database_is_created_owner_only(tmp_path):
 
 
 @posix_only
-def test_a_failing_directory_chmod_does_not_skip_the_database_file_mode(tmp_path, monkeypatch):
+def test_a_failing_directory_chmod_does_not_skip_the_database_file_mode(
+    tmp_path, monkeypatch
+):
     """目录不归当前用户时 `chmod(目录)` 会失败；库文件那一层不能因此被连带跳过。
 
     两次 chmod 以前放在同一个 `suppress` 里、目录在前：目录一抛，文件的 0600 就没人设了。
@@ -291,7 +303,9 @@ def test_a_failing_directory_chmod_does_not_skip_the_database_file_mode(tmp_path
     assert file_mode == 0o600, oct(file_mode)
 
 
-def test_the_store_asks_for_private_modes_even_where_they_are_not_enforced(tmp_path, monkeypatch):
+def test_the_store_asks_for_private_modes_even_where_they_are_not_enforced(
+    tmp_path, monkeypatch
+):
     """上面那条在 Windows 上会被跳过（chmod 是空操作），但**请求**本身要一直在。
 
     部署目标是 Linux：哪天有人把这两行 chmod 删掉，这条在哪儿都会红；而它不依赖文件系统
@@ -326,13 +340,19 @@ def test_log_directories_are_owner_only(tmp_path):
     finally:
         os.umask(old_umask)
 
-    for directory in (settings.log_dir, settings.log_dir / "info", settings.log_dir / "debug"):
+    for directory in (
+        settings.log_dir,
+        settings.log_dir / "info",
+        settings.log_dir / "debug",
+    ):
         mode = stat.S_IMODE(os.stat(directory).st_mode)
         assert mode == 0o700, (directory, oct(mode))
 
 
 # --------------------------------------------------------------------- doctor
-async def test_doctor_requires_archive_scope_only_when_archive_is_enabled(tmp_path, monkeypatch):
+async def test_doctor_requires_archive_scope_only_when_archive_is_enabled(
+    tmp_path, monkeypatch
+):
     """`archive:read` 的必需性跟着 `ARCHIVE_ENABLED` 走——两边都不能错。
 
     默认开启 + 缺 scope：以前打印了 ✗ 却仍然"✓ 自检通过"并 exit 0（把 exit code 当门禁
@@ -344,14 +364,24 @@ async def test_doctor_requires_archive_scope_only_when_archive_is_enabled(tmp_pa
         def __init__(self, *args: Any, **kwargs: Any) -> None: ...
         async def __aenter__(self) -> "_Client":
             return self
+
         async def __aexit__(self, *exc: Any) -> None: ...
         async def me(self) -> dict[str, Any]:
-            return {"user": {"username": "u", "role": "viewer", "via": "api_key",
-                             "scopes": ["douyin:read"]}}
+            return {
+                "user": {
+                    "username": "u",
+                    "role": "viewer",
+                    "via": "api_key",
+                    "scopes": ["douyin:read"],
+                }
+            }
+
         async def system_status(self) -> dict[str, Any]:
             return {"version": "5.1.2", "pool": {"douyin": {"active": 3}}}
+
         async def author_posts(self, *args: Any, **kwargs: Any) -> Any:
             from dywatch.models import Page
+
             return Page(items=())
 
     monkeypatch.setattr(cli, "DtkClient", _Client)

@@ -521,7 +521,9 @@ def page(*, title: str, body: str, scripts: str = "", refresh: int = 0) -> str:
     `refresh` 是 `<meta http-equiv="refresh">` 的秒数，0 表示不自动刷新——事件时间线页传 0：
     正在读列表的时候整页重载，会把滚动位置和刚点的筛选一起丢掉。
     """
-    meta = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh > 0 else ""
+    meta = (
+        f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh > 0 else ""
+    )
     return _SHELL % (title, meta, CSS, body, scripts)
 
 
@@ -529,7 +531,9 @@ def nav(active: str) -> str:
     """右上角的页面切换。只有两页，所以不做成组件，直接拼。"""
     items = (("/", "状态", "status"), ("/events", "事件", "events"))
     links = "".join(
-        f'<a href="{href}" class="on">{label}</a>' if key == active else f'<a href="{href}">{label}</a>'
+        f'<a href="{href}" class="on">{label}</a>'
+        if key == active
+        else f'<a href="{href}">{label}</a>'
         for href, label, key in items
     )
     return f'<div class="nav mono">{links}</div>'
@@ -539,13 +543,11 @@ def masthead(*, eyebrow: str, headline: str, meta: str, active: str) -> str:
     """页头：左边方括号读数 + 大标题 + 一行元信息，右边页面切换。"""
     return (
         '<div class="masthead">'
-        '<div>'
+        "<div>"
         f'<div class="eyebrow mono">[ {eyebrow} ]</div>'
         f"<h1>{headline}</h1>"
         f'<div class="meta mono">{meta}</div>'
-        "</div>"
-        + nav(active)
-        + "</div>"
+        "</div>" + nav(active) + "</div>"
     )
 
 

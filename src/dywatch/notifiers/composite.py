@@ -44,24 +44,31 @@ def _build_from_target(target: Any, at_mobiles: tuple[str, ...]) -> HttpChannel:
     name = target.name
     if target.kind == "dingtalk":
         return DingTalkChannel(
-            name=name, token=fields["token"], secret=fields.get("secret", ""),
+            name=name,
+            token=fields["token"],
+            secret=fields.get("secret", ""),
             at_mobiles=at_mobiles,
         )
     if target.kind == "wecom":
         return WeComChannel(name=name, key=fields["key"])
     if target.kind == "bark":
         return BarkChannel(
-            name=name, server=fields.get("server") or "https://api.day.app",
+            name=name,
+            server=fields.get("server") or "https://api.day.app",
             device_key=fields["device_key"],
         )
     if target.kind == "serverchan":
         return ServerChanChannel(name=name, sendkey=fields["sendkey"])
     if target.kind == "telegram":
-        return TelegramChannel(name=name, bot_token=fields["bot_token"], chat_id=fields["chat_id"])
+        return TelegramChannel(
+            name=name, bot_token=fields["bot_token"], chat_id=fields["chat_id"]
+        )
     if target.kind == "webhook":
         return WebhookChannel(name=name, url=fields["url"])
     # 解析阶段只放行 SPECS 里的类型，这里兜一下（将来加了类型忘了写分支时能立刻看出来）
-    raise NotImplementedError(f"没有为渠道类型 {target.kind!r} 写装配分支")  # pragma: no cover
+    raise NotImplementedError(
+        f"没有为渠道类型 {target.kind!r} 写装配分支"
+    )  # pragma: no cover
 
 
 def _build_legacy(settings: Any, at_mobiles: tuple[str, ...]) -> list[HttpChannel]:
@@ -93,7 +100,11 @@ def _build_legacy(settings: Any, at_mobiles: tuple[str, ...]) -> list[HttpChanne
             )
         elif name == "wecom":
             if settings["WECOM_WEBHOOK_KEY"]:
-                built.append(WeComChannel(name=unique("wecom"), key=settings["WECOM_WEBHOOK_KEY"]))
+                built.append(
+                    WeComChannel(
+                        name=unique("wecom"), key=settings["WECOM_WEBHOOK_KEY"]
+                    )
+                )
         elif name == "bark":
             if settings["BARK_DEVICE_KEY"]:
                 built.append(
@@ -106,7 +117,10 @@ def _build_legacy(settings: Any, at_mobiles: tuple[str, ...]) -> list[HttpChanne
         elif name == "serverchan":
             if settings["SERVERCHAN_SENDKEY"]:
                 built.append(
-                    ServerChanChannel(name=unique("serverchan"), sendkey=settings["SERVERCHAN_SENDKEY"])
+                    ServerChanChannel(
+                        name=unique("serverchan"),
+                        sendkey=settings["SERVERCHAN_SENDKEY"],
+                    )
                 )
         elif name == "telegram":
             if settings["TELEGRAM_BOT_TOKEN"] and settings["TELEGRAM_CHAT_ID"]:
@@ -119,7 +133,9 @@ def _build_legacy(settings: Any, at_mobiles: tuple[str, ...]) -> list[HttpChanne
                 )
         elif name == "webhook":
             if settings["WEBHOOK_URL"]:
-                built.append(WebhookChannel(name=unique("webhook"), url=settings["WEBHOOK_URL"]))
+                built.append(
+                    WebhookChannel(name=unique("webhook"), url=settings["WEBHOOK_URL"])
+                )
     return built
 
 

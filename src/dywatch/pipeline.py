@@ -113,7 +113,9 @@ async def run_author(
 
     try:
         await pacer.wait_for_turn()
-        page = await client.author_posts(author.sec_user_id, cfg.fetch_count, include_raw=raw_included)
+        page = await client.author_posts(
+            author.sec_user_id, cfg.fetch_count, include_raw=raw_included
+        )
         gate.note_success()
     except MonitorError as exc:
         error = exc
@@ -129,19 +131,42 @@ async def run_author(
             fresh = gate.is_open()
             seconds = gate.trip(exc)
             if fresh:
-                _log(logger, "warn", "gate.closed", code=exc.code, seconds=seconds,
-                     remaining=round(gate.remaining(), 1))
+                _log(
+                    logger,
+                    "warn",
+                    "gate.closed",
+                    code=exc.code,
+                    seconds=seconds,
+                    remaining=round(gate.remaining(), 1),
+                )
             else:
-                _log(logger, "debug", "gate.already_closed", code=exc.code,
-                     remaining=round(gate.remaining(), 1))
-            await _notify_upstream(exc, seconds, notifier=notifier, dedup=dedup, logger=logger,
-                                   store=store, now=now)
+                _log(
+                    logger,
+                    "debug",
+                    "gate.already_closed",
+                    code=exc.code,
+                    remaining=round(gate.remaining(), 1),
+                )
+            await _notify_upstream(
+                exc,
+                seconds,
+                notifier=notifier,
+                dedup=dedup,
+                logger=logger,
+                store=store,
+                now=now,
+            )
         elif exc.is_config:
             # 连坐所有账号的错误：关闸一小时并明确告警，而不是让每个账号各失败一遍
             gate.close(CONFIG_ERROR_GATE_SECONDS, reason=exc.code)
             await _notify_upstream(
-                exc, CONFIG_ERROR_GATE_SECONDS, notifier=notifier, dedup=dedup, logger=logger,
-                store=store, now=now,
+                exc,
+                CONFIG_ERROR_GATE_SECONDS,
+                notifier=notifier,
+                dedup=dedup,
+                logger=logger,
+                store=store,
+                now=now,
             )
 
     # 归档交叉确认：只在"确实有作品从本页消失"时才去读，且零身份成本
@@ -154,7 +179,9 @@ async def run_author(
                 # 归档读失败不该影响主判定：它是第二信源，不是必需项
                 _log(logger, "debug", "archive.unavailable", code=exc.code)
 
-    events, next_state = diff(author, now=now, cfg=cfg, page=page, error=error, archive=archive)
+    events, next_state = diff(
+        author, now=now, cfg=cfg, page=page, error=error, archive=archive
+    )
 
     if hidden_check is not None and error is None and page is not None:
         next_state, events = await _check_hidden_posts(
@@ -186,7 +213,9 @@ async def run_author(
     # 都可能把它推到几十秒之后，甚至因为撞上渠道限流而变成"失败的那一条"。
     # `(row_id, event)` 成对排序，投递结果才能正确回写到对应的事件行。
     deliveries: dict[int, Mapping[str, Any]] = {}
-    for row_id, event in sorted(zip(event_ids, events), key=lambda pair: priority_of(pair[1].kind)):
+    for row_id, event in sorted(
+        zip(event_ids, events), key=lambda pair: priority_of(pair[1].kind)
+    ):
         if not event.should_notify:
             continue
         allowed, key = should_send(event, dedup)
@@ -200,8 +229,13 @@ async def run_author(
             # 放下这条继续发下一条。**通知循环是唯一不能因单条失败而中断的地方**——
             # 中断意味着排在后面的（尤其 new_post）连尝试的机会都没有。
             # 也把抑制窗口还回去，下轮还能再试。
-            _log(logger, "warning", "notify.crashed", kind=event.kind.value,
-                 error=f"{type(exc).__name__}: {exc}"[:160])
+            _log(
+                logger,
+                "warning",
+                "notify.crashed",
+                kind=event.kind.value,
+                error=f"{type(exc).__name__}: {exc}"[:160],
+            )
             dedup.release(key)
             continue
         deliveries[row_id] = result
@@ -241,9 +275,13 @@ def _should_include_raw(author: AuthorState, cfg: DiffConfig) -> bool:
     if not author.runs:
         return cfg.include_raw != "never"  # 首次记录：一定要拿到置顶标志
     have_new_posts = (
-        author.last_new_video_at is not None and author.last_new_video_at == author.last_seen_at
+        author.last_new_video_at is not None
+        and author.last_new_video_at == author.last_seen_at
     )
-    changed = author.last_update_at is not None and author.last_update_at == author.last_seen_at
+    changed = (
+        author.last_update_at is not None
+        and author.last_update_at == author.last_seen_at
+    )
     return include_raw_for_round(
         cfg.include_raw,
         raw_refresh_round=author.raw_refresh_round,
@@ -314,21 +352,39 @@ async def _check_hidden_posts(
         )
     )
 
-    if not (initialized or new_count > 0 or removed_count > 0 or stale_triggered or due_for_sample):
+    if not (
+        initialized
+        or new_count > 0
+        or removed_count > 0
+        or stale_triggered
+        or due_for_sample
+    ):
         return next_state, events
 
-    if due_for_sample and not (initialized or new_count > 0 or removed_count > 0 or stale_triggered):
+    if due_for_sample and not (
+        initialized or new_count > 0 or removed_count > 0 or stale_triggered
+    ):
         # 只有保底能解释这次调用（那种"访客视角不留痕迹"的变化就靠它），记一条便于排障
-        _log(logger, "debug", "hidden_check.sample_due",
-             sec_user_id=prev.sec_user_id, baseline=prev.baseline_content_count)
+        _log(
+            logger,
+            "debug",
+            "hidden_check.sample_due",
+            sec_user_id=prev.sec_user_id,
+            baseline=prev.baseline_content_count,
+        )
 
     try:
         await pacer.wait_for_turn()
         profile = await client.author_profile(prev.sec_user_id)
     except MonitorError as exc:
         # 核验层，不是主判定：读失败不该影响这一轮已经算好的结果
-        _log(logger, "debug", "hidden_check.profile_unavailable",
-             sec_user_id=prev.sec_user_id, code=exc.code)
+        _log(
+            logger,
+            "debug",
+            "hidden_check.profile_unavailable",
+            sec_user_id=prev.sec_user_id,
+            code=exc.code,
+        )
         # 把基准值按**本地已知的增量**推进，并把"上次核对"推到现在。两件事都是必需的：
         #
         # ① 不推进基准值 ⇒ 本轮的新增/删除再没有第二次机会折进去（新增的作品已经进了
@@ -358,7 +414,8 @@ async def _check_hidden_posts(
         # 还没有基准值可比（通常是这个账号第一次被记录），这次先把它立起来，
         # 不做比较——没有"上一次"就无从谈起"对不对得上"
         return next_state.with_updates(
-            baseline_content_count=actual, baseline_content_count_at=now,
+            baseline_content_count=actual,
+            baseline_content_count_at=now,
             content_count_drift_rounds=0,
         ), events
 
@@ -367,7 +424,8 @@ async def _check_hidden_posts(
     if actual == expected:
         # 账目正好对上：推进基准值、清零未解决计数，**不需要任何核验请求**
         next_state = next_state.with_updates(
-            baseline_content_count=actual, baseline_content_count_at=now,
+            baseline_content_count=actual,
+            baseline_content_count_at=now,
             content_count_drift_rounds=0,
         )
         return next_state, events
@@ -379,12 +437,20 @@ async def _check_hidden_posts(
     try:
         await pacer.wait_for_turn()
         page = await hidden_check.pin_client.author_posts(
-            prev.sec_user_id, cfg.fetch_count,
-            include_raw=raw_included, identity=hidden_check.pinned_identity,
+            prev.sec_user_id,
+            cfg.fetch_count,
+            include_raw=raw_included,
+            identity=hidden_check.pinned_identity,
         )
     except MonitorError as exc:
-        _log(logger, "warning", "hidden_check.verify_failed",
-             sec_user_id=prev.sec_user_id, code=exc.code, message=exc.message[:120])
+        _log(
+            logger,
+            "warning",
+            "hidden_check.verify_failed",
+            sec_user_id=prev.sec_user_id,
+            code=exc.code,
+            message=exc.message[:120],
+        )
         page = None
 
     verified_events: tuple[Event, ...] = ()
@@ -405,8 +471,13 @@ async def _check_hidden_posts(
             events = _strip_from_removals(events, {i for i in hidden_ids if i})
             removed_after = sum(_items_in(ev, "removed") for ev in events)
             if removed_after != removed_before:
-                _log(logger, "info", "hidden_check.removal_stripped",
-                     sec_user_id=prev.sec_user_id, count=removed_before - removed_after)
+                _log(
+                    logger,
+                    "info",
+                    "hidden_check.removal_stripped",
+                    sec_user_id=prev.sec_user_id,
+                    count=removed_before - removed_after,
+                )
         else:
             verified_events, next_state = _confirm_hidden_removals(
                 next_state, page, now, account_total=actual
@@ -417,13 +488,22 @@ async def _check_hidden_posts(
         events = events + verified_events
         # 记**条数**而不是事件数：两个分支都只产出一条聚合事件（`count=len(events)` 恒为 1，
         # 是个骗人的字段），真正有用的是"这次标记/确认了几条作品"以及方向
-        _log(logger, "info", "hidden_check.verified",
-             sec_user_id=prev.sec_user_id,
-             posts=sum(_items_in(ev, "hidden") + _items_in(ev, "removed") for ev in verified_events),
-             kind=verified_events[0].kind.value,
-             expected=expected, actual=actual)
+        _log(
+            logger,
+            "info",
+            "hidden_check.verified",
+            sec_user_id=prev.sec_user_id,
+            posts=sum(
+                _items_in(ev, "hidden") + _items_in(ev, "removed")
+                for ev in verified_events
+            ),
+            kind=verified_events[0].kind.value,
+            expected=expected,
+            actual=actual,
+        )
         next_state = next_state.with_updates(
-            baseline_content_count=actual, baseline_content_count_at=now,
+            baseline_content_count=actual,
+            baseline_content_count_at=now,
             content_count_drift_rounds=0,
         )
         return next_state, events
@@ -434,17 +514,30 @@ async def _check_hidden_posts(
     # （置顶项被删导致的偏差、上游数据的一次性异常），达到上限后放弃、接受实际值。
     drift_rounds = prev.content_count_drift_rounds + 1
     if drift_rounds >= MAX_UNRESOLVED_DRIFT_ROUNDS:
-        _log(logger, "warning", "hidden_check.drift_gave_up",
-             sec_user_id=prev.sec_user_id, expected=expected, actual=actual,
-             rounds=drift_rounds)
+        _log(
+            logger,
+            "warning",
+            "hidden_check.drift_gave_up",
+            sec_user_id=prev.sec_user_id,
+            expected=expected,
+            actual=actual,
+            rounds=drift_rounds,
+        )
         next_state = next_state.with_updates(
-            baseline_content_count=actual, baseline_content_count_at=now,
+            baseline_content_count=actual,
+            baseline_content_count_at=now,
             content_count_drift_rounds=0,
         )
     else:
-        _log(logger, "debug", "hidden_check.mismatch_unresolved",
-             sec_user_id=prev.sec_user_id, expected=expected, actual=actual,
-             rounds=drift_rounds)
+        _log(
+            logger,
+            "debug",
+            "hidden_check.mismatch_unresolved",
+            sec_user_id=prev.sec_user_id,
+            expected=expected,
+            actual=actual,
+            rounds=drift_rounds,
+        )
         next_state = next_state.with_updates(content_count_drift_rounds=drift_rounds)
     return next_state, events
 
@@ -579,8 +672,11 @@ def _confirm_hidden_removals(
     # 一条只是滑出窗口的隐藏作品会被报成"作者真把它删了"。本轮没带 raw 时
     # `is_top` 恒为 False，所以还要用库里已知的置顶状态兜住（见 `known_top_ids`）。
     window_bottom = min(
-        (i.created_at for i in page.items if i.created_at and not i.is_top
-         and i.content_id not in state.known_top_ids),
+        (
+            i.created_at
+            for i in page.items
+            if i.created_at and not i.is_top and i.content_id not in state.known_top_ids
+        ),
         default=None,
     )
     account_empty = account_total == 0 and not page.items
@@ -591,7 +687,9 @@ def _confirm_hidden_removals(
         if entry.hidden_from_guest_at is None or content_id in visible:
             continue
         if not account_empty and (
-            entry.created_at is None or window_bottom is None or entry.created_at < window_bottom
+            entry.created_at is None
+            or window_bottom is None
+            or entry.created_at < window_bottom
         ):
             continue
         removed.append(
@@ -646,8 +744,16 @@ class ArchiveTrigger:
     """
 
     __slots__ = (
-        "_client", "_pacer", "_pin_enabled", "_max_per_round", "_log",
-        "_pending", "_in_queue", "_muted_until", "_muted_code", "_budget",
+        "_client",
+        "_pacer",
+        "_pin_enabled",
+        "_max_per_round",
+        "_log",
+        "_pending",
+        "_in_queue",
+        "_muted_until",
+        "_muted_code",
+        "_budget",
     )
 
     def __init__(
@@ -693,7 +799,9 @@ class ArchiveTrigger:
             return
         if time.monotonic() < self._muted_until:
             _log(
-                self._log, "debug", "archive.muted",
+                self._log,
+                "debug",
+                "archive.muted",
                 code=self._muted_code,
                 remaining=round(self._muted_until - time.monotonic(), 1),
                 pending=len(self._pending),
@@ -711,8 +819,13 @@ class ArchiveTrigger:
             while len(self._pending) >= ARCHIVE_QUEUE_MAX:
                 dropped = self._pending.popleft()
                 self._in_queue.discard(str(dropped[0]))
-                _log(self._log, "warning", "archive.queue_overflow",
-                     dropped=dropped[0], max=ARCHIVE_QUEUE_MAX)
+                _log(
+                    self._log,
+                    "warning",
+                    "archive.queue_overflow",
+                    dropped=dropped[0],
+                    max=ARCHIVE_QUEUE_MAX,
+                )
             self._pending.append([content_id, event.sec_user_id, 0])
             self._in_queue.add(content_id)
 
@@ -728,7 +841,9 @@ class ArchiveTrigger:
                 # 注意是 `Exception` 而不是 `BaseException`：`asyncio.CancelledError`
                 # 继承自后者，停机时的取消必须照常往上走，不能被这条旁路吃掉。
                 if not await self._on_failure(
-                    exc, content_id=str(content_id), sec_user_id=str(sec_user_id),
+                    exc,
+                    content_id=str(content_id),
+                    sec_user_id=str(sec_user_id),
                     attempts=int(attempts),
                 ):
                     break
@@ -739,11 +854,15 @@ class ArchiveTrigger:
             # 记成 started 会让人以为每次都真的重新下了一遍
             reused = result.get("reused")
             _log(
-                self._log, "info",
+                self._log,
+                "info",
                 "archive.download_reused" if reused else "archive.download_started",
-                sec_user_id=sec_user_id, content_id=content_id,
-                download_id=result.get("download_id"), state=result.get("state"),
-                archived=result.get("archived"), reused=reused,
+                sec_user_id=sec_user_id,
+                content_id=content_id,
+                download_id=result.get("download_id"),
+                state=result.get("state"),
+                archived=result.get("archived"),
+                reused=reused,
             )
             if self._pin_enabled and result.get("download_id"):
                 await self._pin(str(result["download_id"]), content_id=str(content_id))
@@ -759,11 +878,23 @@ class ArchiveTrigger:
             # "以为 pin 上了其实没有"意味着这条档在容量满时会被静默淘汰
             code = exc.code if isinstance(exc, MonitorError) else type(exc).__name__
             message = (exc.message if isinstance(exc, MonitorError) else str(exc))[:120]
-            _log(self._log, "warning", "archive.pin_failed", download_id=download_id,
-                 content_id=content_id, code=code, message=message)
+            _log(
+                self._log,
+                "warning",
+                "archive.pin_failed",
+                download_id=download_id,
+                content_id=content_id,
+                code=code,
+                message=message,
+            )
             return
-        _log(self._log, "info", "archive.download_pinned",
-             download_id=download_id, content_id=content_id)
+        _log(
+            self._log,
+            "info",
+            "archive.download_pinned",
+            download_id=download_id,
+            content_id=content_id,
+        )
 
     async def _on_failure(
         self, exc: BaseException, *, content_id: str, sec_user_id: str, attempts: int
@@ -781,8 +912,15 @@ class ArchiveTrigger:
             # 这条作品确实没有可下载的媒体（纯文字、已下架、只有一张封面），
             # 再试一百次也是一样的结果
             self._dequeue()
-            _log(self._log, "info", "archive.download_skipped", sec_user_id=sec_user_id,
-                 content_id=content_id, code=code, message=message)
+            _log(
+                self._log,
+                "info",
+                "archive.download_skipped",
+                sec_user_id=sec_user_id,
+                content_id=content_id,
+                code=code,
+                message=message,
+            )
             return True
 
         if isinstance(exc, MonitorError) and (exc.is_gate or exc.is_config):
@@ -790,12 +928,23 @@ class ArchiveTrigger:
             # 这一轮剩下的请求再发也是白挨，进窗口等下轮
             seconds = int(
                 exc.retry_after
-                or (ARCHIVE_CONFIG_MUTE_SECONDS if exc.is_config else ARCHIVE_CAPACITY_MUTE_SECONDS)
+                or (
+                    ARCHIVE_CONFIG_MUTE_SECONDS
+                    if exc.is_config
+                    else ARCHIVE_CAPACITY_MUTE_SECONDS
+                )
             )
             self._muted_until = time.monotonic() + seconds
             self._muted_code = code
-            _log(self._log, "warning", "archive.muted_raised", code=code, seconds=seconds,
-                 pending=len(self._pending), message=message)
+            _log(
+                self._log,
+                "warning",
+                "archive.muted_raised",
+                code=code,
+                seconds=seconds,
+                pending=len(self._pending),
+                message=message,
+            )
             return False
 
         # 余下三类都在这里：网络抖动（DTK_UNREACHABLE）、DTK 内部错误、以及非
@@ -804,12 +953,28 @@ class ArchiveTrigger:
         attempts += 1
         if attempts >= ARCHIVE_MAX_ATTEMPTS:
             self._dequeue()
-            _log(self._log, "warning", "archive.download_given_up", sec_user_id=sec_user_id,
-                 content_id=content_id, attempts=attempts, code=code, message=message)
+            _log(
+                self._log,
+                "warning",
+                "archive.download_given_up",
+                sec_user_id=sec_user_id,
+                content_id=content_id,
+                attempts=attempts,
+                code=code,
+                message=message,
+            )
             return True
         self._pending[0][2] = attempts
-        _log(self._log, "warning", "archive.download_failed", sec_user_id=sec_user_id,
-             content_id=content_id, attempts=attempts, code=code, message=message)
+        _log(
+            self._log,
+            "warning",
+            "archive.download_failed",
+            sec_user_id=sec_user_id,
+            content_id=content_id,
+            attempts=attempts,
+            code=code,
+            message=message,
+        )
         return False
 
     def _dequeue(self) -> None:
@@ -821,7 +986,11 @@ class ArchiveTrigger:
             return
         muted = max(0.0, self._muted_until - time.monotonic())
         _log(
-            self._log, "info", "archive.pending", sent=sent, pending=len(self._pending),
+            self._log,
+            "info",
+            "archive.pending",
+            sent=sent,
+            pending=len(self._pending),
             muted_seconds=round(muted, 1) if muted else 0,
             hint="积压的条目下一轮接着发；进程重启会丢队列",
         )
@@ -860,15 +1029,25 @@ async def notify_system_event(
             row_id = store.record_system_event(event, now=stamp)
         except Exception as exc:  # noqa: BLE001 - 落库失败不该连投递一起丢掉
             # 事件落库只是"面板上看得见"，投递才是"人知道"。库坏了的时候更需要后者。
-            _log(logger, "warning", "notify.persist_failed", kind=event.kind.value,
-                 error=f"{type(exc).__name__}: {exc}"[:160])
+            _log(
+                logger,
+                "warning",
+                "notify.persist_failed",
+                kind=event.kind.value,
+                error=f"{type(exc).__name__}: {exc}"[:160],
+            )
             row_id = None
 
     try:
         result = await _deliver(notifier, event)
     except Exception as exc:  # noqa: BLE001 - 与主循环同一个纪律：单条通知出意外不外抛
-        _log(logger, "warning", "notify.crashed", kind=event.kind.value,
-             error=f"{type(exc).__name__}: {exc}"[:160])
+        _log(
+            logger,
+            "warning",
+            "notify.crashed",
+            kind=event.kind.value,
+            error=f"{type(exc).__name__}: {exc}"[:160],
+        )
         dedup.release(key)
         return row_id
 
@@ -879,10 +1058,21 @@ async def notify_system_event(
         try:
             store.record_deliveries({row_id: result})
         except Exception as exc:  # noqa: BLE001 - 投递备注丢了比通知丢了好受得多
-            _log(logger, "debug", "notify.delivery_note_failed", kind=event.kind.value,
-                 error=f"{type(exc).__name__}: {exc}"[:160])
-    _log(logger, level, "notify.system", kind=event.kind.value,
-         sent=result.get("sent"), failed=result.get("failed"))
+            _log(
+                logger,
+                "debug",
+                "notify.delivery_note_failed",
+                kind=event.kind.value,
+                error=f"{type(exc).__name__}: {exc}"[:160],
+            )
+    _log(
+        logger,
+        level,
+        "notify.system",
+        kind=event.kind.value,
+        sent=result.get("sent"),
+        failed=result.get("failed"),
+    )
     return row_id
 
 

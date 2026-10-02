@@ -23,8 +23,6 @@ from dywatch.models import (
     DiffConfig,
     Event,
     EventKind,
-
-
     Page,
     PostState,
 )
@@ -78,7 +76,11 @@ class Client:
     async def author_posts(self, sec_user_id: str, count: int, **kwargs: Any) -> Page:
         return Page(
             items=(
-                Content(content_id="p-old", title="新标题", created_at=NOW - timedelta(days=2)),
+                Content(
+                    content_id="p-old",
+                    title="新标题",
+                    created_at=NOW - timedelta(days=2),
+                ),
                 Content(content_id="p-new", title="全新作品", created_at=NOW),
             ),
         )
@@ -88,16 +90,32 @@ async def _run_round(tmp_path, notifier: RecordingNotifier | None = None):
     store = StateStore(tmp_path / "db.sqlite")
     store.migrate()
     author = AuthorState(
-        sec_user_id=UID, nickname="阿直", initialized_at=NOW - timedelta(days=30),
-        ever_had_posts=True, runs=5, last_seen_at=NOW - timedelta(minutes=1),
-        posts=(PostState(content_id="p-old", title="旧标题", created_at=NOW - timedelta(days=2)),),
+        sec_user_id=UID,
+        nickname="阿直",
+        initialized_at=NOW - timedelta(days=30),
+        ever_had_posts=True,
+        runs=5,
+        last_seen_at=NOW - timedelta(minutes=1),
+        posts=(
+            PostState(
+                content_id="p-old", title="旧标题", created_at=NOW - timedelta(days=2)
+            ),
+        ),
     )
     notifier = notifier or RecordingNotifier()
     result = await run_author(
-        author=author, nickname="阿直", client=Client(), store=store, notifier=notifier,
+        author=author,
+        nickname="阿直",
+        client=Client(),
+        store=store,
+        notifier=notifier,
         dedup=Deduplicator(),
-        pacer=Pacer(), gate=GlobalGate(default_seconds=60, backoff_after=2, backoff_max=600),
-        cfg=DiffConfig(), now=NOW, archive_enabled=False, logger=Logger(),
+        pacer=Pacer(),
+        gate=GlobalGate(default_seconds=60, backoff_after=2, backoff_max=600),
+        cfg=DiffConfig(),
+        now=NOW,
+        archive_enabled=False,
+        logger=Logger(),
     )
     return result, notifier, store
 
@@ -117,7 +135,10 @@ async def test_title_changed_is_now_notified_with_old_and_new(tmp_path):
     body = notifier.sent[1].markdown
     assert "旧标题" in body and "新标题" in body
     # 事件本身照旧落库（推送与否不影响审计）
-    assert {row["kind"] for row in store.recent_events()} == {"new_post", "title_changed"}
+    assert {row["kind"] for row in store.recent_events()} == {
+        "new_post",
+        "title_changed",
+    }
 
 
 async def test_title_changed_is_windowed_but_new_post_is_not(tmp_path):
@@ -134,7 +155,7 @@ async def test_title_changed_is_windowed_but_new_post_is_not(tmp_path):
 
 
 async def test_revived_window_is_per_post_not_per_author(tmp_path):
-    """"作品回归"的 6 小时窗口要按**作品**分桶，不是按账号。
+    """ "作品回归"的 6 小时窗口要按**作品**分桶，不是按账号。
 
     线上踩过：一个账号的两条作品同时被恢复 → 第一条占了 `revived:作者` 这个桶，第二条被压掉，
     且窗口不会补发（面板里两条"作品回归"、通知只来一条，等于永久丢一条）。
@@ -143,8 +164,12 @@ async def test_revived_window_is_per_post_not_per_author(tmp_path):
     dedup = Deduplicator()
 
     def revived(content_id):
-        return Event(EventKind.REVIVED, sec_user_id=UID, content_id=content_id,
-                     payload={"title": f"标题{content_id}"})
+        return Event(
+            EventKind.REVIVED,
+            sec_user_id=UID,
+            content_id=content_id,
+            payload={"title": f"标题{content_id}"},
+        )
 
     first, key_a = should_send(revived("a"), dedup)
     second, key_b = should_send(revived("b"), dedup)
@@ -157,7 +182,12 @@ async def test_revived_window_is_per_post_not_per_author(tmp_path):
 
 @pytest.mark.parametrize(
     "kind",
-    [EventKind.ALL_GONE, EventKind.POST_REMOVED, EventKind.REVIVED, EventKind.TITLE_CHANGED],
+    [
+        EventKind.ALL_GONE,
+        EventKind.POST_REMOVED,
+        EventKind.REVIVED,
+        EventKind.TITLE_CHANGED,
+    ],
 )
 def test_new_post_sorts_first(kind):
     assert priority_of(EventKind.NEW_POST) < priority_of(kind)
@@ -211,20 +241,36 @@ async def test_one_notification_crashing_does_not_hold_back_the_rest(tmp_path):
 # 而是另一件故障被静默整整一个窗口——磁盘满会把"状态库写不进去"压掉一小时，
 # 池子空了会把"接口熔断"压掉一小时。两者的处置方式完全不同。
 
+
 def test_global_events_are_bucketed_by_cause_not_by_kind():
     dedup = Deduplicator()
 
-    pool_empty = Event(EventKind.UPSTREAM_DEGRADED, sec_user_id="", payload={"code": "IDENTITY_POOL_EXHAUSTED"})
-    circuit_open = Event(EventKind.UPSTREAM_DEGRADED, sec_user_id="", payload={"code": "ENDPOINT_CIRCUIT_OPEN"})
-    assert should_send(pool_empty, dedup) == (True, "upstream_degraded:IDENTITY_POOL_EXHAUSTED")
+    pool_empty = Event(
+        EventKind.UPSTREAM_DEGRADED,
+        sec_user_id="",
+        payload={"code": "IDENTITY_POOL_EXHAUSTED"},
+    )
+    circuit_open = Event(
+        EventKind.UPSTREAM_DEGRADED,
+        sec_user_id="",
+        payload={"code": "ENDPOINT_CIRCUIT_OPEN"},
+    )
+    assert should_send(pool_empty, dedup) == (
+        True,
+        "upstream_degraded:IDENTITY_POOL_EXHAUSTED",
+    )
     allowed, key = should_send(circuit_open, dedup)
     assert allowed is True, "另一种上游故障不该被前一种的窗口压掉"
     assert key == "upstream_degraded:ENDPOINT_CIRCUIT_OPEN"
     assert should_send(pool_empty, dedup)[0] is False, "同一个原因才该压在窗口里"
 
-    disk_low = Event(EventKind.SELF_DEGRADED, sec_user_id="", payload={"reason": "disk_low"})
+    disk_low = Event(
+        EventKind.SELF_DEGRADED, sec_user_id="", payload={"reason": "disk_low"}
+    )
     store_failed = Event(
-        EventKind.SELF_DEGRADED, sec_user_id="", payload={"reason": "state_store_write_failed"}
+        EventKind.SELF_DEGRADED,
+        sec_user_id="",
+        payload={"reason": "state_store_write_failed"},
     )
     assert should_send(disk_low, dedup)[0] is True
     assert should_send(store_failed, dedup)[0] is True, "磁盘满和库写不进去是两件事"
@@ -239,12 +285,20 @@ def test_a_global_event_without_a_cause_shares_one_bucket():
     payload 断言盯着。
     """
     dedup = Deduplicator()
-    first, key = should_send(Event(EventKind.SELF_DEGRADED, sec_user_id="", payload={}), dedup)
+    first, key = should_send(
+        Event(EventKind.SELF_DEGRADED, sec_user_id="", payload={}), dedup
+    )
     assert first is True and key == "self_degraded:unknown"
-    assert should_send(Event(EventKind.SELF_DEGRADED, sec_user_id="", payload={}), dedup)[0] is False
+    assert (
+        should_send(Event(EventKind.SELF_DEGRADED, sec_user_id="", payload={}), dedup)[
+            0
+        ]
+        is False
+    )
 
 
 # ------------------------------------------------------- 系统级事件的落库与投递
+
 
 async def test_system_events_are_recorded_and_a_suppressed_repeat_is_not(tmp_path):
     """系统级事件：**先落库、再投递、回写结果**；被窗口压掉的重复**不落库**。
@@ -257,7 +311,11 @@ async def test_system_events_are_recorded_and_a_suppressed_repeat_is_not(tmp_pat
     store.migrate()
     notifier = RecordingNotifier()
     dedup = Deduplicator()
-    event = Event(EventKind.SELF_DEGRADED, sec_user_id="", payload={"reason": "disk_low", "free_mb": 10})
+    event = Event(
+        EventKind.SELF_DEGRADED,
+        sec_user_id="",
+        payload={"reason": "disk_low", "free_mb": 10},
+    )
 
     row_id = await notify_system_event(
         event, notifier=notifier, dedup=dedup, store=store, now=NOW, logger=Logger()
@@ -267,7 +325,9 @@ async def test_system_events_are_recorded_and_a_suppressed_repeat_is_not(tmp_pat
 
     rows = store.recent_events()
     assert [row["kind"] for row in rows] == ["self_degraded"]
-    assert json.loads(rows[0]["delivery_json"])["sent"] == ["stub"], "投递结果要回写到那一行"
+    assert json.loads(rows[0]["delivery_json"])["sent"] == ["stub"], (
+        "投递结果要回写到那一行"
+    )
 
     again = await notify_system_event(
         event, notifier=notifier, dedup=dedup, store=store, now=NOW, logger=Logger()

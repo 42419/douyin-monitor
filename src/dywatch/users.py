@@ -92,12 +92,17 @@ def parse_users(text: str, *, logger: Any = None) -> list[UserEntry]:
             nickname = sec_user_id[-8:]
         if not is_safe_id(sec_user_id):
             if log:
-                log.warning("users.bad_id", lineno=lineno, reason="ID 含空白/控制字符或超长")
+                log.warning(
+                    "users.bad_id", lineno=lineno, reason="ID 含空白/控制字符或超长"
+                )
             continue
         if sec_user_id in seen:
             if log:
                 log.warning(
-                    "users.duplicate", lineno=lineno, kept=seen[sec_user_id], ignored=nickname
+                    "users.duplicate",
+                    lineno=lineno,
+                    kept=seen[sec_user_id],
+                    ignored=nickname,
                 )
             continue
         seen[sec_user_id] = nickname
@@ -128,4 +133,11 @@ def resolve_input(raw: str) -> str:
     return text.split("?", 1)[0]
 
 
-__all__ = ["MAX_ID_LENGTH", "UserEntry", "is_safe_id", "load_users_conf", "parse_users", "resolve_input"]
+__all__ = [
+    "MAX_ID_LENGTH",
+    "UserEntry",
+    "is_safe_id",
+    "load_users_conf",
+    "parse_users",
+    "resolve_input",
+]

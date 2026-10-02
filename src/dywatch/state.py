@@ -313,7 +313,9 @@ class StateStore:
             row = conn.execute("SELECT version FROM schema_version").fetchone()
             if row is None:
                 # 全新库：SCHEMA 本身已经是最新形状，不需要跑任何一步迁移
-                conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+                conn.execute(
+                    "INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,)
+                )
                 return
 
             version = int(row["version"])
@@ -351,7 +353,10 @@ class StateStore:
     # ---------------------------------------------------------------- 读
     def load_authors(self) -> dict[str, AuthorState]:
         """Every author with its posts and tombstones. One query per table."""
-        authors = {row["sec_user_id"]: row for row in self._conn.execute("SELECT * FROM authors")}
+        authors = {
+            row["sec_user_id"]: row
+            for row in self._conn.execute("SELECT * FROM authors")
+        }
         posts: dict[str, list[sqlite3.Row]] = {}
         for row in self._conn.execute("SELECT * FROM posts"):
             posts.setdefault(row["sec_user_id"], []).append(row)
@@ -368,7 +373,9 @@ class StateStore:
             )
         return out
 
-    def ensure_author(self, sec_user_id: str, nickname: str, now: datetime) -> AuthorState:
+    def ensure_author(
+        self, sec_user_id: str, nickname: str, now: datetime
+    ) -> AuthorState:
         """Create the row if absent, so a new account is visible on the panel at once."""
         row = self._conn.execute(
             "SELECT * FROM authors WHERE sec_user_id = ?", (sec_user_id,)
@@ -553,8 +560,12 @@ class StateStore:
                         event.sec_user_id,
                         event.content_id,
                         event.kind.value,
-                        json.dumps(event.payload, ensure_ascii=False, default=_json_default),
-                        json.dumps(dict((deliveries or {}).get(index, {})), ensure_ascii=False)
+                        json.dumps(
+                            event.payload, ensure_ascii=False, default=_json_default
+                        ),
+                        json.dumps(
+                            dict((deliveries or {}).get(index, {})), ensure_ascii=False
+                        )
                         if deliveries
                         else None,
                     ),
@@ -637,7 +648,9 @@ class StateStore:
                     event.sec_user_id or None,
                     event.content_id,
                     event.kind.value,
-                    json.dumps(event.payload, ensure_ascii=False, default=_json_default),
+                    json.dumps(
+                        event.payload, ensure_ascii=False, default=_json_default
+                    ),
                     None,
                 ),
             )
@@ -680,7 +693,16 @@ class StateStore:
             conn.execute(
                 "INSERT INTO rounds (ts, checked, new_count, deleted_count, title_changed,"
                 " failed, gate_state, duration_ms) VALUES (?,?,?,?,?,?,?,?)",
-                (_iso(now), checked, new, deleted, titles, failed, gate_state, duration_ms),
+                (
+                    _iso(now),
+                    checked,
+                    new,
+                    deleted,
+                    titles,
+                    failed,
+                    gate_state,
+                    duration_ms,
+                ),
             )
         return {
             "checked": checked,
@@ -718,10 +740,12 @@ class StateStore:
         """
         with self._tx() as conn:
             conn.execute(
-                "DELETE FROM events WHERE ts < ?", (_iso(now - timedelta(days=events_days)),)
+                "DELETE FROM events WHERE ts < ?",
+                (_iso(now - timedelta(days=events_days)),),
             )
             conn.execute(
-                "DELETE FROM rounds WHERE ts < ?", (_iso(now - timedelta(days=rounds_days)),)
+                "DELETE FROM rounds WHERE ts < ?",
+                (_iso(now - timedelta(days=rounds_days)),),
             )
             if metrics_days > 0:
                 conn.execute(
@@ -980,7 +1004,9 @@ def _row_to_state(
         last_seen_at=_dt(row["last_seen_at"]),
         runs=int(row["runs"]),
         baseline_content_count=(
-            int(row["baseline_content_count"]) if row["baseline_content_count"] is not None else None
+            int(row["baseline_content_count"])
+            if row["baseline_content_count"] is not None
+            else None
         ),
         baseline_content_count_at=_dt(row["baseline_content_count_at"]),
         content_count_drift_rounds=int(row["content_count_drift_rounds"] or 0),
@@ -998,17 +1024,24 @@ def _row_to_state(
                 # 旧库在迁移前没有这一列；`migrate()` 会补上，但读一条还没迁移的行时
                 # 不该炸——按"没有这个已知情况"处理（`None`）
                 hidden_from_guest_at=(
-                    _dt(p["hidden_from_guest_at"]) if "hidden_from_guest_at" in p.keys() else None
+                    _dt(p["hidden_from_guest_at"])
+                    if "hidden_from_guest_at" in p.keys()
+                    else None
                 ),
                 hidden_seen_streak=(
-                    int(p["hidden_seen_streak"] or 0) if "hidden_seen_streak" in p.keys() else 0
+                    int(p["hidden_seen_streak"] or 0)
+                    if "hidden_seen_streak" in p.keys()
+                    else 0
                 ),
             )
             for p in posts
         ),
         tombstones=tuple(
-            Tombstone(content_id=t["content_id"], removed_at=_dt(t["removed_at"]) or datetime.now(timezone.utc),
-                      reason=t["reason"])
+            Tombstone(
+                content_id=t["content_id"],
+                removed_at=_dt(t["removed_at"]) or datetime.now(timezone.utc),
+                reason=t["reason"],
+            )
             for t in tombs
         ),
     )

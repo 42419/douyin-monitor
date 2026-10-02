@@ -34,7 +34,9 @@ def at(minutes: int) -> datetime:
     return T0 + timedelta(minutes=minutes)
 
 
-def post(content_id: str, *, minutes_ago: int = 0, top: bool = False, title: str = "") -> Content:
+def post(
+    content_id: str, *, minutes_ago: int = 0, top: bool = False, title: str = ""
+) -> Content:
     return Content(
         content_id=content_id,
         kind=Kind.VIDEO,
@@ -49,7 +51,9 @@ def post(content_id: str, *, minutes_ago: int = 0, top: bool = False, title: str
 
 
 def page(*items: Content, raw_included: bool = False) -> Page:
-    return Page(items=tuple(items), cursor="c1", has_more=True, raw_included=raw_included)
+    return Page(
+        items=tuple(items), cursor="c1", has_more=True, raw_included=raw_included
+    )
 
 
 def kinds(events) -> list[EventKind]:
@@ -90,7 +94,9 @@ def test_new_post_after_init_is_announced_with_gap_days():
         last_update_at=T0,
         last_new_video_at=T0,
         newest_seen_created_at=T0 - timedelta(days=3),
-        posts=(PostState(content_id="1", title="标题1", created_at=T0 - timedelta(days=3)),),
+        posts=(
+            PostState(content_id="1", title="标题1", created_at=T0 - timedelta(days=3)),
+        ),
     )
     events, state = diff(
         prev,
@@ -124,7 +130,9 @@ def test_post_absent_once_is_not_a_deletion():
             PostState(content_id="gone", title="走", created_at=T0 - timedelta(days=2)),
         ),
     )
-    events, state = diff(prev, page=page(post("keep", minutes_ago=1440)), now=at(1), cfg=CFG)
+    events, state = diff(
+        prev, page=page(post("keep", minutes_ago=1440)), now=at(1), cfg=CFG
+    )
 
     assert EventKind.POST_REMOVED not in kinds(events)
     assert state.post("gone").absent_rounds == 1
@@ -144,7 +152,9 @@ def test_post_absent_twice_is_confirmed_and_tombstoned():
             ),
         ),
     )
-    events, state = diff(prev, page=page(post("keep", minutes_ago=1440)), now=at(2), cfg=CFG)
+    events, state = diff(
+        prev, page=page(post("keep", minutes_ago=1440)), now=at(2), cfg=CFG
+    )
 
     assert EventKind.POST_REMOVED in kinds(events)
     removed = [e for e in events if e.kind is EventKind.POST_REMOVED][0]
@@ -170,11 +180,15 @@ def test_top_post_needs_three_rounds():
             ),
         ),
     )
-    events, state = diff(prev, page=page(post("keep", minutes_ago=1440)), now=at(2), cfg=CFG)
+    events, state = diff(
+        prev, page=page(post("keep", minutes_ago=1440)), now=at(2), cfg=CFG
+    )
     assert EventKind.POST_REMOVED not in kinds(events)
     assert state.post("top1").absent_rounds == 2
 
-    events2, state2 = diff(state, page=page(post("keep", minutes_ago=1440)), now=at(3), cfg=CFG)
+    events2, state2 = diff(
+        state, page=page(post("keep", minutes_ago=1440)), now=at(3), cfg=CFG
+    )
     assert EventKind.POST_REMOVED in kinds(events2)
     assert state2.post("top1") is None
 
@@ -241,20 +255,31 @@ def test_a_pending_deletion_is_not_absorbed_by_the_next_rounds_budget():
     cfg = DiffConfig(fetch_count=15, delete_rounds=3)
 
     # 第 2 轮：新作品出现，那条约 5 天前的作品仍然不在本页
-    events, state = diff(prev, page=page(post("keep", minutes_ago=60), post("new")), now=at(1), cfg=cfg)
+    events, state = diff(
+        prev, page=page(post("keep", minutes_ago=60), post("new")), now=at(1), cfg=cfg
+    )
 
-    assert ids_of(events, EventKind.SCROLLED_OUT) == [], "待确认的删除不该被挤出预算销案"
+    assert ids_of(events, EventKind.SCROLLED_OUT) == [], (
+        "待确认的删除不该被挤出预算销案"
+    )
     assert state.post("gone") is not None, "它应该继续走确认流程，而不是被静默埋掉"
     assert state.post("gone").absent_rounds == 2
     assert REASON_SCROLLED_OUT not in [t.reason for t in state.tombstones]
     assert EventKind.POST_REMOVED not in kinds(events), "还没到阈值"
 
     # 第 3 轮：仍然不在本页 → 正常确认并报出来
-    events2, state2 = diff(state, page=page(post("keep", minutes_ago=60), post("new")), now=at(2), cfg=cfg)
+    events2, state2 = diff(
+        state, page=page(post("keep", minutes_ago=60), post("new")), now=at(2), cfg=cfg
+    )
 
-    assert ids_of(events2, EventKind.POST_REMOVED) == [None] or EventKind.POST_REMOVED in kinds(events2)
+    assert ids_of(events2, EventKind.POST_REMOVED) == [
+        None
+    ] or EventKind.POST_REMOVED in kinds(events2)
     assert state2.post("gone") is None
-    assert any(t.content_id == "gone" and t.reason == REASON_CONFIRMED for t in state2.tombstones)
+    assert any(
+        t.content_id == "gone" and t.reason == REASON_CONFIRMED
+        for t in state2.tombstones
+    )
 
 
 def test_the_budget_still_works_for_posts_missing_for_the_first_time():
@@ -293,11 +318,17 @@ def test_gap_is_detected_even_on_a_round_without_raw():
 
     # 本页最旧的**非置顶**作品是 45 分钟前，而上一轮最新的非置顶是 70 分钟前
     # → 中间那段没采集到（漏检）。置顶项本身留在库里、也出现在本页，不产生别的噪声。
-    page_items = [post(str(i), minutes_ago=5 * i) for i in range(5, 10)]  # 25/30/35/40/45 分钟前
+    page_items = [
+        post(str(i), minutes_ago=5 * i) for i in range(5, 10)
+    ]  # 25/30/35/40/45 分钟前
     page_items.append(old_pinned)
-    events, _state = diff(prev, page=page(*page_items, raw_included=False), now=at(1), cfg=CFG)
+    events, _state = diff(
+        prev, page=page(*page_items, raw_included=False), now=at(1), cfg=CFG
+    )
 
-    assert EventKind.GAP_DETECTED in kinds(events), "置顶项不该把漏检判据拖死（非 raw 轮）"
+    assert EventKind.GAP_DETECTED in kinds(events), (
+        "置顶项不该把漏检判据拖死（非 raw 轮）"
+    )
 
 
 def test_a_known_pinned_post_is_excluded_from_the_gap_window_even_without_raw():
@@ -315,7 +346,9 @@ def test_a_known_pinned_post_is_excluded_from_the_gap_window_even_without_raw():
         ),
     )
 
-    events, _state = diff(prev, page=page(block, ancient, raw_included=False), now=at(1), cfg=CFG)
+    events, _state = diff(
+        prev, page=page(block, ancient, raw_included=False), now=at(1), cfg=CFG
+    )
 
     assert EventKind.GAP_DETECTED in kinds(events), "已知置顶项被算进窗口，判据就失效了"
 
@@ -332,7 +365,9 @@ def test_reappearing_post_is_restored_silently():
         sec_user_id="u1",
         ever_had_posts=True,
         last_update_at=T0,
-        posts=(PostState(content_id="keep", title="k", created_at=T0 - timedelta(days=1)),),
+        posts=(
+            PostState(content_id="keep", title="k", created_at=T0 - timedelta(days=1)),
+        ),
         tombstones=(Tombstone(content_id="back", removed_at=T0 - timedelta(days=2)),),
     )
 
@@ -356,7 +391,9 @@ def test_all_gone_needs_three_rounds_then_warns():
     prev = AuthorState(
         sec_user_id="u1",
         ever_had_posts=True,
-        posts=(PostState(content_id="1", title="t", created_at=T0 - timedelta(days=1)),),
+        posts=(
+            PostState(content_id="1", title="t", created_at=T0 - timedelta(days=1)),
+        ),
         all_gone_rounds=2,
     )
     events, state = diff(prev, page=page(), now=at(3), cfg=CFG)
@@ -371,10 +408,14 @@ def test_all_gone_resets_when_a_post_comes_back():
     prev = AuthorState(
         sec_user_id="u1",
         ever_had_posts=True,
-        posts=(PostState(content_id="1", title="t", created_at=T0 - timedelta(days=1)),),
+        posts=(
+            PostState(content_id="1", title="t", created_at=T0 - timedelta(days=1)),
+        ),
         all_gone_rounds=2,
     )
-    _events, state = diff(prev, page=page(post("1", minutes_ago=60)), now=at(3), cfg=CFG)
+    _events, state = diff(
+        prev, page=page(post("1", minutes_ago=60)), now=at(3), cfg=CFG
+    )
 
     assert state.all_gone_rounds == 0
     assert state.post("1") is not None
@@ -395,7 +436,11 @@ def test_marked_post_absent_from_the_page_is_silent_and_keeps_its_marker():
         nickname="A",
         ever_had_posts=True,
         posts=(
-            PostState(content_id="visible", title="标题visible", created_at=T0 - timedelta(days=1)),
+            PostState(
+                content_id="visible",
+                title="标题visible",
+                created_at=T0 - timedelta(days=1),
+            ),
             PostState(
                 content_id="hidden",
                 title="标题hidden",
@@ -408,7 +453,12 @@ def test_marked_post_absent_from_the_page_is_silent_and_keeps_its_marker():
     # 连跑 4 轮（远超 delete_rounds=2），缺席次数一次都不该涨
     state = prev
     for round_no in range(1, 5):
-        events, state = diff(state, page=page(post("visible", minutes_ago=1440)), now=at(round_no), cfg=CFG)
+        events, state = diff(
+            state,
+            page=page(post("visible", minutes_ago=1440)),
+            now=at(round_no),
+            cfg=CFG,
+        )
         assert kinds(events) == [], f"第 {round_no} 轮不该有任何事件"
         entry = state.post("hidden")
         assert entry is not None, "标记的作品要留在已知作品里，不能进墓碑"
@@ -428,7 +478,9 @@ def test_marked_post_does_not_consume_the_scroll_out_budget():
         nickname="A",
         ever_had_posts=True,
         posts=(
-            PostState(content_id="old", title="标题old", created_at=T0 - timedelta(days=10)),
+            PostState(
+                content_id="old", title="标题old", created_at=T0 - timedelta(days=10)
+            ),
             PostState(
                 content_id="hidden",
                 title="标题hidden",
@@ -444,7 +496,10 @@ def test_marked_post_does_not_consume_the_scroll_out_budget():
     assert EventKind.NEW_POST in kinds(events)
     assert EventKind.POST_REMOVED not in kinds(events), "预算够，没有人该被确认删除"
     assert EventKind.ALL_GONE not in kinds(events)
-    assert state.post("hidden") is not None and state.post("hidden").hidden_from_guest_at is not None
+    assert (
+        state.post("hidden") is not None
+        and state.post("hidden").hidden_from_guest_at is not None
+    )
     assert {t.content_id for t in state.tombstones} == {"old"}, "预算只吸收了 old"
 
 
@@ -505,11 +560,15 @@ def test_all_posts_marked_and_empty_page_is_not_all_gone():
         all_gone_rounds=7,  # 假设之前被推高过，这一轮应该被压回 0
         posts=(
             PostState(
-                content_id="h1", title="t1", created_at=T0 - timedelta(days=1),
+                content_id="h1",
+                title="t1",
+                created_at=T0 - timedelta(days=1),
                 hidden_from_guest_at=T0 - timedelta(hours=1),
             ),
             PostState(
-                content_id="h2", title="t2", created_at=T0 - timedelta(days=2),
+                content_id="h2",
+                title="t2",
+                created_at=T0 - timedelta(days=2),
                 hidden_from_guest_at=T0 - timedelta(hours=1),
             ),
         ),
@@ -518,7 +577,9 @@ def test_all_posts_marked_and_empty_page_is_not_all_gone():
     state = prev
     for round_no in range(1, 5):
         events, state = diff(state, page=page(), now=at(round_no), cfg=CFG)
-        assert kinds(events) == [], f"第 {round_no} 轮不该有任何事件（尤其不该有 ALL_GONE）"
+        assert kinds(events) == [], (
+            f"第 {round_no} 轮不该有任何事件（尤其不该有 ALL_GONE）"
+        )
         assert state.all_gone_rounds == 0
         assert state.ever_had_posts is True
     assert state.tombstones == ()
@@ -554,7 +615,9 @@ def test_empty_page_for_known_author_is_not_never_seen():
     prev = AuthorState(
         sec_user_id="u1",
         ever_had_posts=True,
-        posts=(PostState(content_id="1", title="t", created_at=T0 - timedelta(days=1)),),
+        posts=(
+            PostState(content_id="1", title="t", created_at=T0 - timedelta(days=1)),
+        ),
     )
     events, state = diff(prev, page=page(), now=at(1), cfg=CFG)
 
@@ -571,7 +634,9 @@ def test_gap_detected_when_page_skips_a_window():
         sec_user_id="u1",
         ever_had_posts=True,
         newest_seen_created_at=T0 - timedelta(days=10),
-        posts=(PostState(content_id="old", title="o", created_at=T0 - timedelta(days=10)),),
+        posts=(
+            PostState(content_id="old", title="o", created_at=T0 - timedelta(days=10)),
+        ),
     )
     events, _state = diff(
         prev,
@@ -590,7 +655,9 @@ def test_gap_not_detected_for_contiguous_page():
         sec_user_id="u1",
         ever_had_posts=True,
         newest_seen_created_at=T0 - timedelta(minutes=30),
-        posts=(PostState(content_id="p", title="p", created_at=T0 - timedelta(minutes=30)),),
+        posts=(
+            PostState(content_id="p", title="p", created_at=T0 - timedelta(minutes=30)),
+        ),
     )
     events, _state = diff(
         prev,
@@ -610,7 +677,12 @@ def test_gap_judgement_ignores_pinned_posts():
         newest_seen_created_at=T0 - timedelta(minutes=30),
         posts=(
             PostState(content_id="p", title="p", created_at=T0 - timedelta(minutes=30)),
-            PostState(content_id="t", title="t", created_at=T0 - timedelta(minutes=30), is_top=True),
+            PostState(
+                content_id="t",
+                title="t",
+                created_at=T0 - timedelta(minutes=30),
+                is_top=True,
+            ),
         ),
     )
     events, _state = diff(
@@ -637,7 +709,11 @@ def test_title_change_is_recorded_and_notified():
     prev = AuthorState(
         sec_user_id="u1",
         ever_had_posts=True,
-        posts=(PostState(content_id="1", title="旧标题", created_at=T0 - timedelta(days=1)),),
+        posts=(
+            PostState(
+                content_id="1", title="旧标题", created_at=T0 - timedelta(days=1)
+            ),
+        ),
     )
     events, state = diff(
         prev,
@@ -649,7 +725,9 @@ def test_title_change_is_recorded_and_notified():
     changed = [e for e in events if e.kind is EventKind.TITLE_CHANGED]
     assert len(changed) == 1
     assert changed[0].should_notify
-    assert changed[0].payload["old"] == "旧标题" and changed[0].payload["new"] == "新标题"
+    assert (
+        changed[0].payload["old"] == "旧标题" and changed[0].payload["new"] == "新标题"
+    )
     assert state.post("1").title == "新标题"
 
 
@@ -662,10 +740,19 @@ def test_is_top_is_preserved_when_raw_was_not_requested():
     prev = AuthorState(
         sec_user_id="u1",
         ever_had_posts=True,
-        posts=(PostState(content_id="t", title="t", is_top=True, created_at=T0 - timedelta(days=1)),),
+        posts=(
+            PostState(
+                content_id="t",
+                title="t",
+                is_top=True,
+                created_at=T0 - timedelta(days=1),
+            ),
+        ),
     )
     # 不带 raw：item.is_top 为 False（因为 raw 里没有 is_top 可读）→ 不更新
-    _events, state = diff(prev, page=page(post("t", minutes_ago=1440)), now=at(1), cfg=CFG)
+    _events, state = diff(
+        prev, page=page(post("t", minutes_ago=1440)), now=at(1), cfg=CFG
+    )
     assert state.post("t").is_top is True
 
     # 带了 raw 且说它不是置顶：这次要信，把库里的值改过来
@@ -678,7 +765,9 @@ def test_is_top_is_preserved_when_raw_was_not_requested():
     assert state2.post("t").is_top is False
 
     # 再回到不带 raw 的轮次：降级后的值要被保留，不能"又变回置顶"
-    _events3, state3 = diff(state2, page=page(post("t", minutes_ago=1440)), now=at(3), cfg=CFG)
+    _events3, state3 = diff(
+        state2, page=page(post("t", minutes_ago=1440)), now=at(3), cfg=CFG
+    )
     assert state3.post("t").is_top is False
 
 
@@ -687,13 +776,18 @@ def test_raw_refresh_counter_advances_only_without_raw():
         sec_user_id="u1",
         ever_had_posts=True,
         raw_refresh_round=5,
-        posts=(PostState(content_id="1", title="t", created_at=T0 - timedelta(days=1)),),
+        posts=(
+            PostState(content_id="1", title="t", created_at=T0 - timedelta(days=1)),
+        ),
     )
     _e1, s1 = diff(prev, page=page(post("1", minutes_ago=1440)), now=at(1), cfg=CFG)
     assert s1.raw_refresh_round == 6
 
     _e2, s2 = diff(
-        prev, page=page(post("1", minutes_ago=1440), raw_included=True), now=at(1), cfg=CFG
+        prev,
+        page=page(post("1", minutes_ago=1440), raw_included=True),
+        now=at(1),
+        cfg=CFG,
     )
     assert s2.raw_refresh_round == 0
 
@@ -709,7 +803,12 @@ def test_failure_does_not_advance_the_state_machine():
         sec_user_id="u1",
         ever_had_posts=True,
         posts=(
-            PostState(content_id="1", title="t", created_at=T0 - timedelta(days=1), absent_rounds=1),
+            PostState(
+                content_id="1",
+                title="t",
+                created_at=T0 - timedelta(days=1),
+                absent_rounds=1,
+            ),
         ),
     )
     events, state = diff(
@@ -728,7 +827,10 @@ def test_fail_alert_fires_at_threshold_then_respects_cooldown():
     events = []
     for offset in range(1, 6):
         batch, state = diff(
-            state, error=MonitorError("UPSTREAM_RISK_CONTROL", "x"), now=at(offset), cfg=CFG
+            state,
+            error=MonitorError("UPSTREAM_RISK_CONTROL", "x"),
+            now=at(offset),
+            cfg=CFG,
         )
         events.extend(batch)
 
@@ -736,7 +838,9 @@ def test_fail_alert_fires_at_threshold_then_respects_cooldown():
     assert state.fail_alerted is True
 
     # 冷却期内不再重复
-    batch, state = diff(state, error=MonitorError("UPSTREAM_RISK_CONTROL", "x"), now=at(6), cfg=CFG)
+    batch, state = diff(
+        state, error=MonitorError("UPSTREAM_RISK_CONTROL", "x"), now=at(6), cfg=CFG
+    )
     assert EventKind.ACCOUNT_FAILED not in kinds(batch)
 
 
@@ -746,7 +850,10 @@ def test_recovery_after_alert_is_announced_once():
     state = AuthorState(sec_user_id="u1", nickname="A")
     for offset in range(1, 6):
         _batch, state = diff(
-            state, error=MonitorError("UPSTREAM_RISK_CONTROL", "x"), now=at(offset), cfg=CFG
+            state,
+            error=MonitorError("UPSTREAM_RISK_CONTROL", "x"),
+            now=at(offset),
+            cfg=CFG,
         )
     assert state.fail_alerted is True
 
@@ -766,9 +873,18 @@ def test_trimming_prefers_the_oldest_non_top():
         sec_user_id="u1",
         ever_had_posts=True,
         posts=(
-            PostState(content_id="t", title="顶", is_top=True, created_at=T0 - timedelta(days=900)),
-            PostState(content_id="old", title="旧", created_at=T0 - timedelta(days=300)),
-            PostState(content_id="mid", title="中", created_at=T0 - timedelta(days=100)),
+            PostState(
+                content_id="t",
+                title="顶",
+                is_top=True,
+                created_at=T0 - timedelta(days=900),
+            ),
+            PostState(
+                content_id="old", title="旧", created_at=T0 - timedelta(days=300)
+            ),
+            PostState(
+                content_id="mid", title="中", created_at=T0 - timedelta(days=100)
+            ),
         ),
     )
     events, state = diff(
@@ -800,16 +916,22 @@ def test_stale_reminder_is_one_shot_and_resets_on_new_post():
         ever_had_posts=True,
         initialized_at=T0 - timedelta(days=20),
         last_update_at=T0 - timedelta(days=20),
-        posts=(PostState(content_id="1", title="t", created_at=T0 - timedelta(days=20)),),
+        posts=(
+            PostState(content_id="1", title="t", created_at=T0 - timedelta(days=20)),
+        ),
     )
     events, state = diff(prev, page=page(post("1", minutes_ago=28800)), now=T0, cfg=CFG)
     assert EventKind.STALE_NO_UPDATE in kinds(events)
     assert state.stale_alerted is True
 
-    events2, _state2 = diff(state, page=page(post("1", minutes_ago=28800)), now=at(60), cfg=CFG)
+    events2, _state2 = diff(
+        state, page=page(post("1", minutes_ago=28800)), now=at(60), cfg=CFG
+    )
     assert EventKind.STALE_NO_UPDATE not in kinds(events2)
 
-    events3, state3 = diff(state, page=page(post("1", minutes_ago=28800), post("2")), now=at(120), cfg=CFG)
+    events3, state3 = diff(
+        state, page=page(post("1", minutes_ago=28800), post("2")), now=at(120), cfg=CFG
+    )
     assert state3.stale_alerted is False
     assert EventKind.NEW_POST in kinds(events3)
 
@@ -834,8 +956,12 @@ def test_archive_verdict_only_ever_accelerates_never_blocks():
             sec_user_id="u1",
             ever_had_posts=True,
             posts=(
-                PostState(content_id="keep", title="留", created_at=T0 - timedelta(days=1)),
-                PostState(content_id="gone", title="走", created_at=T0 - timedelta(days=2)),
+                PostState(
+                    content_id="keep", title="留", created_at=T0 - timedelta(days=1)
+                ),
+                PostState(
+                    content_id="gone", title="走", created_at=T0 - timedelta(days=2)
+                ),
             ),
         )
         return diff(

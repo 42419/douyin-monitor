@@ -50,7 +50,9 @@ def test_backoff_for_alone_never_closes_the_gate():
 
 # --------------------------------------------------------------- 通知目标注释
 def test_a_comment_with_an_apostrophe_cannot_swallow_a_target():
-    raw = "\ndingtalk token=a\n# can't use telegram\ntelegram bot_token=1:A chat_id=-1\n"
+    raw = (
+        "\ndingtalk token=a\n# can't use telegram\ntelegram bot_token=1:A chat_id=-1\n"
+    )
     parsed = parse_targets(raw)
 
     assert not parsed.errors, parsed.errors
@@ -108,13 +110,19 @@ def message() -> Any:
         (ServerChanChannel(sendkey="s"), {"code": 40001}),
         # Telegram 的官方判据是响应体的 `ok`。文档只说"请求不成功时 ok 为 False"，
         # **没有规定 HTTP 状态码**（实测假 token 回 401），所以这里连 200 的形状一起钉住。
-        (TelegramChannel(bot_token="1:A"), {"ok": False, "error_code": 400,
-                                            "description": "chat not found"}),
-        (TelegramChannel(bot_token="1:A"), {"ok": False, "error_code": 401,
-                                            "description": "Unauthorized"}),
+        (
+            TelegramChannel(bot_token="1:A"),
+            {"ok": False, "error_code": 400, "description": "chat not found"},
+        ),
+        (
+            TelegramChannel(bot_token="1:A"),
+            {"ok": False, "error_code": 401, "description": "Unauthorized"},
+        ),
     ],
 )
-async def test_http_200_with_a_business_error_is_a_failure(channel: HttpChannel, body: dict) -> None:
+async def test_http_200_with_a_business_error_is_a_failure(
+    channel: HttpChannel, body: dict
+) -> None:
     client = _Client(_Reply(200, body))
 
     with pytest.raises(RuntimeError):
@@ -134,7 +142,9 @@ async def test_http_200_with_a_business_error_is_a_failure(channel: HttpChannel,
         (WeComChannel(key="k"), ValueError("no body")),
     ],
 )
-async def test_a_healthy_200_still_counts_as_sent(channel: HttpChannel, body: Any) -> None:
+async def test_a_healthy_200_still_counts_as_sent(
+    channel: HttpChannel, body: Any
+) -> None:
     client = _Client(_Reply(200, body))
 
     await channel.send(message(), client)  # type: ignore[arg-type]
@@ -156,7 +166,12 @@ def test_a_malformed_removed_payload_does_not_claim_zero_posts():
     """`removed` 形状读不出来时不能渲染成"有 0 条作品已确认消失"——那是假信息。"""
     for bad in ("oops", 5, {"content_id": "1"}):
         rendered = render_event(
-            Event(EventKind.POST_REMOVED, sec_user_id="u", nickname="示例", payload={"removed": bad}),
+            Event(
+                EventKind.POST_REMOVED,
+                sec_user_id="u",
+                nickname="示例",
+                payload={"removed": bad},
+            ),
             now=NOW,
         )
         assert "0 条" not in rendered.subject, (bad, rendered.subject)
@@ -169,7 +184,9 @@ def test_a_well_formed_removed_payload_still_renders_the_count():
             EventKind.POST_REMOVED,
             sec_user_id="u",
             nickname="示例",
-            payload={"removed": [{"content_id": "1", "title": "T", "created_at": None}]},
+            payload={
+                "removed": [{"content_id": "1", "title": "T", "created_at": None}]
+            },
         ),
         now=NOW,
     )
@@ -255,10 +272,22 @@ def test_the_gate_banner_says_when_upstream_retry_after_was_capped():
     """
     from dywatch.webui import _gate_html
 
-    capped = _gate_html({"open": False, "reason": "RATE_LIMITED", "remaining_seconds": 600,
-                         "retry_after_capped": 3})
-    plain = _gate_html({"open": False, "reason": "RATE_LIMITED", "remaining_seconds": 600,
-                        "retry_after_capped": 0})
+    capped = _gate_html(
+        {
+            "open": False,
+            "reason": "RATE_LIMITED",
+            "remaining_seconds": 600,
+            "retry_after_capped": 3,
+        }
+    )
+    plain = _gate_html(
+        {
+            "open": False,
+            "reason": "RATE_LIMITED",
+            "remaining_seconds": 600,
+            "retry_after_capped": 0,
+        }
+    )
 
     assert "已被封顶 3 次" in capped and "RETRY_AFTER_MAX_SECONDS" in capped
     assert "封顶" not in plain, "没封顶过就别提这件事"
@@ -269,7 +298,9 @@ def test_the_gate_banner_survives_a_hostile_capped_value():
     from dywatch.webui import _gate_html
 
     for junk in ("abc", None, [], {}):
-        html = _gate_html({"open": False, "reason": "RATE_LIMITED", "retry_after_capped": junk})
+        html = _gate_html(
+            {"open": False, "reason": "RATE_LIMITED", "retry_after_capped": junk}
+        )
         assert "闸门关闭" in html
 
 
@@ -320,12 +351,16 @@ def test_env_flag_works_before_and_after_the_subcommand():
 
     before = _parser().parse_args(["--env", "/tmp/before.env", "doctor"])
     after = _parser().parse_args(["doctor", "--env", "/tmp/after.env"])
-    both = _parser().parse_args(["--env", "/tmp/before.env", "doctor", "--env", "/tmp/after.env"])
+    both = _parser().parse_args(
+        ["--env", "/tmp/before.env", "doctor", "--env", "/tmp/after.env"]
+    )
     neither = _parser().parse_args(["doctor"])
 
     assert str(_env_path(before)).replace("\\", "/").endswith("/tmp/before.env")
     assert str(_env_path(after)).replace("\\", "/").endswith("/tmp/after.env")
-    assert str(_env_path(both)).replace("\\", "/").endswith("/tmp/after.env"), "两处都给时子命令的赢"
+    assert str(_env_path(both)).replace("\\", "/").endswith("/tmp/after.env"), (
+        "两处都给时子命令的赢"
+    )
     assert "before.env" not in str(_env_path(neither)), "没写 --env 时走默认查找"
 
 
@@ -333,8 +368,13 @@ def test_legacy_duplicate_channel_entries_get_distinct_names():
     """`NOTIFY_CHANNELS=dingtalk,dingtalk` 会建出两个渠道；名字必须能分辨，
     否则 `Delivery.sent` / `failed` 会互相覆盖，"只有一个群收到"看不出来。"""
     settings = load_settings(
-        None, environ={"DTK_API_KEY": "dtk_x", "NOTIFY_CHANNELS": "dingtalk,dingtalk",
-                       "DINGTALK_TOKEN": "t", "DINGTALK_SECRET": "s"}
+        None,
+        environ={
+            "DTK_API_KEY": "dtk_x",
+            "NOTIFY_CHANNELS": "dingtalk,dingtalk",
+            "DINGTALK_TOKEN": "t",
+            "DINGTALK_SECRET": "s",
+        },
     )
     names = [channel.name for channel in build_channels(settings)]
 
@@ -343,8 +383,13 @@ def test_legacy_duplicate_channel_entries_get_distinct_names():
 
 def test_legacy_single_channel_keeps_its_plain_name():
     settings = load_settings(
-        None, environ={"DTK_API_KEY": "dtk_x", "NOTIFY_CHANNELS": "telegram",
-                       "TELEGRAM_BOT_TOKEN": "1:A", "TELEGRAM_CHAT_ID": "-1"}
+        None,
+        environ={
+            "DTK_API_KEY": "dtk_x",
+            "NOTIFY_CHANNELS": "telegram",
+            "TELEGRAM_BOT_TOKEN": "1:A",
+            "TELEGRAM_CHAT_ID": "-1",
+        },
     )
 
     assert [channel.name for channel in build_channels(settings)] == ["telegram"]

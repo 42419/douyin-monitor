@@ -56,13 +56,23 @@ class SettingSpec:
 SETTINGS: Final[tuple[SettingSpec, ...]] = (
     # ---------------------------------------------------------------- 上游
     SettingSpec("DTK_BASE_URL", "http://127.0.0.1:8000", "str", "DTK v5 的地址"),
-    SettingSpec("DTK_API_KEY", "", "str", "DTK API Key，形态 dtk_<12hex>_<32b64>（必填）"),
+    SettingSpec(
+        "DTK_API_KEY", "", "str", "DTK API Key，形态 dtk_<12hex>_<32b64>（必填）"
+    ),
     SettingSpec("DTK_WAIT", 25, "int", "?wait= 秒数；0 表示走纯异步（202 + 轮询）"),
     SettingSpec("DTK_TIMEOUT", 35, "int", "HTTP 超时秒数，必须大于 DTK_WAIT"),
-    SettingSpec("DTK_REFRESH", True, "bool", "必须为 true，否则命中 DTK 列表缓存（300s）"),
-    SettingSpec("INCLUDE_RAW", "auto", "str", "置顶标志获取策略：auto / always / never"),
-    SettingSpec("RAW_REFRESH_ROUNDS", 20, "int", "auto 模式下最多隔多少轮带一次 include_raw"),
-    SettingSpec("DTK_USER_AGENT", "dywatch/0.1", "str", "请求 UA，便于在 DTK 侧日志辨认"),
+    SettingSpec(
+        "DTK_REFRESH", True, "bool", "必须为 true，否则命中 DTK 列表缓存（300s）"
+    ),
+    SettingSpec(
+        "INCLUDE_RAW", "auto", "str", "置顶标志获取策略：auto / always / never"
+    ),
+    SettingSpec(
+        "RAW_REFRESH_ROUNDS", 20, "int", "auto 模式下最多隔多少轮带一次 include_raw"
+    ),
+    SettingSpec(
+        "DTK_USER_AGENT", "dywatch/0.1", "str", "请求 UA，便于在 DTK 侧日志辨认"
+    ),
     # ---------------------------------------------------------------- 节奏
     SettingSpec("REQUEST_INTERVAL_MIN", 3.0, "float", "全局相邻请求最小间隔（秒）"),
     SettingSpec("REQUEST_INTERVAL_MAX", 8.0, "float", "全局相邻请求最大间隔（秒）"),
@@ -85,7 +95,9 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
     SettingSpec("BACKOFF_AFTER", 2, "int", "连续失败几次后全局闸门开始翻倍"),
     SettingSpec("BACKOFF_MAX_SECONDS", 600, "int", "全局闸门退避上限（秒）"),
     SettingSpec(
-        "RETRY_AFTER_MAX_SECONDS", 3600, "int",
+        "RETRY_AFTER_MAX_SECONDS",
+        3600,
+        "int",
         "上游 `retry_after` 的封顶（秒，默认 1 小时）。它是**上游明说要等多久**，"
         "与 `BACKOFF_MAX_SECONDS`（我们自己退避的封顶，默认 600）不是一回事：把上游的话"
         "截到 600 秒，会让它在人家要求等一小时的时候每 10 分钟放出一轮请求（默认 5 并发），"
@@ -95,23 +107,31 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
     # ---------------------------------------------------------------- 归档
     SettingSpec("ARCHIVE_ENABLED", True, "bool", "是否用 DTK 归档做删除交叉确认"),
     SettingSpec(
-        "ARCHIVE_DOWNLOAD_ENABLED", False, "bool",
+        "ARCHIVE_DOWNLOAD_ENABLED",
+        False,
+        "bool",
         "检测到新作品时是否让 DTK 顺手下载媒体存档（需要 API Key 带 media:write，默认关闭）",
     ),
     SettingSpec(
-        "ARCHIVE_DOWNLOAD_PIN", False, "bool",
+        "ARCHIVE_DOWNLOAD_PIN",
+        False,
+        "bool",
         "存下来的媒体是否永久保留。false（默认）：DTK 媒体目录默认上限 2G，装满会自动删最旧的，"
         "等于只留最近一批；true：每份都锁定、不自动删，但占满 2G 之后新下载会一直失败，"
         "需要人工去 DTK 删一些腾地方",
     ),
     SettingSpec(
-        "ARCHIVE_DOWNLOAD_MAX_PER_ROUND", 10, "int",
+        "ARCHIVE_DOWNLOAD_MAX_PER_ROUND",
+        10,
+        "int",
         "每轮最多触发几条归档下载。请求会过全局节奏器（3~8 秒一次），所以这个数直接"
         "决定旁路最多把一轮拖长多久；超出预算的条目排队等下一轮，不会丢",
     ),
     # ---------------------------------------------------------------- 隐藏作品核验
     SettingSpec(
-        "HIDDEN_POST_CHECK_ENABLED", False, "bool",
+        "HIDDEN_POST_CHECK_ENABLED",
+        False,
+        "bool",
         "游客身份有时看不到作者主页最新发布的作品（抖音的访客限制，与本工具无关）。"
         "开启后，在账号初始化 / 本轮有新作品 / 作品消失确认 / 长期无更新兜底触发的"
         "那一刻，顺手核对一次作者的发布总数：数字对不上时，才用一次登录态身份把这一轮"
@@ -120,19 +140,25 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
         "分钟的低频保底（见那一项为什么是必需的）。",
     ),
     SettingSpec(
-        "PINNED_IDENTITY_ID", "", "str",
+        "PINNED_IDENTITY_ID",
+        "",
+        "str",
         "登录态身份的 UUID（DTK 控制台 Identities 页面可查），核验时把请求定向到这一个"
         "身份。HIDDEN_POST_CHECK_ENABLED=true 时必填。需要 Key 带 identity:manage scope，"
         "且 Key 的 owner 账号至少 operator——比监控本身用的 scope 高一截，建议用",
     ),
     SettingSpec(
-        "PIN_DTK_API_KEY", "", "str",
+        "PIN_DTK_API_KEY",
+        "",
+        "str",
         "定向核验专用的 Key（留空则复用 DTK_API_KEY）。identity:manage 能解密查看"
         "任意身份的 cookie 明文，权限比监控本身重得多，建议单独开一把 Key、只给这一处用，"
         "泄露的影响面才不会牵连到主监控用的只读凭据",
     ),
     SettingSpec(
-        "HIDDEN_CHECK_INTERVAL_MINUTES", 30, "int",
+        "HIDDEN_CHECK_INTERVAL_MINUTES",
+        30,
+        "int",
         "低频保底：基准值超过这么久没核对过，就无条件核对一次发布总数（分钟，0 = 关闭）。"
         "这条不是优化而是必需——两类变化在游客视角完全不留痕迹：新作品从发布起就不可见、"
         "已知对访客不可见的作品被删；没有它只能等 STALE_FALLBACK_DAYS 那次兜底。"
@@ -140,31 +166,41 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
     ),
     # ---------------------------------------------------------------- 可观测与自身
     SettingSpec(
-        "METRICS_ENABLED", True, "bool",
+        "METRICS_ENABLED",
+        True,
+        "bool",
         "记录作品互动量（点赞/评论/收藏/分享）的时间序列。这些数字**本来就随每轮抓取返回**"
         "（`user/posts` 的每一条里都有），所以采它们不额外消耗任何身份，代价只有磁盘：按小时"
-        "聚合，每账号每小时最多 FETCH_COUNT 行。面板的互动量曲线与增长对比由它供数。"
+        "聚合，每账号每小时最多 FETCH_COUNT 行。面板的互动量曲线与增长对比由它供数。",
     ),
     SettingSpec(
-        "METRICS_KEEP_DAYS", 14, "int",
+        "METRICS_KEEP_DAYS",
+        14,
+        "int",
         "互动量时间序列的保留天数（必须 ≥ 1）。它只影响历史曲线能回看多久，与判定无关。"
-        "注意删行不会让 SQLite 文件变小，真正回收磁盘要 VACUUM。"
+        "注意删行不会让 SQLite 文件变小，真正回收磁盘要 VACUUM。",
     ),
     SettingSpec(
-        "UPSTREAM_STATUS_INTERVAL_SECONDS", 300, "int",
+        "UPSTREAM_STATUS_INTERVAL_SECONDS",
+        300,
+        "int",
         "每隔多少秒读一次上游的 `system/status`（版本 / 组件健康 / 身份池普查 / 存储用量），"
         "写进 status.json 供面板展示（秒，0 = 关闭）。这个接口不需要 scope、不消耗身份；"
-        "主循环取一次、面板只读快照，所以打开面板仍然不发任何上游请求。"
+        "主循环取一次、面板只读快照，所以打开面板仍然不发任何上游请求。",
     ),
     SettingSpec(
-        "SELF_CHECK_FREE_MB", 200, "int",
+        "SELF_CHECK_FREE_MB",
+        200,
+        "int",
         "自身检查：数据目录所在文件系统的剩余空间低于这么多 MB 时产生一次 SELF_DEGRADED"
-        "（0 = 关闭这一项检查）。磁盘满会让状态库写不进去，而那时通知恰恰是最需要的。"
+        "（0 = 关闭这一项检查）。磁盘满会让状态库写不进去，而那时通知恰恰是最需要的。",
     ),
     # ---------------------------------------------------------------- 通知
     SettingSpec("NOTIFY_CHANNELS", ["dingtalk"], "csv", "启用的渠道，逗号分隔"),
     SettingSpec(
-        "NOTIFY_TARGETS", TargetSet(), "targets",
+        "NOTIFY_TARGETS",
+        TargetSet(),
+        "targets",
         "通知目标（可多实例）：`类型:字段=值,字段=值;类型:…`，见 .env.example / 配置参考",
     ),
     SettingSpec("SILENT_MODE", False, "bool", "跳过全部推送，监控与面板照常"),
@@ -187,7 +223,12 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
     SettingSpec("LOG_LEVEL", "INFO", "str", "终端日志级别（不影响日志文件）"),
     SettingSpec("MONITOR_HOME", "", "str", "工作目录；留空则用当前目录"),
     SettingSpec("EVENTS_KEEP_DAYS", 30, "int", "events 审计保留天数"),
-    SettingSpec("ROUNDS_KEEP_DAYS", 5, "int", "rounds 汇总保留天数（每轮一行；本表没有读取方，纯排障用）"),
+    SettingSpec(
+        "ROUNDS_KEEP_DAYS",
+        5,
+        "int",
+        "rounds 汇总保留天数（每轮一行；本表没有读取方，纯排障用）",
+    ),
 )
 
 SPECS: Final[Mapping[str, SettingSpec]] = {spec.key: spec for spec in SETTINGS}
@@ -215,8 +256,12 @@ MASKED_KEYS: Final[frozenset[str]] = frozenset(
 
 #: 布尔配置认哪些写法。**不收别的一律报错**：多认一种拼写，就多一次"以为生效了"的机会；
 #: 而这些已经是各服务配置里的常见写法，够用了。
-BOOL_TRUE: Final[frozenset[str]] = frozenset({"1", "true", "yes", "y", "on", "enable", "enabled"})
-BOOL_FALSE: Final[frozenset[str]] = frozenset({"0", "false", "no", "n", "off", "disable", "disabled"})
+BOOL_TRUE: Final[frozenset[str]] = frozenset(
+    {"1", "true", "yes", "y", "on", "enable", "enabled"}
+)
+BOOL_FALSE: Final[frozenset[str]] = frozenset(
+    {"0", "false", "no", "n", "off", "disable", "disabled"}
+)
 
 
 def _to_bool(raw: str) -> bool:
@@ -349,7 +394,9 @@ class Settings:
         # **只在用户显式配置了它时才报错**：没配置时它跟着 `BACKOFF_MAX_SECONDS` 走
         # （见 `retry_after_max`），否则升级前合法的 `.env` 会在这里起不来。
         if v["RETRY_AFTER_MAX_SECONDS"] < 1:
-            errors.append("RETRY_AFTER_MAX_SECONDS 必须大于 0（它是上游 retry_after 的封顶秒数）")
+            errors.append(
+                "RETRY_AFTER_MAX_SECONDS 必须大于 0（它是上游 retry_after 的封顶秒数）"
+            )
         elif (
             self._is_explicit("RETRY_AFTER_MAX_SECONDS")
             and v["RETRY_AFTER_MAX_SECONDS"] < v["BACKOFF_MAX_SECONDS"]
@@ -373,7 +420,11 @@ class Settings:
         if v["MAX_CONCURRENT"] < 1:
             errors.append("MAX_CONCURRENT 至少为 1")
 
-        for key in ("DELETE_CONFIRM_ROUNDS", "DELETE_CONFIRM_ROUNDS_TOP", "DELETE_CONFIRM_ROUNDS_ALL"):
+        for key in (
+            "DELETE_CONFIRM_ROUNDS",
+            "DELETE_CONFIRM_ROUNDS_TOP",
+            "DELETE_CONFIRM_ROUNDS_ALL",
+        ):
             if v[key] < 2:
                 errors.append(f"{key} 不得低于 2（1 轮会把接口抖动直接当成删除）")
         if v["DELETE_CONFIRM_ROUNDS_TOP"] < v["DELETE_CONFIRM_ROUNDS"]:
@@ -411,15 +462,25 @@ class Settings:
                 )
             if not v["SILENT_MODE"]:
                 if not v["NOTIFY_CHANNELS"]:
-                    errors.append("NOTIFY_CHANNELS 为空且未开启 SILENT_MODE，将没有任何推送渠道")
+                    errors.append(
+                        "NOTIFY_CHANNELS 为空且未开启 SILENT_MODE，将没有任何推送渠道"
+                    )
                 for channel in v["NOTIFY_CHANNELS"]:
-                    missing = [k for k in CHANNEL_REQUIRED.get(channel, ()) if not v.get(k)]
+                    missing = [
+                        k for k in CHANNEL_REQUIRED.get(channel, ()) if not v.get(k)
+                    ]
                     if missing:
-                        errors.append(f"渠道 {channel} 缺少必填项：{', '.join(missing)}")
+                        errors.append(
+                            f"渠道 {channel} 缺少必填项：{', '.join(missing)}"
+                        )
 
-        if v["BARK_SERVER"] and not v["BARK_SERVER"].startswith(("http://", "https://")):
+        if v["BARK_SERVER"] and not v["BARK_SERVER"].startswith(
+            ("http://", "https://")
+        ):
             errors.append("BARK_SERVER 必须以 http:// 或 https:// 开头")
-        if v["WEBHOOK_URL"] and not v["WEBHOOK_URL"].startswith(("http://", "https://")):
+        if v["WEBHOOK_URL"] and not v["WEBHOOK_URL"].startswith(
+            ("http://", "https://")
+        ):
             errors.append("WEBHOOK_URL 必须以 http:// 或 https:// 开头")
 
         if v["HIDDEN_POST_CHECK_ENABLED"] and not v["PINNED_IDENTITY_ID"]:
@@ -480,7 +541,10 @@ class Settings:
                 f"（{v['STALE_FALLBACK_DAYS']} 天）那次兜底时被顺带发现，甚至更久"
             )
         targets = v["NOTIFY_TARGETS"]
-        if targets.configured and self.sources.get("NOTIFY_CHANNELS") in ("env", ".env"):
+        if targets.configured and self.sources.get("NOTIFY_CHANNELS") in (
+            "env",
+            ".env",
+        ):
             out.append(
                 "同时配了 NOTIFY_TARGETS 与 NOTIFY_CHANNELS：**新写法生效**，`NOTIFY_CHANNELS` 与 "
                 "DINGTALK_TOKEN 这类单值凭据会被忽略（想少一份困惑就把旧的那几行删掉）"
@@ -518,7 +582,9 @@ class Settings:
                 extra = [f"    - {target.masked()}" for target in value.targets]
             elif isinstance(value, list):
                 shown = ",".join(str(x) for x in value) or "(空)"
-            elif spec.key == "RETRY_AFTER_MAX_SECONDS" and self.retry_after_max != value:
+            elif (
+                spec.key == "RETRY_AFTER_MAX_SECONDS" and self.retry_after_max != value
+            ):
                 # 没显式配置、且 BACKOFF_MAX_SECONDS 比默认值还大：实际生效的是后者
                 shown = f"{self.retry_after_max} (跟随退避上限)"
             else:
@@ -552,7 +618,9 @@ def load_settings(
             from dotenv import dotenv_values
 
             file_values = {
-                str(k): str(v) for k, v in dotenv_values(env_file).items() if v is not None
+                str(k): str(v)
+                for k, v in dotenv_values(env_file).items()
+                if v is not None
             }
         except ImportError:  # pragma: no cover - dotenv is a declared dependency
             file_values = _parse_env_file(Path(env_file))
@@ -655,7 +723,9 @@ def _parse_env_file(path: Path) -> dict[str, str]:
     return out
 
 
-def resolve_env_file(explicit: str | None = None, environ: Mapping[str, str] | None = None) -> Path:
+def resolve_env_file(
+    explicit: str | None = None, environ: Mapping[str, str] | None = None
+) -> Path:
     """Which `.env` to read: explicit flag, then `$MONITOR_HOME/.env`, then `./.env`."""
     if explicit:
         return Path(explicit)

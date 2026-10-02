@@ -5,9 +5,12 @@
   "scripts": {
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "format:docs": "prettier --write \"**/*.md\" docs/.vitepress/config.mts package.json",
+    "check:docs": "prettier --check \"**/*.md\" docs/.vitepress/config.mts package.json"
   },
   "devDependencies": {
+    "prettier": "^3.9.9",
     "vitepress": "^1.6.4"
   }
 }

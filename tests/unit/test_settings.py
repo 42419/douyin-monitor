@@ -42,7 +42,10 @@ def test_defaults_validate_once_a_key_and_channel_are_given():
     assert settings.validate() == []
     # 设计里锁定的默认值
     assert settings["FETCH_COUNT"] == 15
-    assert (settings["REQUEST_INTERVAL_MIN"], settings["REQUEST_INTERVAL_MAX"]) == (3.0, 8.0)
+    assert (settings["REQUEST_INTERVAL_MIN"], settings["REQUEST_INTERVAL_MAX"]) == (
+        3.0,
+        8.0,
+    )
     assert (settings["POLL_INTERVAL_MIN"], settings["POLL_INTERVAL_MAX"]) == (15, 40)
     assert settings["MAX_CONCURRENT"] == 5
     assert settings["DELETE_CONFIRM_ROUNDS_TOP"] == 3
@@ -66,7 +69,9 @@ def test_defaults_validate_once_a_key_and_channel_are_given():
         ({"HIDDEN_CHECK_INTERVAL_MINUTES": "-1"}, "不能为负"),
     ],
 )
-def test_cross_field_validation_catches_the_mistakes_people_actually_make(overrides, fragment):
+def test_cross_field_validation_catches_the_mistakes_people_actually_make(
+    overrides, fragment
+):
     env = {
         "DTK_API_KEY": "dtk_x",
         "DINGTALK_TOKEN": "t",
@@ -105,7 +110,7 @@ def test_the_default_retry_after_cap_is_one_hour():
 
 
 def test_an_explicit_retry_after_cap_below_the_backoff_cap_is_still_refused():
-    """"显式写了一个更小的值"才是配错：那会让闸门在上游要求等得更久时提前放开。"""
+    """ "显式写了一个更小的值"才是配错：那会让闸门在上游要求等得更久时提前放开。"""
     env = {**VALID_ENV, "RETRY_AFTER_MAX_SECONDS": "300"}
 
     errors = load_settings(None, environ=env).validate()
@@ -132,11 +137,17 @@ def test_an_unreadable_retry_after_cap_counts_as_not_configured():
 
 def test_config_check_shows_the_value_that_is_actually_in_effect():
     """`config-check` 不能写 3600 而闸门实际用的是 7200。"""
-    following = load_settings(None, environ={**VALID_ENV, "BACKOFF_MAX_SECONDS": "7200"})
+    following = load_settings(
+        None, environ={**VALID_ENV, "BACKOFF_MAX_SECONDS": "7200"}
+    )
     plain = load_settings(None, environ=VALID_ENV)
 
-    line_following = next(l for l in following.describe() if l.startswith("RETRY_AFTER_MAX_SECONDS"))
-    line_plain = next(l for l in plain.describe() if l.startswith("RETRY_AFTER_MAX_SECONDS"))
+    line_following = next(
+        l for l in following.describe() if l.startswith("RETRY_AFTER_MAX_SECONDS")
+    )
+    line_plain = next(
+        l for l in plain.describe() if l.startswith("RETRY_AFTER_MAX_SECONDS")
+    )
 
     assert "7200" in line_following and "跟随退避上限" in line_following
     assert "3600" in line_plain and "跟随" not in line_plain
@@ -165,30 +176,45 @@ def test_disabling_the_hidden_check_fallback_says_what_it_costs():
     """
     settings = load_settings(
         None,
-        environ={"DTK_API_KEY": "dtk_x", "DINGTALK_TOKEN": "t", "DINGTALK_SECRET": "s",
-                 "HIDDEN_POST_CHECK_ENABLED": "true", "PINNED_IDENTITY_ID": "uuid-1",
-                 "HIDDEN_CHECK_INTERVAL_MINUTES": "0"},
+        environ={
+            "DTK_API_KEY": "dtk_x",
+            "DINGTALK_TOKEN": "t",
+            "DINGTALK_SECRET": "s",
+            "HIDDEN_POST_CHECK_ENABLED": "true",
+            "PINNED_IDENTITY_ID": "uuid-1",
+            "HIDDEN_CHECK_INTERVAL_MINUTES": "0",
+        },
     )
     assert settings.validate() == [], "0 是合法值，不该当成错误"
-    assert any("低频保底" in note and "不留痕迹" in note for note in settings.warnings()), (
-        settings.warnings()
-    )
+    assert any(
+        "低频保底" in note and "不留痕迹" in note for note in settings.warnings()
+    ), settings.warnings()
 
 
 def test_negative_fallback_interval_is_refused_rather_than_read_as_off():
     """负数会被 `interval > 0` 的守卫读成"关掉保底"——静默失效，所以必须是硬错误。"""
     settings = load_settings(
         None,
-        environ={"DTK_API_KEY": "dtk_x", "DINGTALK_TOKEN": "t", "DINGTALK_SECRET": "s",
-                 "HIDDEN_CHECK_INTERVAL_MINUTES": "-5"},
+        environ={
+            "DTK_API_KEY": "dtk_x",
+            "DINGTALK_TOKEN": "t",
+            "DINGTALK_SECRET": "s",
+            "HIDDEN_CHECK_INTERVAL_MINUTES": "-5",
+        },
     )
     assert settings["HIDDEN_CHECK_INTERVAL_MINUTES"] == -5, "值如实保留，由校验负责拒绝"
     assert any("不能为负" in error for error in settings.validate())
 
     # 功能关着时不唠叨这两条
-    quiet = load_settings(None, environ={"DTK_API_KEY": "dtk_x", "DINGTALK_TOKEN": "t",
-                                         "DINGTALK_SECRET": "s",
-                                         "HIDDEN_CHECK_INTERVAL_MINUTES": "0"})
+    quiet = load_settings(
+        None,
+        environ={
+            "DTK_API_KEY": "dtk_x",
+            "DINGTALK_TOKEN": "t",
+            "DINGTALK_SECRET": "s",
+            "HIDDEN_CHECK_INTERVAL_MINUTES": "0",
+        },
+    )
     assert not any("低频保底" in note for note in quiet.warnings())
 
 
@@ -240,7 +266,7 @@ def test_a_key_that_the_env_parser_dropped_is_a_startup_error(tmp_path):
         "DINGTALK_TOKEN=legacy-tok\n"
         "DINGTALK_SECRET=SEClegacy\n"
         'NOTIFY_TARGETS="\n'
-        'webhook url="https://example.com/a,b"\n'   # 外层也是双引号 → dotenv 解析不了
+        'webhook url="https://example.com/a,b"\n'  # 外层也是双引号 → dotenv 解析不了
         '"\n',
         encoding="utf-8",
     )
@@ -250,11 +276,13 @@ def test_a_key_that_the_env_parser_dropped_is_a_startup_error(tmp_path):
 
     assert any("NOTIFY_TARGETS 没能被解析出来" in e for e in errors), errors
     assert any("另一种" in e for e in errors), "错误里要给出改法"
-    assert not settings["NOTIFY_TARGETS"].configured, "读不出来就是没配 —— 所以必须报错拦住"
+    assert not settings["NOTIFY_TARGETS"].configured, (
+        "读不出来就是没配 —— 所以必须报错拦住"
+    )
 
 
 def test_a_dropped_key_other_than_targets_is_also_reported(tmp_path):
-    """"写了却读不出来"这个检查对所有已注册的键都生效（例如引号写瘸的 WEB_PORT）。"""
+    """ "写了却读不出来"这个检查对所有已注册的键都生效（例如引号写瘸的 WEB_PORT）。"""
     env_file = tmp_path / ".env"
     env_file.write_text(
         'DTK_API_KEY=dtk_x\nWEB_PORT="8080\nFETCH_COUNT=20\n',
@@ -263,38 +291,52 @@ def test_a_dropped_key_other_than_targets_is_also_reported(tmp_path):
 
     settings = load_settings(env_file)
 
-    assert any("WEB_PORT 没能被解析出来" in e for e in settings.validate()), settings.validate()
-
-
+    assert any("WEB_PORT 没能被解析出来" in e for e in settings.validate()), (
+        settings.validate()
+    )
 
     """新写法的错要指到具体哪一条，而不是含糊地说"配置有问题"。"""
-    mixed = _targets_settings("dingtalk token=x\ntelegrm bot_token=y\ntelegram chat_id=1")
+    mixed = _targets_settings(
+        "dingtalk token=x\ntelegrm bot_token=y\ntelegram chat_id=1"
+    )
     errors = [e for e in mixed.validate() if "NOTIFY_TARGETS" in e]
     assert any("未知渠道类型" in e for e in errors)
     assert any("缺少必填字段" in e for e in errors)
-    assert not any("没有一个能用的目标" in e for e in errors), "第一条是好的，不该说没有渠道"
+    assert not any("没有一个能用的目标" in e for e in errors), (
+        "第一条是好的，不该说没有渠道"
+    )
 
-    broken = _targets_settings("telegrm bot_token=y\ntelegram chat_id=1\ndingtalk secret=SECx")
-    assert any("没有一个能用的目标" in e for e in broken.validate()), "全写错时要明说没有渠道"
+    broken = _targets_settings(
+        "telegrm bot_token=y\ntelegram chat_id=1\ndingtalk secret=SECx"
+    )
+    assert any("没有一个能用的目标" in e for e in broken.validate()), (
+        "全写错时要明说没有渠道"
+    )
 
 
 def test_targets_configured_replaces_the_legacy_channel_checks():
     """新写法生效时，`NOTIFY_CHANNELS` 那几项（含"为空"）都不该再报错。"""
-    settings = _targets_settings("telegram bot_token=1:x chat_id=-100", NOTIFY_CHANNELS="")
+    settings = _targets_settings(
+        "telegram bot_token=1:x chat_id=-100", NOTIFY_CHANNELS=""
+    )
 
     assert settings.validate() == []
 
 
 def test_legacy_checks_still_run_when_targets_are_not_configured():
-    settings = load_settings(None, environ={"DTK_API_KEY": "dtk_x", "NOTIFY_CHANNELS": "qq"})
+    settings = load_settings(
+        None, environ={"DTK_API_KEY": "dtk_x", "NOTIFY_CHANNELS": "qq"}
+    )
 
     assert any("未知渠道" in e for e in settings.validate())
 
 
 def test_both_writings_configured_warns_which_one_wins():
     settings = _targets_settings(
-        "wecom key=new", NOTIFY_CHANNELS="dingtalk",
-        DINGTALK_TOKEN="old", DINGTALK_SECRET="SECold",
+        "wecom key=new",
+        NOTIFY_CHANNELS="dingtalk",
+        DINGTALK_TOKEN="old",
+        DINGTALK_SECRET="SECold",
     )
 
     assert settings.validate() == []
@@ -313,7 +355,9 @@ def test_many_targets_warn_about_serial_sending():
 
 
 def test_config_check_masks_target_credentials_but_shows_the_rest():
-    settings = _targets_settings("telegram bot_token=super-secret chat_id=-100 name=手机")
+    settings = _targets_settings(
+        "telegram bot_token=super-secret chat_id=-100 name=手机"
+    )
 
     lines = settings.describe()
     line = next(l for l in lines if l.startswith("NOTIFY_TARGETS"))
@@ -333,19 +377,21 @@ def test_fallback_env_reader_handles_a_quoted_multiline_value(tmp_path):
 
     env_file = tmp_path / ".env"
     env_file.write_text(
-        'DTK_API_KEY=dtk_x\n'
+        "DTK_API_KEY=dtk_x\n"
         'NOTIFY_TARGETS="\n'
-        'dingtalk token=a secret=S\n'
-        'telegram bot_token=1:AA chat_id=-100\n'
+        "dingtalk token=a secret=S\n"
+        "telegram bot_token=1:AA chat_id=-100\n"
         '"\n'
-        'FETCH_COUNT=20\n',
+        "FETCH_COUNT=20\n",
         encoding="utf-8",
     )
 
     values = _parse_env_file(env_file)
     assert values["FETCH_COUNT"] == "20", "多行值后面的键还得读得到"
     targets = parse_targets(values["NOTIFY_TARGETS"])
-    assert [t.kind for t in targets.targets] == ["dingtalk", "telegram"], values["NOTIFY_TARGETS"]
+    assert [t.kind for t in targets.targets] == ["dingtalk", "telegram"], values[
+        "NOTIFY_TARGETS"
+    ]
     assert targets.targets[1].fields["chat_id"] == "-100"
 
 
@@ -371,7 +417,9 @@ def test_bad_values_fall_back_to_the_default_and_say_so(tmp_path):
     assert "非法" in settings.sources["FETCH_COUNT"]
 
 
-@pytest.mark.parametrize("raw", ["1", "true", "TRUE", " True ", "yes", "on", "enabled", "y"])
+@pytest.mark.parametrize(
+    "raw", ["1", "true", "TRUE", " True ", "yes", "on", "enabled", "y"]
+)
 def test_bool_accepts_common_truthy_spellings(raw):
     settings = load_settings(None, environ={"WEB_ENABLED": raw})
     assert settings["WEB_ENABLED"] is True
@@ -434,7 +482,8 @@ def test_empty_api_key_is_a_hard_validate_error_not_just_a_warning():
 
 def test_configured_api_key_does_not_repeat_the_missing_key_warning():
     settings = load_settings(
-        None, environ={"DTK_API_KEY": "dtk_38c817704d0f_A5CMPbL1a7TowGb9LAfXYNAvYK6bjIwn"}
+        None,
+        environ={"DTK_API_KEY": "dtk_38c817704d0f_A5CMPbL1a7TowGb9LAfXYNAvYK6bjIwn"},
     )
     assert not any("DTK_API_KEY" in note for note in settings.warnings())
 
@@ -449,7 +498,9 @@ def test_rate_warning_appears_when_the_pace_is_too_fast():
 def test_resolve_env_file_prefers_monitor_home(tmp_path, monkeypatch):
     monkeypatch.setenv("MONITOR_HOME", str(tmp_path))
     assert resolve_env_file(None) == tmp_path / ".env"
-    assert resolve_env_file("/custom/.env") == __import__("pathlib").Path("/custom/.env")
+    assert resolve_env_file("/custom/.env") == __import__("pathlib").Path(
+        "/custom/.env"
+    )
 
 
 def test_home_defaults_to_cwd_and_paths_hang_off_it(tmp_path, monkeypatch):
@@ -463,7 +514,14 @@ def test_home_defaults_to_cwd_and_paths_hang_off_it(tmp_path, monkeypatch):
 def test_channel_required_table_covers_every_selectable_channel():
     from dywatch.settings import SPECS
 
-    assert set(CHANNEL_REQUIRED) <= {"dingtalk", "wecom", "bark", "serverchan", "telegram", "webhook"}
+    assert set(CHANNEL_REQUIRED) <= {
+        "dingtalk",
+        "wecom",
+        "bark",
+        "serverchan",
+        "telegram",
+        "webhook",
+    }
     for keys in CHANNEL_REQUIRED.values():
         for key in keys:
             assert key in SPECS, f"{key} 不在 SETTINGS 表里"

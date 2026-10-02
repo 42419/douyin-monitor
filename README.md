@@ -163,25 +163,25 @@ sudo bash deploy/install.sh --yes                  # 必须重跑：.venv 里装
 
 ## 接下来看哪里
 
-| 想做的事                                       | 文档                                                              |
-| ---------------------------------------------- | ----------------------------------------------------------------- |
-| 这个工具是什么、和 DTK v5 怎么分工、边界在哪   | [这是什么](https://dywatch.yunov.top/guide/what-is-dywatch)       |
+| 想做的事                                       | 文档                                                                                                                   |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 这个工具是什么、和 DTK v5 怎么分工、边界在哪   | [这是什么](https://dywatch.yunov.top/guide/what-is-dywatch)                                                            |
 | **把 DTK v5 部署起来（上游官方文档）**         | [官方 Quick start](https://douyin.wtf/quickstart/) · [GitHub](https://github.com/Evil0ctal/Douyin_TikTok_Download_API) |
-| dywatch 只要哪两个 scope、身份池为什么不能空   | [前置：DTK v5 与 API Key](https://dywatch.yunov.top/guide/dtk-setup) |
-| 完整安装 / 卸载 / 首次配置                     | [安装 dywatch](https://dywatch.yunov.top/guide/quick-start)       |
-| 查某个命令怎么用                               | [命令行](https://dywatch.yunov.top/guide/commands)                |
-| 加账号、改昵称、粘主页链接                     | [监控列表 users.conf](https://dywatch.yunov.top/guide/users-conf) |
-| 看面板每个读数是什么意思                       | [只读面板](https://dywatch.yunov.top/guide/dashboard)             |
-| **查某个配置项的默认值与含义（全部 60 项）**   | [配置参考](https://dywatch.yunov.top/config/reference)            |
-| 估机器、网络与磁盘够不够                       | [容量估算](https://dywatch.yunov.top/config/capacity)             |
-| 搞清"新作品 / 作品消失 / 漏检 / ID 写错"怎么判 | [判定规则](https://dywatch.yunov.top/guide/detection-rules)       |
-| 16 种事件分别是什么意思、哪种会推送            | [事件类型](https://dywatch.yunov.top/reference/events)            |
-| 开归档下载（作品下架前留一份证据）             | [归档下载](https://dywatch.yunov.top/guide/archive-download)      |
-| 给 Key 授权、申请 `media:write`                | [权限 / API Key](https://dywatch.yunov.top/reference/permissions) |
-| 升级到新版本                                   | [升级](https://dywatch.yunov.top/operations/upgrade)              |
-| 日志在哪、怎么轮转、为什么不用系统 logrotate   | [日志与轮转](https://dywatch.yunov.top/operations/logging)        |
-| 报错了 / 收不到通知 / 面板打不开               | [排障](https://dywatch.yunov.top/operations/troubleshooting)      |
-| 看代码怎么组织的、依赖方向                     | [架构总览](https://dywatch.yunov.top/guide/architecture)          |
+| dywatch 只要哪两个 scope、身份池为什么不能空   | [前置：DTK v5 与 API Key](https://dywatch.yunov.top/guide/dtk-setup)                                                   |
+| 完整安装 / 卸载 / 首次配置                     | [安装 dywatch](https://dywatch.yunov.top/guide/quick-start)                                                            |
+| 查某个命令怎么用                               | [命令行](https://dywatch.yunov.top/guide/commands)                                                                     |
+| 加账号、改昵称、粘主页链接                     | [监控列表 users.conf](https://dywatch.yunov.top/guide/users-conf)                                                      |
+| 看面板每个读数是什么意思                       | [只读面板](https://dywatch.yunov.top/guide/dashboard)                                                                  |
+| **查某个配置项的默认值与含义（全部 60 项）**   | [配置参考](https://dywatch.yunov.top/config/reference)                                                                 |
+| 估机器、网络与磁盘够不够                       | [容量估算](https://dywatch.yunov.top/config/capacity)                                                                  |
+| 搞清"新作品 / 作品消失 / 漏检 / ID 写错"怎么判 | [判定规则](https://dywatch.yunov.top/guide/detection-rules)                                                            |
+| 16 种事件分别是什么意思、哪种会推送            | [事件类型](https://dywatch.yunov.top/reference/events)                                                                 |
+| 开归档下载（作品下架前留一份证据）             | [归档下载](https://dywatch.yunov.top/guide/archive-download)                                                           |
+| 给 Key 授权、申请 `media:write`                | [权限 / API Key](https://dywatch.yunov.top/reference/permissions)                                                      |
+| 升级到新版本                                   | [升级](https://dywatch.yunov.top/operations/upgrade)                                                                   |
+| 日志在哪、怎么轮转、为什么不用系统 logrotate   | [日志与轮转](https://dywatch.yunov.top/operations/logging)                                                             |
+| 报错了 / 收不到通知 / 面板打不开               | [排障](https://dywatch.yunov.top/operations/troubleshooting)                                                           |
+| 看代码怎么组织的、依赖方向                     | [架构总览](https://dywatch.yunov.top/guide/architecture)                                                               |
 
 设计取舍、每条规则的来历、以及"为什么不那样做"，都在 [`DESIGN.md`](./DESIGN.md) 里；
 真实接口契约（含实测数据）在它的第 2 章。

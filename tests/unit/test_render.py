@@ -55,7 +55,10 @@ def test_new_post_message_carries_the_useful_fields():
         assert fragment in message.markdown
     # 两处链接要写成可点的 markdown 链接（纯 URL 在钉钉里点不开）
     assert "[查看封面图](https://" in message.markdown
-    assert "[打开作品](https://www.douyin.com/video/7496063824002403638)" in message.markdown
+    assert (
+        "[打开作品](https://www.douyin.com/video/7496063824002403638)"
+        in message.markdown
+    )
     assert "1 天" in message.markdown or "3 天" in message.markdown
     assert "46.3万" in message.markdown  # 点赞数按中文习惯缩写
 
@@ -64,16 +67,28 @@ def test_play_count_is_never_rendered_for_douyin():
     """抖音的 `stats.play_count` 实测恒为 null —— 列出来只会每轮都是空的。"""
     content = make_content(play_count=None)
     message = render_event(
-        Event(EventKind.NEW_POST, sec_user_id="u1", nickname="A", payload={"content": content}),
+        Event(
+            EventKind.NEW_POST,
+            sec_user_id="u1",
+            nickname="A",
+            payload={"content": content},
+        ),
         now=NOW,
     )
     assert "播放" not in message.markdown
 
 
 def test_missing_stats_omit_the_row_instead_of_printing_zero():
-    content = make_content(digg_count=None, comment_count=None, share_count=None, collect_count=None)
+    content = make_content(
+        digg_count=None, comment_count=None, share_count=None, collect_count=None
+    )
     message = render_event(
-        Event(EventKind.NEW_POST, sec_user_id="u1", nickname="A", payload={"content": content}),
+        Event(
+            EventKind.NEW_POST,
+            sec_user_id="u1",
+            nickname="A",
+            payload={"content": content},
+        ),
         now=NOW,
     )
     assert "数据" not in message.markdown
@@ -85,7 +100,12 @@ def test_missing_stats_omit_the_row_instead_of_printing_zero():
 def test_live_kind_has_no_duration_row():
     content = make_content(kind=Kind.LIVE, duration_ms=None)
     message = render_event(
-        Event(EventKind.NEW_POST, sec_user_id="u1", nickname="A", payload={"content": content}),
+        Event(
+            EventKind.NEW_POST,
+            sec_user_id="u1",
+            nickname="A",
+            payload={"content": content},
+        ),
         now=NOW,
     )
     assert "直播回放" in message.markdown
@@ -95,7 +115,12 @@ def test_live_kind_has_no_duration_row():
 def test_album_kind_reports_the_image_count():
     content = make_content(kind=Kind.IMAGE_ALBUM, image_count=9, duration_ms=None)
     message = render_event(
-        Event(EventKind.NEW_POST, sec_user_id="u1", nickname="A", payload={"content": content}),
+        Event(
+            EventKind.NEW_POST,
+            sec_user_id="u1",
+            nickname="A",
+            payload={"content": content},
+        ),
         now=NOW,
     )
     assert "图文（9 张图）" in message.markdown
@@ -108,8 +133,14 @@ def test_all_gone_message_carries_the_verification_note():
         nickname="A",
         payload={
             "all_gone": True,
-            "removed": [{"content_id": "1", "title": "走了", "created_at": NOW.isoformat(),
-                         "is_top": False}],
+            "removed": [
+                {
+                    "content_id": "1",
+                    "title": "走了",
+                    "created_at": NOW.isoformat(),
+                    "is_top": False,
+                }
+            ],
         },
     )
     message = render_event(event)
@@ -135,7 +166,12 @@ def test_config_failure_message_says_it_is_not_a_network_problem():
         EventKind.ACCOUNT_FAILED,
         sec_user_id="u1",
         nickname="A",
-        payload={"fails": 5, "code": "FORBIDDEN_SCOPE", "message": "no scope", "config": True},
+        payload={
+            "fails": 5,
+            "code": "FORBIDDEN_SCOPE",
+            "message": "no scope",
+            "config": True,
+        },
     )
     message = render_event(event)
     assert "配置问题" in message.markdown
@@ -157,11 +193,22 @@ def test_plain_text_variant_drops_markdown_noise():
 
 def test_webhook_payload_shape_is_stable():
     message = render_event(
-        Event(EventKind.UPSTREAM_DEGRADED, sec_user_id="", payload={"code": "RATE_LIMITED"}),
+        Event(
+            EventKind.UPSTREAM_DEGRADED,
+            sec_user_id="",
+            payload={"code": "RATE_LIMITED"},
+        ),
     )
     payload = message.as_dict()
     assert set(payload) == {
-        "source", "event", "severity", "subject", "text", "markdown", "sec_user_id", "content_id"
+        "source",
+        "event",
+        "severity",
+        "subject",
+        "text",
+        "markdown",
+        "sec_user_id",
+        "content_id",
     }
     assert payload["source"] == "dywatch"
     assert payload["severity"] == "error"
@@ -197,6 +244,8 @@ def test_newest_post_at_takes_the_latest_and_ignores_missing_dates():
     assert newest_post_at(posts) == NOW - timedelta(days=1)
     assert newest_post_at((PostState(content_id="c"),)) is None
     assert newest_post_at(()) is None
+
+
 def test_one_line_strips_control_characters_and_truncates():
     """昵称/标题来自上游，进日志这类"一行一条"的出口前必须压平。
 
@@ -214,8 +263,15 @@ def test_revived_and_title_changed_render_with_context():
     """这两个事件现在会推送，因此必须有像样的文案（种类 + 链接来自 diff 带上的 payload）。"""
     revived = render_event(
         Event(
-            EventKind.REVIVED, sec_user_id="u1", nickname="阿直", content_id="p1",
-            payload={"title": "老作品", "kind": "video", "web_url": "https://www.douyin.com/video/1"},
+            EventKind.REVIVED,
+            sec_user_id="u1",
+            nickname="阿直",
+            content_id="p1",
+            payload={
+                "title": "老作品",
+                "kind": "video",
+                "web_url": "https://www.douyin.com/video/1",
+            },
         )
     )
     assert "作品回归" in revived.subject and "阿直" in revived.subject
@@ -224,8 +280,16 @@ def test_revived_and_title_changed_render_with_context():
 
     changed = render_event(
         Event(
-            EventKind.TITLE_CHANGED, sec_user_id="u1", nickname="阿直", content_id="p1",
-            payload={"old": "旧标题", "new": "新标题", "kind": "image_album", "web_url": ""},
+            EventKind.TITLE_CHANGED,
+            sec_user_id="u1",
+            nickname="阿直",
+            content_id="p1",
+            payload={
+                "old": "旧标题",
+                "new": "新标题",
+                "kind": "image_album",
+                "web_url": "",
+            },
         )
     )
     assert "标题变更" in changed.subject
@@ -238,23 +302,44 @@ def test_revived_and_title_changed_render_with_context():
 def test_revived_without_context_still_renders():
     """payload 缺字段（老数据、上游没给）时也不能炸，只是少几行。"""
     message = render_event(
-        Event(EventKind.REVIVED, sec_user_id="u1", nickname="阿直", content_id="p1", payload={})
+        Event(
+            EventKind.REVIVED,
+            sec_user_id="u1",
+            nickname="阿直",
+            content_id="p1",
+            payload={},
+        )
     )
     assert "作品回归" in message.subject
     assert "(无标题)" in message.markdown
+
+
 def test_removed_payload_of_the_wrong_shape_still_renders():
     """`removed` 不是列表或夹着非字典条目时也不能抛——渲染路径抛异常等于通知发不出去。"""
-    for payload in ({"removed": None}, {"removed": "不是列表"}, {"removed": [None, 1, "x"]},
-                    {"removed": [{"title": "正常一条"}]}):
+    for payload in (
+        {"removed": None},
+        {"removed": "不是列表"},
+        {"removed": [None, 1, "x"]},
+        {"removed": [{"title": "正常一条"}]},
+    ):
         for kind in (EventKind.POST_REMOVED, EventKind.ALL_GONE):
             message = render_event(
-                Event(kind, sec_user_id="u1", nickname="阿直", content_id="1", payload=payload)
+                Event(
+                    kind,
+                    sec_user_id="u1",
+                    nickname="阿直",
+                    content_id="1",
+                    payload=payload,
+                )
             )
             assert message.subject and message.markdown
     # 正常条目照旧显示，畸形条目被跳过（计数也不含它们）
     message = render_event(
         Event(
-            EventKind.POST_REMOVED, sec_user_id="u1", nickname="阿直", content_id="1",
+            EventKind.POST_REMOVED,
+            sec_user_id="u1",
+            nickname="阿直",
+            content_id="1",
             payload={"removed": [None, {"title": "正常一条"}]},
         )
     )

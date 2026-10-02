@@ -203,7 +203,9 @@ def fmt_stats(content: Content) -> str | None:
         ("收藏", content.collect_count),
         ("分享", content.share_count),
     )
-    parts = [f"{label} {fmt_count(value)}" for label, value in pairs if value is not None]
+    parts = [
+        f"{label} {fmt_count(value)}" for label, value in pairs if value is not None
+    ]
     return STATS_SEP.join(parts) if parts else None
 
 

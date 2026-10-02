@@ -404,5 +404,6 @@ class DiffConfig:
             stale_fallback_days=int(settings["STALE_FALLBACK_DAYS"]),
             include_raw=str(settings["INCLUDE_RAW"]),
             raw_refresh_rounds=int(settings["RAW_REFRESH_ROUNDS"]),
-            hidden_check_interval_seconds=int(settings["HIDDEN_CHECK_INTERVAL_MINUTES"]) * 60,
+            hidden_check_interval_seconds=int(settings["HIDDEN_CHECK_INTERVAL_MINUTES"])
+            * 60,
         )
