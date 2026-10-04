@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from ..messages import event_label, fmt_time, one_line
 from ..models import EventKind, NOTIFY_KINDS

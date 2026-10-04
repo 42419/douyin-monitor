@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import signal
 import sys
 from datetime import datetime, timezone
