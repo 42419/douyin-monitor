@@ -25,7 +25,7 @@ T_ACCOUNT_FAILED = "【监控异常】{nickname} 连续失败 {fails} 次"
 T_ACCOUNT_RECOVERED = "【已恢复】{nickname} 的监控恢复正常"
 T_STALE = "【长期无更新】{nickname} 已 {days} 天没有新作品"
 T_UPSTREAM = "【上游异常】DTK 实例需要处理"
-T_SELF = "【自身降级】dywatch 已暂停推送"
+T_SELF = "【自身降级】dywatch 运行环境出了问题"
 T_PROBE = "【测试】dywatch 通知渠道自检"
 
 KIND_VIDEO = "视频"
@@ -93,6 +93,17 @@ NOTE_GAP = (
 )
 NOTE_CONFIG = "这是配置问题而不是网络问题：{code} —— 修好之前每个账号都会一直失败。"
 NOTE_GATE = "上游整体不可用，本轮已整体跳过，这与某个账号无关。"
+NOTE_SELF = "dywatch 仍在运行（这条通知就是它发的），但状态库一旦写不进去，作品变化就无法记录。请尽快处理。"
+
+#: `self_degraded` 的原因代码 → 人话。代码是程序自己产生的（`loop._self_check_reasons`），
+#: 不是外部数据；认不得的代码原样显示。**不要写"已暂停推送"**：这几种情况下推送并没有停，
+#: 那句话是这个事件类型在还没有任何产生点时预留的，真用起来就和事实对不上了。
+SELF_REASONS: dict[str, str] = {
+    "disk_low": "状态库所在磁盘空间不足",
+    "data_dir_read_only": "数据目录不可写",
+    "state_store_write_failed": "状态库写入失败",
+}
+SELF_DETAIL_DISK = "剩余 {free_mb} MB，低于阈值 {limit_mb} MB（SELF_CHECK_FREE_MB）"
 
 #: 事件载荷形状读不出来时如实说：不能按"0 条"渲染，那会推出一条"什么都没发生"的假信息，
 #: 而这条通知本身是 `post_removed`，看的人会据此以为作品还在。

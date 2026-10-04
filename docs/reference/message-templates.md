@@ -195,13 +195,20 @@ Telegram 用 `ok` 是有依据的：官方文档只规定"请求不成功时 `ok
 
 ### `self_degraded` —— dywatch 自己的状态库/磁盘出问题
 
-**通知栏标题**：【自身降级】dywatch 已暂停推送
+**通知栏标题**：【自身降级】dywatch 运行环境出了问题
 
 ```markdown
-### 【自身降级】dywatch 已暂停推送
+### 【自身降级】dywatch 运行环境出了问题
 
-- **原因**：状态库所在磁盘剩余 3%
+- **原因**：状态库所在磁盘空间不足
+- **详情**：剩余 120 MB，低于阈值 200 MB（SELF_CHECK_FREE_MB）
+
+> dywatch 仍在运行（这条通知就是它发的），但状态库一旦写不进去，作品变化就无法记录。请尽快处理。
 ```
+
+原因有三种：`disk_low`（磁盘空间低于 `SELF_CHECK_FREE_MB`，上面的样例）、`data_dir_read_only`
+（数据目录不可写）、`state_store_write_failed`（状态库写入失败）。这条通知本身就是 dywatch 发的，
+所以**推送并没有停**。
 
 ## 只落库、不推送的事件（4 种）
 

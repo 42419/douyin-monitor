@@ -430,8 +430,27 @@ def _build(
 
     if kind is EventKind.SELF_DEGRADED:
         subject = heading = msg.T_SELF
-        rows = [_field(msg.ROW_REASON, _val(payload.get("reason") or "未知"))]
-        return subject, _card(heading, rows)
+        reason = str(payload.get("reason") or "")
+        rows = [
+            _field(
+                msg.ROW_REASON, msg.SELF_REASONS.get(reason) or _val(reason or "未知")
+            )
+        ]
+        free, limit = payload.get("free_mb"), payload.get("free_limit_mb")
+        if (
+            reason == "disk_low"
+            and isinstance(free, int)
+            and isinstance(limit, int)
+            and not isinstance(free, bool)
+            and not isinstance(limit, bool)
+        ):
+            rows.append(
+                _field(
+                    msg.ROW_DETAIL,
+                    msg.SELF_DETAIL_DISK.format(free_mb=free, limit_mb=limit),
+                )
+            )
+        return subject, _card(heading, rows, msg.NOTE_SELF)
 
     # 其余静默事件（不推送）也留一个可读形态，便于写日志；载荷是外部数据，同样要压成
     # 一行并转义，否则标题里的反引号/竖线会直接改写这条日志的 markdown

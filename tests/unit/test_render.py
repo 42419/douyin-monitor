@@ -345,3 +345,61 @@ def test_removed_payload_of_the_wrong_shape_still_renders():
     )
     assert "有 1 条作品已确认消失" in message.subject
     assert "正常一条" in message.markdown
+
+
+def self_degraded(**payload):
+    return render_event(
+        Event(EventKind.SELF_DEGRADED, sec_user_id="", payload=payload), now=NOW
+    )
+
+
+def test_self_degraded_does_not_claim_that_pushing_stopped():
+    """这条通知是 dywatch 自己发出来的——"已暂停推送"这句话本身就是自相矛盾的。
+
+    那句文案是这个事件类型在还没有任何产生点时预留的；磁盘不足 / 目录不可写 / 状态库
+    写不进去这几种情况下推送都没有停。
+    """
+    for reason in ("disk_low", "data_dir_read_only", "state_store_write_failed"):
+        message = self_degraded(reason=reason)
+        assert "已暂停推送" not in message.subject
+        assert "已暂停推送" not in message.markdown
+
+
+def test_self_degraded_says_what_is_wrong_in_words_not_in_codes():
+    expected = {
+        "disk_low": "状态库所在磁盘空间不足",
+        "data_dir_read_only": "数据目录不可写",
+        "state_store_write_failed": "状态库写入失败",
+    }
+    for reason, words in expected.items():
+        markdown = self_degraded(reason=reason).markdown
+        assert words in markdown
+        assert reason not in markdown, "内部代码不该直接念给人听"
+
+
+def test_self_degraded_disk_low_carries_the_numbers():
+    markdown = self_degraded(reason="disk_low", free_mb=120, free_limit_mb=200).markdown
+
+    assert "剩余 120 MB" in markdown
+    assert "阈值 200 MB" in markdown
+    assert "SELF_CHECK_FREE_MB" in markdown, "告诉人去调哪个配置项"
+
+
+def test_self_degraded_survives_missing_or_malformed_readings():
+    for payload in (
+        {"reason": "disk_low"},
+        {"reason": "disk_low", "free_mb": "lots", "free_limit_mb": None},
+        {"reason": "disk_low", "free_mb": True, "free_limit_mb": True},
+        {"reason": "something_new"},
+        {},
+    ):
+        message = self_degraded(**payload)
+        assert message.markdown
+        assert "剩余" not in message.markdown or payload.get("free_mb") == 120
+
+
+def test_self_degraded_shows_an_unknown_reason_as_is():
+    """认不得的代码原样显示、不猜：将来加了新原因，这里不会悄悄变成错的说明。"""
+    message = self_degraded(reason="something_new")
+    # markdown 里下划线会被转义（`something\\_new`），所以拿纯文本版本比
+    assert "原因：something_new" in message.text
