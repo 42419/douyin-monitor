@@ -1343,3 +1343,84 @@ def test_chart_bootstrap_prunes_charts_whose_container_is_gone():
     assert js.index("function prune()") < js.index("function mount(")
     mount = js[js.index("function mount(") :]
     assert mount.index("prune();") < mount.index("querySelectorAll('[data-chart]')")
+
+
+# ------------------------------------------------- 上游组件：把"为什么不可用"说出来
+
+
+def components_with(browser_rpc: dict[str, Any]) -> dict[str, Any]:
+    return upstream_snapshot(
+        components={
+            "postgres": {"ok": True, "latency_ms": 3},
+            "redis": {"ok": True, "latency_ms": 1},
+            "browser_rpc": browser_rpc,
+        }
+    )
+
+
+def test_status_page_says_why_browser_rpc_is_unavailable(tmp_path):
+    """只写"不可用"，人分不出是没连上还是状态不对，排查方向完全不同。"""
+    settings = make_settings(tmp_path)
+    write_status(
+        settings,
+        upstream=components_with(
+            {
+                "ok": False,
+                "latency_ms": None,
+                "configured": True,
+                "detail_code": "unreachable",
+            }
+        ),
+    )
+
+    html = render_page(settings)
+
+    assert "不可用" in html
+    assert "DTK 探测它时没连上" in html
+    assert "这是 DTK 那一侧的探测结果" in html, "不能让人以为是 dywatch 自己探测的"
+
+
+def test_status_page_distinguishes_a_degraded_browser_rpc(tmp_path):
+    settings = make_settings(tmp_path)
+    write_status(
+        settings,
+        upstream=components_with(
+            {
+                "ok": False,
+                "latency_ms": 12,
+                "configured": True,
+                "detail_code": "degraded",
+            }
+        ),
+    )
+
+    html = render_page(settings)
+
+    assert "它的健康检查没有返回 ok" in html
+    assert "没连上" not in html
+
+
+def test_status_page_shows_an_unknown_reason_code_as_is(tmp_path):
+    settings = make_settings(tmp_path)
+    write_status(
+        settings,
+        upstream=components_with(
+            {"ok": False, "configured": True, "detail_code": "brand_new_code"}
+        ),
+    )
+
+    assert "DTK 给出的原因代码：brand_new_code" in render_page(settings)
+
+
+def test_status_page_adds_no_explanation_when_nothing_is_wrong(tmp_path):
+    """`ok` 是 None（没配）或 True（正常）时不该出现任何"为什么"——哪怕带着 detail_code。"""
+    for browser_rpc in (
+        {"ok": None, "configured": False},
+        {"ok": None, "configured": False, "detail_code": "unreachable"},
+        {"ok": True, "latency_ms": 9, "configured": True},
+    ):
+        settings = make_settings(tmp_path / str(len(str(browser_rpc))))
+        write_status(settings, upstream=components_with(browser_rpc))
+        html = render_page(settings)
+        assert "DTK 探测它时没连上" not in html, browser_rpc
+        assert "健康检查没有返回 ok" not in html, browser_rpc

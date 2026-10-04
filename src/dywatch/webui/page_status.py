@@ -84,6 +84,14 @@ def _human_duration(value: Any) -> str:
     return f"{minutes} 分钟"
 
 
+#: 上游组件的原因代码 → 一句人话。代码来自 DTK 的 `system/status`（目前只有 browser_rpc 会给）；
+#: 认不得的代码原样显示，不猜。措辞只陈述"DTK 报告了什么"：这是 DTK 那一侧的探测结果。
+_COMPONENT_DETAIL: dict[str, str] = {
+    "unreachable": "DTK 探测它时没连上（超时或网络不通）；这是 DTK 那一侧的探测结果",
+    "degraded": "DTK 连上了它，但它的健康检查没有返回 ok",
+}
+
+
 def _kv(
     label: str,
     value: str,
@@ -152,6 +160,13 @@ def _upstream_html(upstream: Mapping[str, Any]) -> str:
             value = dict(value) if isinstance(value, Mapping) else {}
             state = value.get("ok")
             latency = value.get("latency_ms")
+            # 上游给了原因代码就说出来：只写"不可用"，人分不出是没连上还是状态不对
+            detail = value.get("detail_code")
+            note = (
+                _COMPONENT_DETAIL.get(str(detail), f"DTK 给出的原因代码：{detail}")
+                if state is False and detail
+                else ""
+            )
             # `ok` 是 None == "不知道"（browser-rpc 没配时上游诚实地说不知道），
             # 那不是"坏了"，所以用灰色而不是红色——把"没配"画成"故障"会让人白跑一趟
             dot = "--green" if state else ("--off" if state is None else "--red")
@@ -161,6 +176,7 @@ def _upstream_html(upstream: Mapping[str, Any]) -> str:
                     _COMPONENT_LABELS.get(name, name),
                     text + (f" · {latency}ms" if isinstance(latency, int) else ""),
                     dot=dot,
+                    note=note,
                     mono=True,
                 )
             )

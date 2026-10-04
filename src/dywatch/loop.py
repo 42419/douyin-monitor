@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -596,7 +597,7 @@ def summarize_upstream_status(
     我们会毫不犹豫地把它公开出去。
 
     实测字段路径（DTK 5.1.2，`routes/system.py`）：
-    `components.{postgres,redis,browser_rpc}.{ok,latency_ms,…}`、
+    `components.{postgres,redis,browser_rpc}.{ok,latency_ms,configured,detail_code,…}`、
     `pool.{douyin,tiktok}.{minting,active,cooling,degraded,retired}` + `pool.total_active`、
     `storage.{db_size_bytes,rows,identities}`。`ok` 允许是 `None`（browser_rpc 未配置时
     它诚实地说"不知道"，那不是"坏了"）。
@@ -607,10 +608,21 @@ def summarize_upstream_status(
         for name, value in raw_components.items():
             if isinstance(value, Mapping):
                 ok = value.get("ok")
-                components[str(name)] = {
+                entry: dict[str, Any] = {
                     "ok": bool(ok) if ok is not None else None,
                     "latency_ms": _int_or_none(value.get("latency_ms")),
                 }
+                # `configured` / `detail_code` 是 DTK 对 browser_rpc 实际会给的两个字段
+                # （见 DTK `routes/system.py::_browser_rpc_status`）：没有它们，面板只能说
+                # "不可用"，说不出是"没连上"还是"连上了但状态不对"。`detail_code` 只收
+                # 形如 `unreachable` 的短代码——它来自上游，不能让任意文本进快照。
+                configured = value.get("configured")
+                if isinstance(configured, bool):
+                    entry["configured"] = configured
+                code = _detail_code(value.get("detail_code"))
+                if code:
+                    entry["detail_code"] = code
+                components[str(name)] = entry
             else:
                 components[str(name)] = {"ok": None, "latency_ms": None}
 
@@ -643,6 +655,16 @@ def summarize_upstream_status(
         "pool": pool,
         "storage": storage,
     }
+
+
+_DETAIL_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,31}")
+
+
+def _detail_code(value: Any) -> str | None:
+    """上游给的原因代码（`unreachable` / `degraded`…）：只认短的 snake_case，其余丢弃。"""
+    if isinstance(value, str) and _DETAIL_CODE_RE.fullmatch(value):
+        return value
+    return None
 
 
 def _int_or_none(value: Any) -> int | None:

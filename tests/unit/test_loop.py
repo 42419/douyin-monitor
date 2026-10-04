@@ -18,7 +18,7 @@ import pytest
 
 from dywatch.alerts import Deduplicator
 from dywatch.dtk import MonitorError
-from dywatch.loop import MonitorLoop
+from dywatch.loop import MonitorLoop, summarize_upstream_status
 from dywatch.models import Page
 from dywatch.pacer import RoundWaiter
 from dywatch.scheduler import GlobalGate
@@ -517,3 +517,57 @@ async def test_upstream_status_is_fetched_as_soon_as_the_gate_reopens(tmp_path):
     await loop._refresh_upstream_status(datetime.now(timezone.utc))
 
     assert client.status_calls == 1
+
+
+def test_summary_keeps_the_browser_rpc_reason_the_upstream_gave():
+    """DTK 对 browser_rpc 实际会给 `configured` 与 `detail_code`（`routes/system.py`）。
+
+    快照只留 `ok` 和 `latency_ms` 的时候，面板只能说"不可用"，说不出是"没连上"还是
+    "连上了但状态不对"——而这两种的排查方向完全不同。
+    """
+    data = {
+        "version": "5.1.3",
+        "components": {
+            "browser_rpc": {
+                "configured": True,
+                "ok": False,
+                "detail_code": "unreachable",
+                "chromium_major": 150,  # 没人要的字段：不能被原样带进公开的快照
+            },
+            "postgres": {"ok": True, "latency_ms": 3},
+        },
+    }
+
+    out = summarize_upstream_status(data, checked_at="t")["components"]
+
+    assert out["browser_rpc"] == {
+        "ok": False,
+        "latency_ms": None,
+        "configured": True,
+        "detail_code": "unreachable",
+    }
+    assert out["postgres"] == {"ok": True, "latency_ms": 3}, "没给的字段不凭空多出来"
+
+
+@pytest.mark.parametrize(
+    "junk",
+    [
+        "<script>alert(1)</script>",
+        "Unreachable",
+        "a" * 80,
+        "has space",
+        "x\ny",
+        "",
+        None,
+        7,
+        True,
+        ["unreachable"],
+    ],
+)
+def test_summary_drops_reason_codes_that_are_not_short_slugs(junk):
+    """原因代码来自上游、会写进 status.json 并显示在面板上：只认短的 snake_case。"""
+    data = {"components": {"browser_rpc": {"ok": False, "detail_code": junk}}}
+
+    entry = summarize_upstream_status(data, checked_at="t")["components"]["browser_rpc"]
+
+    assert "detail_code" not in entry
