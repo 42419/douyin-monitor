@@ -386,7 +386,32 @@ BOOTSTRAP_JS = r"""
     try { return JSON.parse(holder.textContent); } catch (e) { return null; }
   }
 
+  // 画不出来就在原地说清楚：一块空白的画布看起来只会是"面板坏了"，排障的人没有任何线索
+  function fail(el, text) {
+    el.innerHTML = '';
+    var note = document.createElement('div');
+    note.className = 'chart-empty mono';
+    note.textContent = text;   // textContent：报错文本里可能带任何字符
+    el.appendChild(note);
+    el.setAttribute('data-chart-ready', '1');
+  }
+
+  // 容器已经不在页面里的实例：`innerHTML` 把它的 canvas 一起删了，却没人调 `clear()`。
+  // Chart.js 仍握着旧 canvas，实例会一直留着——每次挂载前顺手清掉，任何页面忘了清也不会漏
+  function prune() {
+    var kept = [];
+    for (var i = 0; i < charts.length; i++) {
+      if (charts[i].el.isConnected) {
+        kept.push(charts[i]);
+      } else if (charts[i].chart) {
+        charts[i].chart.destroy();
+      }
+    }
+    charts = kept;
+  }
+
   function mount(root) {
+    prune();
     var scope = root || document;
     var nodes = scope.querySelectorAll('[data-chart]');
     for (var i = 0; i < nodes.length; i++) {
@@ -394,8 +419,16 @@ BOOTSTRAP_JS = r"""
       var canvas = el.querySelector('canvas');
       var payload = readPayload(el);
       if (!canvas || !payload || el.getAttribute('data-chart-ready') === '1') continue;
+      if (typeof Chart === 'undefined') {
+        fail(el, '图表库没有加载：浏览器没取到 /assets/chart.umd.min.js（看开发者工具的网络面板）');
+        continue;
+      }
       el.setAttribute('data-chart-ready', '1');
-      charts.push({el: el, canvas: canvas, payload: payload, chart: build(canvas, payload)});
+      try {
+        charts.push({el: el, canvas: canvas, payload: payload, chart: build(canvas, payload)});
+      } catch (e) {
+        fail(el, '图表绘制失败：' + (e && e.message ? e.message : e));
+      }
     }
   }
 
@@ -435,6 +468,16 @@ BOOTSTRAP_JS = r"""
   window.dyChart = {
     mount: mount, clear: clear, rebuild: rebuild, fmtNum: fmtNum, cssVar: cssVar
   };
+
+  // 页面加载完就把已经在 DOM 里的图挂上。以前这一步要靠每个页面自己记得调用：
+  // /events 没调，于是图表要等 60 秒一次的局部刷新才第一次出现，之前是一片空白。
+  // `mount` 是幂等的（`data-chart-ready`），页面里已有的显式调用不受影响
+  function mountAll() { mount(document); }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', mountAll);
+  } else {
+    mountAll();
+  }
 })();
 """
 

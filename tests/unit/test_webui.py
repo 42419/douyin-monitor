@@ -1284,3 +1284,62 @@ def test_json_body_degrades_unknown_types_instead_of_dropping_the_response():
     )
     assert isinstance(payload["t"], str)
     assert isinstance(payload["nested"]["d"], str)
+
+
+# ------------------------------------------------- 图表挂载契约（详情面板）
+
+
+def test_every_canvas_built_in_the_detail_script_sits_in_a_data_chart_container(
+    tmp_path,
+):
+    """`mount()` 只处理带 `data-chart` 的节点。详情面板的图表容器漏了这个属性，于是
+    图例、标题都在，中间是一块**永远**不会被画出来的空白（线上截图里的那一块）。
+
+    这段 HTML 是前端 JS 里的字符串模板、不经过 Python 渲染，没有任何别的检查会碰到它。
+    """
+    import re
+
+    html = render_page(make_settings(tmp_path))
+
+    canvases = re.findall(r'<canvas id="(\w+)">', html)
+    assert "detailMetrics" in canvases, "前提：详情脚本里确实有这张图"
+    for canvas_id in canvases:
+        assert f'data-chart="{canvas_id}"><canvas id="{canvas_id}">' in html, canvas_id
+
+
+def test_detail_panel_content_has_a_single_write_point_that_clears_charts_first(
+    tmp_path,
+):
+    """详情内容的写入只能有一个出口，而且先销毁旧图、再换 DOM。
+
+    顺序不能反：`innerHTML` 一换，旧 canvas 就脱离了面板，`clear()` 再按"是否在容器里"去找
+    就找不到它们，Chart.js 实例会一直留着。实测过：连续打开 5 次详情，实例数 1→2→3→4→5。
+    更隐蔽的是"加载中…"那一步——它也是一次替换，而且发生在最后渲染内容的那一处**之前**，
+    所以只在渲染处调 `clear()` 看起来合理、实际上什么都没清。
+    """
+    import re
+
+    html = render_page(make_settings(tmp_path))
+
+    writes = re.findall(
+        r"\.innerHTML\s*=[^=]", html[html.index("function setDetail") :]
+    )
+    detail_writes = re.findall(
+        r"getElementById\('detailContent'\)\.innerHTML\s*=[^=]", html
+    )
+    assert detail_writes == [], "不能有绕过 setDetail 直接写 detailContent 的地方"
+    body = html[html.index("function setDetail") : html.index("function openDetail")]
+    assert body.index("dyChart.clear(holder)") < body.index("holder.innerHTML = html")
+    assert writes, "前提：setDetail 里确实有那一次写入"
+    # 加载中 / 加载失败 / 服务端报错 / 正式内容：四处都走它
+    assert html.count("setDetail(") >= 5
+
+
+def test_chart_bootstrap_prunes_charts_whose_container_is_gone():
+    """兜底：任何页面忘了 `clear()` 就换掉容器，下一次 `mount()` 也会把脱离页面的实例销毁。"""
+    js = webui.charts.BOOTSTRAP_JS
+
+    assert "isConnected" in js
+    assert js.index("function prune()") < js.index("function mount(")
+    mount = js[js.index("function mount(") :]
+    assert mount.index("prune();") < mount.index("querySelectorAll('[data-chart]')")

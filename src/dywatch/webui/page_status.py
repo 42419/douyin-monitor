@@ -388,18 +388,27 @@ document.querySelectorAll('.row').forEach(function(row) {
     if (uid) openDetail(uid);
   });
 });
+// 详情内容**唯一**的写入点。先销毁旧图、再换 DOM：顺序不能反——`innerHTML` 一换，旧 canvas
+// 就脱离了面板，`clear()` 再按"是否在容器里"去找就找不到它们，Chart.js 实例会一直留着
+// （实测：连续打开 5 次详情，实例数 1→2→3→4→5）。"加载中…"那一步也算一次替换，
+// 所以所有写入都得走这里，而不只是最后渲染内容的那一处
+function setDetail(html) {
+  var holder = document.getElementById('detailContent');
+  if (window.dyChart) window.dyChart.clear(holder);
+  holder.innerHTML = html;
+}
 function openDetail(uid) {
   document.getElementById('detailOverlay').classList.add('open');
   // 弹窗自己滚动，所以背后那一页要停住，否则手机上滑到底会把列表也带着滚
   document.body.style.overflow = 'hidden';
   document.getElementById('detailName').textContent = '加载中...';
   document.getElementById('detailId').textContent = uid;
-  document.getElementById('detailContent').innerHTML = '<div class="detail-empty">加载中...</div>';
+  setDetail('<div class="detail-empty">加载中...</div>');
   fetch('/api/user/' + encodeURIComponent(uid))
     .then(function(r) { return r.json(); })
     .then(function(d) { renderDetail(d); })
     .catch(function() {
-      document.getElementById('detailContent').innerHTML = '<div class="detail-empty">加载失败</div>';
+      setDetail('<div class="detail-empty">加载失败</div>');
     });
 }
 function closeDetail() {
@@ -421,7 +430,7 @@ function metricLine(m) {
 
 function renderDetail(d) {
   if (d.error) {
-    document.getElementById('detailContent').innerHTML = '<div class="detail-empty">' + esc(d.error) + '</div>';
+    setDetail('<div class="detail-empty">' + esc(d.error) + '</div>');
     return;
   }
   document.getElementById('detailName').textContent = d.nickname || d.sec_user_id;
@@ -489,7 +498,7 @@ function renderDetail(d) {
   }
   h += '<div class="detail-section"><a href="/events?author=' + encodeURIComponent(d.sec_user_id)
     + '" style="color:inherit">在事件时间线里看这个账号 &rsaquo;</a></div>';
-  document.getElementById('detailContent').innerHTML = h;
+  setDetail(h);
   // 图表要在 HTML 落进 DOM 之后才建：Chart.js 需要拿到真实的 canvas 元素尺寸，
   // 在字符串里拼的 canvas 没有尺寸，画出来是 0×0 的空白
   if (window.dyChart) window.dyChart.mount(document.getElementById('detailContent'));
@@ -508,7 +517,7 @@ function metricsSection(d) {
       + '<div class="chart-empty mono">还没有采到样本：下一轮抓到作品页时开始记录（按小时聚合，'
       + '保留 ' + d.metrics_keep_days + ' 天）</div>';
   }
-  var body = '<div class="chart-canvas"><canvas id="detailMetrics"></canvas></div>';
+  var body = '<div class="chart-canvas" data-chart="detailMetrics"><canvas id="detailMetrics"></canvas></div>';
   var holder = '<script type="application/json" data-chart-data="detailMetrics">'
     + JSON.stringify(d.metrics_chart).replace(/<\//g, '<\\/') + '<\/script>';
   var legend = '';

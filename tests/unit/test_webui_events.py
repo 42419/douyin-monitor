@@ -15,6 +15,7 @@ import json
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -468,3 +469,78 @@ def test_a_chart_payload_cannot_close_the_script_tag(tmp_path):
     upper = webui.charts.canvas("c2", {"title": "</SCRIPT >"})
     assert "</SCRIPT" not in upper
     assert upper.count("</script>") == 1
+
+
+class _CanvasAudit(HTMLParser):
+    """收集页面里每个 `<canvas>` 的祖先里有没有 `data-chart`，以及有哪些图表载荷。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._stack: list[dict[str, str | None]] = []
+        self.canvases: list[
+            tuple[str, str | None]
+        ] = []  # (canvas id, 所在容器的 data-chart)
+        self.payload_ids: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        if tag == "script" and attributes.get("data-chart-data"):
+            self.payload_ids.add(str(attributes["data-chart-data"]))
+        if tag == "canvas":
+            owner = next(
+                (a["data-chart"] for a in reversed(self._stack) if "data-chart" in a),
+                None,
+            )
+            self.canvases.append((str(attributes.get("id")), owner))
+        if tag not in ("canvas", "script", "br", "img", "input", "meta", "link"):
+            self._stack.append(attributes)
+
+    def handle_endtag(self, tag: str) -> None:
+        if (
+            tag not in ("canvas", "script", "br", "img", "input", "meta", "link")
+            and self._stack
+        ):
+            self._stack.pop()
+
+
+def test_events_page_charts_are_wired_for_the_bootstrap(tmp_path):
+    """每个 `<canvas>` 都得在带 `data-chart` 的容器里、且有同名的载荷脚本——
+    `mount()` 靠这两样才认得它。缺任何一样，图表区域就只剩一块空白。"""
+    settings = make_settings(tmp_path)
+    seed(settings, rows((5, ID_A, "new_post"), (30, ID_B, "post_removed")))
+
+    with panel(settings) as base:
+        status, html = get(f"{base}/events?range=30d")
+
+    audit = _CanvasAudit()
+    audit.feed(html)
+    assert status == 200
+    assert audit.canvases, "前提：页面里确实有图表"
+    for canvas_id, owner in audit.canvases:
+        assert owner is not None, f"{canvas_id} 不在任何 data-chart 容器里"
+        assert owner in audit.payload_ids, f"{owner} 没有对应的 data-chart-data 载荷"
+
+
+def test_chart_bootstrap_mounts_what_is_already_on_the_page_at_load():
+    """页面加载完就要把已经在 DOM 里的图挂上。
+
+    以前这一步靠每个页面自己记得调用：`/events` 没调，图表要等 60 秒一次的局部刷新才第一次
+    出现——之前是一片空白，人只会以为面板坏了。`mount` 幂等（`data-chart-ready`），所以
+    页面里已有的显式调用不受影响。
+    """
+    js = webui.charts.BOOTSTRAP_JS
+
+    assert "DOMContentLoaded" in js and "mount(document)" in js
+    assert "document.readyState" in js, (
+        "脚本可能在 DOM 就绪之后才执行，两种情况都要覆盖"
+    )
+
+
+def test_chart_bootstrap_says_so_when_it_cannot_draw():
+    """一块空白的画布看起来只会是"面板坏了"。库没加载、或绘制抛了异常，都要在原地说清楚。"""
+    js = webui.charts.BOOTSTRAP_JS
+
+    assert "typeof Chart === 'undefined'" in js
+    assert "图表库没有加载" in js and "/assets/chart.umd.min.js" in js
+    assert "图表绘制失败" in js
+    assert "textContent" in js, "报错文本里可能带任何字符，不能走 innerHTML"
