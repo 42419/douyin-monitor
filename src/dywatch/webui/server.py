@@ -507,6 +507,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", cache)
+        for name, value in SECURITY_HEADERS:
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -653,6 +655,35 @@ def events_payload(
             for row in view["rows"]
         ],
     }
+
+
+#: 内容安全策略。面板无鉴权、监听地址可能是 0.0.0.0，而页面里渲染的昵称/标题来自平台
+#: （被监控账号的主人想改成什么就是什么）：转义是第一道防线，这是第二道。
+#:
+#: 诚实地说它挡住什么、挡不住什么：页面里有内联脚本，所以 `script-src` 必须带
+#: `'unsafe-inline'`——**它拦不住一段被注入的内联脚本**。它拦得住的是后续动作：载入外部脚本
+#: （`'self'` 以外一律拒绝）、把数据送出去（`connect-src` / `img-src` / `form-action` 都只
+#: 允许同源）、改写 `<base>`。
+#:
+#: **刻意不加** `frame-ancestors` / `X-Frame-Options`：面板是只读的，没有可被劫持的操作，
+#: 而不少人把它嵌在自己的 homepage / Home Assistant 的 iframe 里——禁掉就是白白弄坏他们。
+CONTENT_SECURITY_POLICY = "; ".join(
+    (
+        "default-src 'none'",
+        "script-src 'self' 'unsafe-inline'",
+        "style-src 'unsafe-inline'",
+        "img-src 'self' data:",
+        "connect-src 'self'",
+        "base-uri 'none'",
+        "form-action 'self'",
+    )
+)
+
+SECURITY_HEADERS: tuple[tuple[str, str], ...] = (
+    ("X-Content-Type-Options", "nosniff"),
+    ("Referrer-Policy", "no-referrer"),
+    ("Content-Security-Policy", CONTENT_SECURITY_POLICY),
+)
 
 
 class _PanelServer(ThreadingHTTPServer):

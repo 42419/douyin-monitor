@@ -1286,6 +1286,73 @@ def test_json_body_degrades_unknown_types_instead_of_dropping_the_response():
     assert isinstance(payload["nested"]["d"], str)
 
 
+# ------------------------------------------------- 安全响应头 / CSP
+
+
+def get_with_headers(url: str) -> tuple[int, dict[str, str]]:
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            return response.status, {k.lower(): v for k, v in response.headers.items()}
+    except urllib.error.HTTPError as exc:
+        return exc.code, {k.lower(): v for k, v in exc.headers.items()}
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/",
+        "/events",
+        "/api/state",
+        "/api/events",
+        "/healthz",
+        "/metrics",
+        "/assets/chart.umd.min.js",
+        "/no-such-page",
+    ],
+)
+def test_every_response_carries_the_security_headers(tmp_path, path):
+    """面板无鉴权、监听可能是 0.0.0.0，页面里渲染的昵称/标题又来自平台：转义之外再加一层。
+
+    **每条**响应都要带——包括 JSON、指标、静态资源和 404：漏掉任何一类，就是留了一条
+    "只要换个路径就没有保护"的路。
+    """
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    write_status(settings)
+    with panel(settings) as base:
+        status, headers = get_with_headers(base + path)
+
+    assert status in (200, 404)
+    assert headers["x-content-type-options"] == "nosniff"
+    assert headers["referrer-policy"] == "no-referrer"
+    assert "default-src 'none'" in headers["content-security-policy"]
+
+
+def test_csp_allows_only_same_origin_and_nothing_foreign():
+    csp = webui.server.CONTENT_SECURITY_POLICY
+    directives = dict(part.split(" ", 1) for part in csp.split("; "))
+
+    assert directives["default-src"] == "'none'"
+    assert directives["connect-src"] == "'self'", (
+        "跨源请求（数据外送的常见出路）要被拒绝"
+    )
+    assert directives["img-src"] == "'self' data:", "拼进外部图片 URL 的外送要被拒绝"
+    assert directives["base-uri"] == "'none'"
+    assert "http" not in csp, "策略里不应出现任何外部源"
+    assert "'unsafe-eval'" not in csp
+
+
+def test_csp_does_not_forbid_embedding_the_panel_in_an_iframe(tmp_path):
+    """刻意的取舍：面板只读、没有可被劫持的操作，而不少人把它嵌在自己的 homepage /
+    Home Assistant 的 iframe 里——禁掉就是白白弄坏他们。想改它的人先读这条测试。"""
+    assert "frame-ancestors" not in webui.server.CONTENT_SECURITY_POLICY
+    settings = make_settings(tmp_path)
+    write_status(settings)
+    with panel(settings) as base:
+        _status, headers = get_with_headers(base + "/")
+    assert "x-frame-options" not in headers
+
+
 # ------------------------------------------------- 图表挂载契约（详情面板）
 
 

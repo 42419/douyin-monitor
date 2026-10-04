@@ -84,6 +84,12 @@ _列表里点任意一行打开详情。_
 那会让后续查询全变成 `no such table`）。**要对外暴露请自己加反代鉴权**——
 面板本身没有登录页。
 
+每条响应都带 `Content-Security-Policy`（只允许同源：外部脚本、跨源请求、外部图片、`<base>`
+改写都会被浏览器拒绝）、`X-Content-Type-Options: nosniff` 和 `Referrer-Policy: no-referrer`。
+页面里有内联脚本，所以这层策略**拦不住一段已经被注入的内联脚本**——它是转义之外的第二道防线，
+不是替代品。**刻意没有**禁止 iframe 嵌入（`frame-ancestors` / `X-Frame-Options`）：面板只读、
+没有可被劫持的操作，而不少人把它嵌在自己的 homepage / Home Assistant 里。
+
 ## 移动端
 
 小屏（手机）下布局会自动重排：状态单独一行、账号名整行，上游地址与 PID 不占位置；
