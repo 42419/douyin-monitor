@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from dywatch.alerts import Deduplicator
 from dywatch.dtk import MonitorError, parse_page
 from dywatch.models import Content, Event, EventKind, Kind
 from dywatch.notifiers import (
@@ -24,6 +25,7 @@ from dywatch.notifiers import (
     build_channels,
 )
 from dywatch.notifiers.base import HttpChannel
+from dywatch.pipeline import notify_system_event
 from dywatch.render import render_event
 from dywatch.scheduler import GlobalGate
 from dywatch.settings import load_settings
@@ -393,3 +395,36 @@ def test_legacy_single_channel_keeps_its_plain_name():
     )
 
     assert [channel.name for channel in build_channels(settings)] == ["telegram"]
+
+
+class _CollectingNotifier:
+    """只收消息、不发任何东西的通知器；`send` 的返回值满足 `delivery.as_dict()`。"""
+
+    def __init__(self) -> None:
+        self.messages: list[Any] = []
+
+    async def send(self, message: Any) -> Any:
+        self.messages.append(message)
+
+        class _Delivery:
+            def as_dict(self) -> dict[str, Any]:
+                return {"sent": ["ch"], "failed": {}}
+
+        return _Delivery()
+
+
+async def test_notify_system_event_works_without_an_explicit_now():
+    """`now` 是可选参数、默认 `None`：缺省分支以前引用了没导入的 `timezone`，直接 NameError。
+
+    现有的所有调用点都显式传了 `now`，所以生产里碰不到——但这是个公开函数，缺省值
+    必须是能用的缺省值，而不是一个只有没人用它的时候才成立的缺省值。
+    """
+    notifier = _CollectingNotifier()
+
+    await notify_system_event(
+        Event(EventKind.SELF_DEGRADED, sec_user_id="", payload={"reason": "disk_low"}),
+        notifier=notifier,
+        dedup=Deduplicator(),
+    )
+
+    assert len(notifier.messages) == 1

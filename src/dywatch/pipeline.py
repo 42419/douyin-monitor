@@ -19,7 +19,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 from .alerts import Deduplicator, priority_of, should_send
