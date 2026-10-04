@@ -302,6 +302,12 @@ class MonitorLoop:
         interval = int(self.settings["UPSTREAM_STATUS_INTERVAL_SECONDS"])
         if interval <= 0:
             return
+        # 闸门关着 == 上游刚说过"现在别发请求"（限流 / 队列满）。这次读数不是非发不可，
+        # 但它仍是对同一个上游的一次真实请求——不能成为唯一绕过闸门的例外（闸门刚被
+        # 这一轮的 429 关上时，这一步恰好就在本轮末尾）。
+        # 故意不更新 `_upstream_status_at`：闸门一开，下一轮就补上，而不是再等一整个间隔。
+        if not self.gate.is_open():
+            return
         if (
             self._upstream_status_at
             and time.monotonic() - self._upstream_status_at < interval

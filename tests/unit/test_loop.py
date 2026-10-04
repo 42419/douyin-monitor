@@ -11,6 +11,7 @@ import asyncio
 import json
 import pathlib
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -468,3 +469,51 @@ async def test_upstream_readings_keep_the_previous_value_when_the_call_fails(tmp
     assert upstream["ok"] is False and upstream["error"] == "UPSTREAM_UNREACHABLE"
     assert upstream["version"] == "5.1.2", "取不到新读数时保留旧的"
     assert upstream["pool"]["douyin"]["active"] == 7
+
+
+class StatusCountingClient:
+    """作品请求一律撞 429（带 retry_after）；同时数一数 `system/status` 被问了几次。"""
+
+    def __init__(self) -> None:
+        self.status_calls = 0
+
+    async def author_posts(self, sec_user_id: str, count: int, **kwargs: Any) -> Page:
+        raise MonitorError("RATE_LIMITED", "上游限流", retry_after=300)
+
+    async def system_status(self) -> dict[str, Any]:
+        self.status_calls += 1
+        return {"version": "5.1.3", "components": {}, "pool": {}, "storage": {}}
+
+
+async def test_upstream_status_is_not_requested_in_the_round_that_closes_the_gate(
+    tmp_path,
+):
+    """闸门刚被这一轮的 429 关上：末尾那次 `system/status` 不能成为唯一绕过闸门的请求。
+
+    以前 `_refresh_upstream_status` 不看闸门，而它恰好就跑在每一轮的末尾——上游刚说
+    "等 300 秒"，我们紧接着又去问了它一次。
+    """
+    client = StatusCountingClient()
+    loop = make_loop(tmp_path, Logger(), users=f"{UID}|账号\n", client=client)
+    loop.reload_users(force=True)
+
+    await loop.run_round()
+
+    assert loop.gate.is_open() is False, "前提：这一轮确实把闸门关上了"
+    assert client.status_calls == 0
+
+
+async def test_upstream_status_is_fetched_as_soon_as_the_gate_reopens(tmp_path):
+    """闸门关着时跳过的那次读数不能算"已经取过了"：开回来之后下一次调用就该补上，
+    而不是再等一整个 `UPSTREAM_STATUS_INTERVAL_SECONDS`。"""
+    client = StatusCountingClient()
+    loop = make_loop(tmp_path, Logger(), users=f"{UID}|账号\n", client=client)
+    loop.reload_users(force=True)
+    await loop.run_round()
+    assert client.status_calls == 0
+
+    loop.gate._until = 0.0  # 时间过去了，闸门开回来
+
+    await loop._refresh_upstream_status(datetime.now(timezone.utc))
+
+    assert client.status_calls == 1
