@@ -1493,6 +1493,38 @@ def test_status_page_adds_no_explanation_when_nothing_is_wrong(tmp_path):
         assert "健康检查没有返回 ok" not in html, browser_rpc
 
 
+# ------------------------------------------------- 上游存储：两个互不相干的量，分开写
+
+
+def storage_card(tmp_path: Path, **storage: Any) -> str:
+    settings = make_settings(tmp_path)
+    write_status(settings, upstream=upstream_snapshot(storage=storage))
+    return render_page(settings)
+
+
+def test_storage_is_two_rows_not_one_dotted_line(tmp_path):
+    """ "身份 20 个 · 177.7 MB"读起来像"20 个身份占了 177.7 MB"（更像内存占用）。两个数
+    互不相干：前者是身份表的总行数（不区分是否可用），后者是 DTK 整个数据库的磁盘大小。"""
+    html = storage_card(tmp_path, identities=20, db_size_bytes=186_319_872)
+
+    assert "身份总数（含不可用）" in html and "20 个" in html
+    assert "上游数据库大小" in html and "177.7 MB" in html
+    assert "不是内存占用" in html
+    assert "可用的数量看" in html
+    assert "身份 20 个 ·" not in html
+    assert ">上游存储<" not in html
+
+
+def test_storage_rows_appear_only_for_what_the_upstream_reported(tmp_path):
+    only_identities = storage_card(tmp_path / "a", identities=3)
+    assert "身份总数（含不可用）" in only_identities
+    assert "上游数据库大小" not in only_identities
+
+    only_size = storage_card(tmp_path / "b", db_size_bytes=2048)
+    assert "上游数据库大小" in only_size
+    assert "身份总数（含不可用）" not in only_size
+
+
 # ------------------------------------------------- 内联脚本不能被提前截断
 
 

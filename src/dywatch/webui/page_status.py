@@ -204,19 +204,31 @@ def _upstream_html(upstream: Mapping[str, Any]) -> str:
 
     storage = upstream.get("storage")
     if isinstance(storage, Mapping) and storage:
+        # 这是**两个互不相干的量**。以前用一个点号连成一行（"身份 20 个 · 177.7 MB"），读起来
+        # 像"20 个身份占了 177.7 MB"，更像是在说内存占用——两样都不是：
+        #   * `identities`：DTK 身份表的总行数，**不区分是否可用**（可用的数量是上面的
+        #     「全平台可用身份」）；
+        #   * `db_size_bytes`：DTK 整个 PostgreSQL 数据库在磁盘上的大小（请求日志、归档、
+        #     身份等全在里面），不是内存，也不只是身份的。
         identities = storage.get("identities")
-        items.append(
-            _kv(
-                "上游存储",
-                (
-                    "身份 " + str(_as_int(identities)) + " 个 · "
-                    if identities is not None
-                    else ""
+        if identities is not None:
+            items.append(
+                _kv(
+                    "身份总数（含不可用）",
+                    str(_as_int(identities)) + " 个",
+                    note="身份表里的全部身份；可用的数量看「全平台可用身份」",
+                    mono=True,
                 )
-                + _human_bytes(storage.get("db_size_bytes")),
-                mono=True,
             )
-        )
+        if storage.get("db_size_bytes") is not None:
+            items.append(
+                _kv(
+                    "上游数据库大小",
+                    _human_bytes(storage.get("db_size_bytes")),
+                    note="DTK 的 PostgreSQL 数据库在磁盘上的总大小，不是内存占用",
+                    mono=True,
+                )
+            )
 
     items.append(
         _kv(
