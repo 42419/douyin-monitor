@@ -302,6 +302,34 @@ CSS = """
   .video-list .vkind { flex: 0 0 auto; font-size: 11px; color: var(--text3); }
   .video-list .vabsent { flex: 0 0 auto; font-size: 11px; color: var(--red); font-weight: 600; }
   .video-list .vhidden { flex: 0 0 auto; font-size: 11px; color: var(--amber); font-weight: 600; }
+  /* 作品标题是个按钮：点开就地展开这条作品自己的趋势。把按钮的默认外观全部抹掉，
+     看起来仍是原来那个标题，只是前面多了一个展开箭头 */
+  .video-list .vtoggle {
+    background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit;
+    text-align: left; cursor: pointer;
+  }
+  .video-list .vtoggle::before {
+    content: "▸"; display: inline-block; width: 14px; color: var(--text3);
+  }
+  .video-list .vtoggle[aria-expanded="true"]::before { content: "▾"; }
+  .video-list .vtoggle:hover { color: var(--blue); }
+  .video-list .vtoggle:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  /* `li` 上写了 display，会盖掉浏览器默认的 [hidden]{display:none}——不补这一条，
+     收起的行会一直占着位置 */
+  .video-list li.vtrend-row { display: block; padding: 2px 0 14px 14px; }
+  .video-list li.vtrend-row[hidden] { display: none; }
+  .post-trend-body .chart-canvas { height: 150px; }
+  /* 趋势图的范围 / 口径选择：和事件页的过滤药丸同一套外观 */
+  .trend-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 8px 0 10px; }
+  .trend-chip {
+    font: inherit; font-size: 11.5px; color: var(--text2); background: none;
+    border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px; cursor: pointer;
+  }
+  .trend-chip:hover { color: var(--blue); border-color: var(--blue); }
+  .trend-chip.on { color: var(--blue); background: var(--blue-soft); border-color: var(--blue); }
+  .trend-sep { width: 10px; }
+  .trend-scope { font-size: 11.5px; color: var(--text2); margin: 4px 0 0; }
+  .trend-note { font-size: 11px; color: var(--text3); margin-top: 8px; line-height: 1.6; }
   .detail-empty { color: var(--text3); text-align: center; padding: 24px; }
 
   /* 窄桌面（窗口拖到 560~760px）：固定三列，免得 auto-fit 把最后一格挤成孤行。

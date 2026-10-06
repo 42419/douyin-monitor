@@ -1190,28 +1190,38 @@ def seed_metrics(settings: Settings) -> None:
     store.close()
 
 
-def test_user_detail_includes_the_engagement_series_and_chart(tmp_path):
+def test_user_detail_includes_the_engagement_series_and_trend(tmp_path):
     settings = make_settings(tmp_path)
     seed_db(settings)
     seed_metrics(settings)
     detail = user_detail(settings, ID_OK)
-    assert len(detail["metrics_series"]) == 2
-    assert detail["metrics_chart"]["type"] == "line"
-    assert [item["label"] for item in detail["metrics_chart"]["datasets"]] == [
+
+    assert len(detail["metrics_series"]) == 2, "逐小时累计合计仍保留给读接口的人"
+    trend = detail["metrics_trend"]
+    assert trend["has_data"] is True
+    assert trend["posts"] == len(detail["posts"]), "写明是几条作品的合计，而不是某一条"
+    assert [item["label"] for item in trend["series"]] == [
         "点赞",
         "评论",
         "收藏",
         "分享",
     ]
-    digg = next(
-        item for item in detail["metrics_chart"]["datasets"] if item["label"] == "点赞"
-    )
-    # 同一小时里 4 条作品求和：100 → 180
-    assert digg["data"] == [400, 720]
+    delta = trend["views"]["all"]["delta"]
+
+    def total(key: str) -> int:
+        return sum(v for v in delta[key] if v is not None)
+
+    # 4 条作品各从 100 涨到 180：新增量是 4 × 80，而不是累计合计 720
+    assert total("digg") == 320
+    assert total("collect") == 640
+    # 评论没变：是 0（"这一格里没涨"）；分享从没采到：是 None（"不知道"）。这是两回事
+    assert total("comment") == 0 and any(v == 0 for v in delta["comment"])
+    assert all(v is None for v in delta["share"])
     # 逐条作品的"最新一行"要挂在作品上，而不是每个作品各查一次
     assert detail["posts"][0]["metrics"]["digg"] == 180
     assert detail["posts"][0]["metrics"]["share"] is None
     assert detail["metrics_enabled"] is True
+    assert "metrics_chart" not in detail, "旧的累计总数图表载荷已被趋势取代"
 
 
 def test_user_detail_says_when_metrics_are_switched_off(tmp_path):
@@ -1221,7 +1231,7 @@ def test_user_detail_says_when_metrics_are_switched_off(tmp_path):
     seed_metrics(settings)
     detail = user_detail(settings, ID_OK)
     assert detail["metrics_enabled"] is False
-    assert detail["metrics_series"] == [] and detail["metrics_chart"] is None
+    assert detail["metrics_series"] == [] and detail["metrics_trend"] is None
 
 
 def test_detail_page_shows_per_post_engagement_badges(tmp_path):
@@ -1356,22 +1366,24 @@ def test_csp_does_not_forbid_embedding_the_panel_in_an_iframe(tmp_path):
 # ------------------------------------------------- 图表挂载契约（详情面板）
 
 
-def test_every_canvas_built_in_the_detail_script_sits_in_a_data_chart_container(
-    tmp_path,
-):
-    """`mount()` 只处理带 `data-chart` 的节点。详情面板的图表容器漏了这个属性，于是
-    图例、标题都在，中间是一块**永远**不会被画出来的空白（线上截图里的那一块）。
+def test_every_chart_the_detail_script_builds_is_wired_for_the_bootstrap(tmp_path):
+    """`mount()` 只处理带 `data-chart` 的节点，并靠 `data-chart-data` 找载荷。详情面板的图表
+    容器曾经漏了前者，于是图例、标题都在，中间是一块**永远**不会被画出来的空白。
 
     这段 HTML 是前端 JS 里的字符串模板、不经过 Python 渲染，没有任何别的检查会碰到它。
+    现在账号图和每条作品的图都从同一个 `trendBlock` 出来：canvas 与 `data-chart` 在同一个
+    节点里、id 由同一个变量派生，没有第二个自己拼 canvas 的地方。
     """
-    import re
-
     html = render_page(make_settings(tmp_path))
 
-    canvases = re.findall(r'<canvas id="(\w+)">', html)
-    assert "detailMetrics" in canvases, "前提：详情脚本里确实有这张图"
-    for canvas_id in canvases:
-        assert f'data-chart="{canvas_id}"><canvas id="{canvas_id}">' in html, canvas_id
+    assert html.count("<canvas") == 1, "只允许 trendBlock 里有一处 canvas 模板"
+    assert (
+        """data-chart="' + id + '"><canvas id="' + id + 'Canvas"></canvas></div>"""
+        in html
+    )
+    assert """<script type="application/json" data-chart-data="' + id + '">""" in html
+    assert "trendBlock('detailMetrics'" in html
+    assert "trendBlock(id, p.trend" in html
 
 
 def test_detail_panel_content_has_a_single_write_point_that_clears_charts_first(
@@ -1491,6 +1503,148 @@ def test_status_page_adds_no_explanation_when_nothing_is_wrong(tmp_path):
         html = render_page(settings)
         assert "DTK 探测它时没连上" not in html, browser_rpc
         assert "健康检查没有返回 ok" not in html, browser_rpc
+
+
+# ------------------------------------------------- 单条作品的趋势接口
+
+
+def post_trend_url(base: str, user: str, post: str) -> str:
+    return f"{base}/api/user/{user}/post/{post}/trend"
+
+
+def test_post_trend_route_returns_one_posts_own_increments(tmp_path):
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    seed_metrics(settings)
+    content_id = f"74{0:017d}"
+    with panel(settings) as base:
+        status, body = get(post_trend_url(base, ID_OK, content_id))
+
+    payload = json.loads(body)
+    assert status == 200
+    assert payload["content_id"] == content_id and payload["samples"] == 2
+    trend = payload["trend"]
+    assert trend["has_data"] is True and trend["posts"] == 1
+    delta = trend["views"]["all"]["delta"]
+    # 这一条作品自己：100 → 180，新增 80（账号图里是 4 条作品之和 320）
+    assert sum(v for v in delta["digg"] if v is not None) == 80
+
+
+def test_post_trend_for_an_unknown_post_is_an_empty_trend_not_a_404(tmp_path):
+    """ "没有这个作品"和"还没有足够的样本"是两回事：后者要由前端写明原因。"""
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    with panel(settings) as base:
+        status, body = get(post_trend_url(base, ID_OK, "999"))
+
+    payload = json.loads(body)
+    assert status == 200
+    assert payload["samples"] == 0 and payload["trend"]["has_data"] is False
+
+
+def test_post_trend_respects_the_metrics_switch(tmp_path):
+    settings = make_settings(tmp_path, METRICS_ENABLED="false")
+    seed_db(settings)
+    seed_metrics(settings)
+    with panel(settings) as base:
+        _status, body = get(post_trend_url(base, ID_OK, f"74{0:017d}"))
+
+    payload = json.loads(body)
+    assert payload["metrics_enabled"] is False and payload["samples"] == 0
+
+
+@pytest.mark.parametrize(
+    ("user", "post", "which"),
+    [
+        ("bad%20id", "1", "sec_user_id"),
+        ("a%2Fb", "1", "sec_user_id"),
+        (ID_OK, "x%2Fy", "content_id"),
+        (ID_OK, "..%2F..%2Fetc", "content_id"),
+        (ID_OK, "a%20b", "content_id"),
+        (ID_OK, "p%7Cq", "content_id"),
+        (ID_OK, "a" * 300, "content_id"),
+    ],
+)
+def test_post_trend_rejects_ids_that_could_smuggle_a_path(tmp_path, user, post, which):
+    """两个 id 都是先切段、再解码、再校验：编码过的 `%2F` 解码后是 `/`，夹带不了路径。"""
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    with panel(settings) as base:
+        status, body = get(post_trend_url(base, user, post))
+
+    assert status == 400
+    assert which in json.loads(body)["error"]
+
+
+def test_post_trend_without_a_state_store_is_a_404(tmp_path):
+    with panel(make_settings(tmp_path)) as base:
+        status, _body = get(post_trend_url(base, ID_OK, "1"))
+    assert status == 404
+
+
+def test_other_api_user_shapes_still_mean_the_account_detail(tmp_path):
+    """新路由只认 `/api/user/<账号>/post/<作品>/trend` 这一种形状，其余行为不变。"""
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    with panel(settings) as base:
+        status, body = get(f"{base}/api/user/{ID_OK}/post/1")
+    assert status == 200 and json.loads(body)["sec_user_id"] == ID_OK
+
+
+# ------------------------------------------------- 趋势图的前端（字符串模板，只能在这里盯结构）
+
+
+def test_post_titles_become_expand_buttons_with_data_attributes_only(tmp_path):
+    """标题点开看这条作品自己的趋势。content_id 走 `data-*` 属性、点击走事件委托，
+    不把任何值拼进内联 `onclick`——与详情面板里其余部分同一条安全规矩。"""
+    html = render_page(make_settings(tmp_path))
+
+    assert 'class="vtitle vtoggle" aria-expanded="false"' in html
+    assert "esc(v.content_id)" in html, "content_id 要转义后放进 data-cid"
+    assert 'id="postTrendRow' in html
+    # 只看展开 / 收起这段 JS：页面其它地方（比如关闭按钮）有自己的内联 onclick，与它无关
+    toggle = html[html.index("function togglePost") : html.index("// 事件委托")]
+    assert "onclick" not in toggle
+    assert "closest('.vtoggle, [data-trend]')" in html
+
+
+def test_expanded_post_rows_never_write_into_a_replaced_account(tmp_path):
+    """取回数据之前账号可能已经换了：只往还连在页面上的行里写，别写进别人的行。"""
+    html = render_page(make_settings(tmp_path))
+    body = html[html.index("function togglePost") : html.index("// 事件委托")]
+
+    assert "row.isConnected" in body
+    assert "encodeURIComponent" in body
+    assert body.index("data-loading") < body.index("fetch(url)"), "加载中不重复发请求"
+
+
+def test_account_trend_says_it_is_a_sum_not_one_video(tmp_path):
+    """ "这条趋势是哪个视频的"——图上必须写明：不是任何一条，是该账号全部作品的合计。"""
+    html = render_page(make_settings(tmp_path))
+
+    assert "已知作品的合计，不是某一条" in html
+    assert "点下面的作品标题，单独看每一条" in html
+    assert "作品第一次出现的那一刻只是起点，不算新增" in html
+
+
+def test_trend_has_the_three_ranges_and_two_modes(tmp_path):
+    html = render_page(make_settings(tmp_path))
+
+    for label in ("近 24 小时", "近 7 天", "总览", "'新增'", "'累计'"):
+        assert label in html, label
+    assert "累计新增（从这段时间的起点算起）" in html
+
+
+def test_trend_payload_is_written_with_textcontent_not_innerhtml(tmp_path):
+    """载荷里没有任何东西需要转义 `</script>`——因为根本不经过 HTML 解析。切换范围 / 口径
+    和第一次绘制是同一条路径。"""
+    html = render_page(make_settings(tmp_path))
+    draw = html[html.index("function drawTrend") : html.index("// 账号级趋势")]
+
+    assert "holder.textContent = JSON.stringify" in draw
+    assert "innerHTML" not in draw
+    assert "window.dyChart.redraw(el)" in draw
+    assert "straight: true" in draw
 
 
 # ------------------------------------------------- 上游存储：两个互不相干的量，分开写

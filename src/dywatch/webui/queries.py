@@ -35,13 +35,15 @@ from ..messages import (
 from ..models import Kind, PostState
 from ..settings import Settings
 from ..state import (
+    read_all_post_metric_series,
     read_event_ticks,
     read_events,
     read_latest_post_metrics,
     read_metrics_series,
+    read_post_metric_series,
 )
 from ..users import load_users_conf
-from . import charts
+from . import trend
 from .common import _format_post_age, classify_account
 
 
@@ -105,10 +107,15 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
         metrics_enabled = bool(settings.get("METRICS_ENABLED", True))
         keep_days = int(settings.get("METRICS_KEEP_DAYS", 14) or 14)
         series: list[dict[str, Any]] = []
+        per_post: dict[str, list[dict[str, Any]]] = {}
         latest: dict[str, dict[str, Any]] = {}
+        now = datetime.now(timezone.utc)
         if metrics_enabled:
-            since = datetime.now(timezone.utc) - timedelta(days=keep_days)
+            since = now - timedelta(days=keep_days)
             series = read_metrics_series(conn, sec_user_id=sec_user_id, since=since)
+            per_post = read_all_post_metric_series(
+                conn, sec_user_id=sec_user_id, since=since
+            )
             latest = read_latest_post_metrics(conn, sec_user_id=sec_user_id)
 
     # "还在不在 users.conf 里"要和列表页口径一致：列表读快照里的 configured，而快照就是
@@ -203,9 +210,46 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
             }
             for item in series
         ],
-        # 图表载荷由服务端算：分桶与配色规则是纯函数，在 Python 里能直接测；
-        # 丢给前端算就等于把这部分逻辑放进一段没法单测的字符串里
-        "metrics_chart": charts.metrics_chart_payload(series) if series else None,
+        # 趋势由服务端算（`trend` 是纯函数，能在 Python 里直接测，丢给前端算就等于把这部分
+        # 逻辑放进一段没法单测的字符串里）。**画的是新增量，不是累计总数**——总数涨幅占比
+        # 不到 1%，画出来是四条水平线；也**不是某一条作品**：`posts` 是参与合计的作品数。
+        # `metrics_series`（逐小时累计合计）仍然保留给读接口的人。
+        "metrics_trend": (
+            trend.trend_views(per_post, now=now, posts=len(posts)) if per_post else None
+        ),
+    }
+
+
+def post_trend(
+    settings: Settings, sec_user_id: str, content_id: str
+) -> dict[str, Any] | None:
+    """**一条作品**的趋势（点作品标题展开时才取，不放进账号详情里——
+
+    18 条作品 × 3 个范围 × 2 种口径 × 4 个指标，每次点开账号都带上，绝大多数人一条都不展开）。
+
+    `None` 表示库文件不在；作品没有互动量记录是正常情况（刚出现、或没开记录），返回的
+    `trend.has_data` 为假，由前端写明原因，而不是 404——「没有这个作品」和「还没有足够的
+    样本」是两回事。
+    """
+    if not has_store(settings):
+        return None
+    keep_days = int(settings.get("METRICS_KEEP_DAYS", 14) or 14)
+    now = datetime.now(timezone.utc)
+    rows: list[dict[str, Any]] = []
+    if bool(settings.get("METRICS_ENABLED", True)):
+        with open_store(settings) as conn:
+            rows = read_post_metric_series(
+                conn,
+                sec_user_id=sec_user_id,
+                content_id=content_id,
+                since=now - timedelta(days=keep_days),
+            )
+    return {
+        "sec_user_id": sec_user_id,
+        "content_id": content_id,
+        "metrics_enabled": bool(settings.get("METRICS_ENABLED", True)),
+        "samples": len(rows),
+        "trend": trend.trend_views({content_id: rows}, now=now, posts=1),
     }
 
 
@@ -213,7 +257,7 @@ def _metrics_json(item: Mapping[str, Any] | None) -> dict[str, Any] | None:
     """一条作品最新一行的互动量，转成 **JSON-ready** 的字典。
 
     `state.read_latest_post_metrics` 给的 `hour` 是 `datetime`（Python 侧比大小、
-    分桶都方便，`charts.metrics_chart_payload` 也确实吃这个类型）。但它会被原样放进
+    分桶都方便）。但它会被原样放进
     `/api/user/<id>` 的响应体，而 `json.dumps` 对 `datetime` 是抛 `TypeError` 的——
     异常发生在发出响应头之前，客户端看到的是**连接被掐断**（不是 500、没有 body，
     浏览器只显示"请求失败"）。所以归一化放在数据层：谁把这两个接口连起来，

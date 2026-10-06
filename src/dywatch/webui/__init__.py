@@ -30,14 +30,13 @@
 
 from __future__ import annotations
 
-from . import charts, common, page_events, page_status, queries, server, theme
+from . import charts, common, page_events, page_status, queries, server, theme, trend
 from .charts import (
     BOOTSTRAP_JS,
     asset_bytes,
     asset_version,
     bucket_ticks,
     events_chart_payload,
-    metrics_chart_payload,
 )
 from .common import (
     LED_SLOTS,
@@ -127,7 +126,6 @@ __all__ = [
     "guess_lan_ip",
     "json_body",
     "kinds_for",
-    "metrics_chart_payload",
     "metrics_text",
     "page_events",
     "page_status",
@@ -141,5 +139,6 @@ __all__ = [
     "server",
     "summarize_event",
     "theme",
+    "trend",
     "user_detail",
 ]

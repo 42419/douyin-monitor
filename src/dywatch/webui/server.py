@@ -536,7 +536,12 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/events":
             self._json(200, events_payload(self.settings, query))
         elif path.startswith("/api/user/"):
-            self._user(path)
+            # `/api/user/<账号>/post/<作品>/trend` 是单条作品的趋势；其余形态仍按账号详情处理
+            parts = path[len("/api/user/") :].split("/")
+            if len(parts) == 4 and parts[1] == "post" and parts[3] == "trend":
+                self._post_trend(parts[0], parts[2])
+            else:
+                self._user(path)
         elif path == "/healthz":
             self._json(200, {"status": "ok"})
         elif path == "/readyz":
@@ -597,6 +602,27 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "状态库里没有这个账号（还没跑过一轮？）"})
             return
         self._json(200, detail)
+
+    def _post_trend(self, raw_user: str, raw_post: str) -> None:
+        """单条作品的趋势。两个 id 都**先切段、再解码、再校验**，规则与 `_user` 一致：
+        编码过的 `%2F` 解码后是 `/`，由 `is_safe_id` 拒绝，夹带不了路径。"""
+        user = urllib.parse.unquote(raw_user)
+        post = urllib.parse.unquote(raw_post)
+        if not user or not is_safe_id(user):
+            self._json(400, {"error": "invalid sec_user_id"})
+            return
+        if not post or not is_safe_id(post):
+            self._json(400, {"error": "invalid content_id"})
+            return
+        try:
+            payload = queries.post_trend(self.settings, user, post)
+        except sqlite3.Error as exc:
+            self._json(503, {"error": f"状态库暂不可读：{type(exc).__name__}: {exc}"})
+            return
+        if payload is None:
+            self._json(404, {"error": "状态库还不存在（还没跑过一轮？）"})
+            return
+        self._json(200, payload)
 
     def _readyz(self) -> None:
         checks: dict[str, Any] = {}

@@ -148,14 +148,14 @@ sudo bash deploy/install.sh --yes                  # 必须重跑：.venv 里装
 
 ![账号详情弹窗](screenshots/panel-detail.png)
 
-点任意一行打开详情：作品（置顶的排最前）、已消失作品、**互动量曲线**（赞/评/藏/转）、
-最近事件、更新频率与累计轮次。
+点任意一行打开详情：作品（置顶的排最前，**点标题展开这一条自己的互动量趋势**）、已消失作品、
+**互动量趋势**（赞/评/藏/转的新增量，近 24 小时 / 近 7 天 / 总览）、最近事件、更新频率与累计轮次。
 
 另一页 `/events` 回答"最近到底发生了什么"：一张柱状图 + 一份**同一份数据**的列表，
 按 `全部 / 作品 / 账号 / 系统 / 机制` 分类，每条标出投递状态（已推送 / 推送失败 / 静默 /
 无投递记录）。图表用随包分发的 Chart.js，**不走 CDN**。
 
-顺带提供机器接口：`/api/state`、`/api/health`、`/api/user/<sec_user_id>`、`/api/events`、
+顺带提供机器接口：`/api/state`、`/api/health`、`/api/user/<sec_user_id>`、`/api/user/<sec_user_id>/post/<content_id>/trend`、`/api/events`、
 `/metrics`（Prometheus）、`/healthz` `/readyz`。读法与移动端布局见
 [只读面板](https://dywatch.yunov.top/guide/dashboard)。
 

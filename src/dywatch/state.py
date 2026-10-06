@@ -949,6 +949,44 @@ def read_post_metric_series(
     ]
 
 
+def read_all_post_metric_series(
+    conn: sqlite3.Connection,
+    *,
+    sec_user_id: str,
+    since: datetime | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """该账号**每条作品**的逐小时互动量，按 `content_id` 分组（算「新增量」用）。
+
+    和 `read_metrics_series`（按小时求和）的区别是**不求和**：新增量必须先在单条作品内
+    做相邻小时的差、再求和。先求和再做差，会把「这个小时多了/少了一条作品」当成互动量的
+    涨跌——新作品一出现，合计就凭空跳高一截，而那一截不是任何人点的赞。
+    """
+    params: list[Any] = [sec_user_id]
+    clause = "WHERE sec_user_id = ?"
+    if since is not None:
+        clause += " AND hour >= ?"
+        params.append(_metrics_hour(since))
+    rows = conn.execute(
+        "SELECT content_id, hour, play_count, digg_count, comment_count,"
+        " share_count, collect_count"
+        f" FROM post_metrics {clause} ORDER BY content_id, hour",
+        params,
+    ).fetchall()
+    out: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        out.setdefault(str(row["content_id"]), []).append(
+            {
+                "hour": _dt(row["hour"]),
+                "play": row["play_count"],
+                "digg": row["digg_count"],
+                "comment": row["comment_count"],
+                "share": row["share_count"],
+                "collect": row["collect_count"],
+            }
+        )
+    return out
+
+
 def read_latest_post_metrics(
     conn: sqlite3.Connection, *, sec_user_id: str
 ) -> dict[str, dict[str, Any]]:
@@ -1050,6 +1088,7 @@ def _row_to_state(
 __all__ = [
     "SCHEMA_VERSION",
     "StateStore",
+    "read_all_post_metric_series",
     "read_event_ticks",
     "read_events",
     "read_latest_post_metrics",

@@ -457,6 +457,7 @@ function metricLine(m) {
 }
 
 function renderDetail(d) {
+  trendStore = {};
   if (d.error) {
     setDetail('<div class="detail-empty">' + esc(d.error) + '</div>');
     return;
@@ -483,9 +484,16 @@ function renderDetail(d) {
   if (d.posts && d.posts.length > 0) {
     h += '<div class="detail-section">已知作品（' + d.posts.length + ' 条，置顶在最前）</div>';
     h += '<ul class="video-list">';
-    d.posts.forEach(function(v) {
+    d.posts.forEach(function(v, i) {
       h += '<li>';
-      h += '<span class="vtitle">' + esc(v.title) + '</span>';
+      if (d.metrics_enabled) {
+        // 按钮而不是 span：键盘和读屏软件都认得；content_id 走 data 属性，不拼进内联脚本
+        h += '<button type="button" class="vtitle vtoggle" aria-expanded="false" data-i="' + i
+          + '" data-cid="' + esc(v.content_id) + '" title="点击展开这条作品的互动量趋势">'
+          + esc(v.title) + '</button>';
+      } else {
+        h += '<span class="vtitle">' + esc(v.title) + '</span>';
+      }
       if (v.is_top) h += '<span class="vtop">置顶</span>';
       if (v.absent_rounds > 0) h += '<span class="vabsent">缺席 ' + v.absent_rounds + ' 轮</span>';
       if (v.hidden) h += '<span class="vhidden" title="' + esc(v.hidden_since)
@@ -495,6 +503,10 @@ function renderDetail(d) {
       h += '<span class="vkind">' + esc(v.kind) + '</span>';
       h += '<span class="vdate">' + esc(v.date) + '</span>';
       h += '</li>';
+      if (d.metrics_enabled) {
+        h += '<li class="vtrend-row" id="postTrendRow' + i + '" data-uid="' + esc(d.sec_user_id)
+          + '" hidden><div class="post-trend-body"></div></li>';
+      }
     });
     h += '</ul>';
   } else {
@@ -530,34 +542,167 @@ function renderDetail(d) {
   // 图表要在 HTML 落进 DOM 之后才建：Chart.js 需要拿到真实的 canvas 元素尺寸，
   // 在字符串里拼的 canvas 没有尺寸，画出来是 0×0 的空白
   if (window.dyChart) window.dyChart.mount(document.getElementById('detailContent'));
+  drawTrend('detailMetrics');
 }
 
-// 互动量块：有数据就画曲线，没数据就如实说原因（"没开记录"和"开了还没采到"
-// 是两件事，画成同一张空图会让人以为采集坏了）
+// ===== 互动量趋势 =====
+// 画的是**新增量**，不是累计总数：总数 1500 里每小时只涨个位数，占比不到 1%，四条线共用
+// 一根纵轴，画出来就是四条水平线。趋势数据由服务端算好（3 个范围 × 2 种口径），这里只负责
+// 挑一份、套上图例和颜色。账号图是**全部作品的合计**，每条作品点标题可以单独展开自己的。
+var TREND_RANGES = {'24h': '近 24 小时', '7d': '近 7 天', 'all': '总览'};
+var TREND_MODES = {'delta': '新增', 'cumulative': '累计'};
+var trendStore = {};   // 图表 id -> {trend, range, mode}
+
+function trendCaption(st) {
+  var view = st.trend.views[st.range];
+  var span = st.range === 'all' ? '总览（' + view.labels.length + ' 天）' : TREND_RANGES[st.range];
+  var what = st.mode === 'delta' ? view.unit + '新增' : '累计新增（从这段时间的起点算起）';
+  return span + ' · ' + what;
+}
+
+function trendChip(id, kind, key, label, on) {
+  return '<button type="button" class="trend-chip' + (on ? ' on' : '') + '" data-trend="' + id
+    + '" data-' + kind + '="' + key + '">' + label + '</button>';
+}
+
+function trendControls(id, st) {
+  var h = '<div class="trend-ctl mono">';
+  Object.keys(TREND_RANGES).forEach(function (k) {
+    h += trendChip(id, 'range', k, TREND_RANGES[k], k === st.range);
+  });
+  h += '<span class="trend-sep"></span>';
+  Object.keys(TREND_MODES).forEach(function (k) {
+    h += trendChip(id, 'mode', k, TREND_MODES[k], k === st.mode);
+  });
+  return h + '</div>';
+}
+
+// 一块趋势图的 HTML。载荷不在这里拼进去：`drawTrend` 画之前才写进载荷节点的 textContent，
+// 所以没有"要转义脚本结束标记"这回事，切换范围 / 口径时也是同一条路径。
+// （注意：这段 JS 本身就住在一个内联脚本里——注释里也**不能**出现脚本的结束标记，
+// 浏览器在第一个遇到的位置就会把整段脚本截断，后面的代码会被当成页面文字）
+function trendBlock(id, trend, title, scope, note) {
+  trendStore[id] = {trend: trend, range: '24h', mode: 'delta'};
+  var legend = '';
+  trend.series.forEach(function (s) {
+    legend += '<span><i style="background:var(' + esc(s.color) + ')"></i>' + esc(s.label) + '</span>';
+  });
+  return '<div class="chart-head"><div class="section-title">' + esc(title) + '</div>'
+    + '<div class="chart-range mono" id="' + id + 'Caption"></div></div>'
+    + (scope ? '<div class="trend-scope mono">' + esc(scope) + '</div>' : '')
+    + trendControls(id, trendStore[id])
+    + '<div class="chart-legend mono">' + legend + '</div>'
+    + '<div class="chart-canvas" data-chart="' + id + '"><canvas id="' + id + 'Canvas"></canvas></div>'
+    + '<script type="application/json" data-chart-data="' + id + '"><\/script>'
+    + (note ? '<div class="trend-note mono">' + esc(note) + '</div>' : '');
+}
+
+function drawTrend(id) {
+  var st = trendStore[id];
+  var el = document.querySelector('[data-chart="' + id + '"]');
+  var holder = document.querySelector('script[data-chart-data="' + id + '"]');
+  if (!st || !el || !holder || !window.dyChart) return;
+  var view = st.trend.views[st.range];
+  var data = st.mode === 'delta' ? view.delta : view.cumulative;
+  holder.textContent = JSON.stringify({
+    type: 'line', straight: true, signed: st.mode === 'delta', labels: view.labels,
+    datasets: st.trend.series.map(function (s) {
+      return {label: s.label, color: s.color, data: data[s.key]};
+    })
+  });
+  var caption = document.getElementById(id + 'Caption');
+  if (caption) caption.textContent = trendCaption(st);
+  document.querySelectorAll('[data-trend="' + id + '"]').forEach(function (b) {
+    var on = (b.hasAttribute('data-range') && b.getAttribute('data-range') === st.range)
+      || (b.hasAttribute('data-mode') && b.getAttribute('data-mode') === st.mode);
+    b.classList.toggle('on', on);
+  });
+  window.dyChart.redraw(el);
+}
+
+// 账号级趋势：有数据就画，没数据就如实说原因（"没开记录"和"开了还没采到"是两件事，
+// 画成同一张空图会让人以为采集坏了）
 function metricsSection(d) {
+  var head = '<div class="detail-section">互动量趋势</div>';
   if (!d.metrics_enabled) {
-    return '<div class="detail-section">互动量趋势</div>'
+    return head
       + '<div class="chart-empty mono">未开启记录（METRICS_ENABLED=false）——数字本来随每轮抓取免费返回，'
       + '开启它不消耗任何额外的身份</div>';
   }
-  if (!d.metrics_chart || !d.metrics_chart.labels || d.metrics_chart.labels.length === 0) {
-    return '<div class="detail-section">互动量趋势</div>'
+  var t = d.metrics_trend;
+  if (!t) {
+    return head
       + '<div class="chart-empty mono">还没有采到样本：下一轮抓到作品页时开始记录（按小时聚合，'
       + '保留 ' + d.metrics_keep_days + ' 天）</div>';
   }
-  var body = '<div class="chart-canvas" data-chart="detailMetrics"><canvas id="detailMetrics"></canvas></div>';
-  var holder = '<script type="application/json" data-chart-data="detailMetrics">'
-    + JSON.stringify(d.metrics_chart).replace(/<\//g, '<\\/') + '<\/script>';
-  var legend = '';
-  d.metrics_chart.datasets.forEach(function (s) {
-    legend += '<span><i style="background:var(' + s.color + ')"></i>' + esc(s.label) + '</span>';
-  });
+  // 回答"这是哪个视频的"：不是任何一条，是这个账号全部作品的合计
+  var scope = '该账号 ' + t.posts + ' 条已知作品的合计，不是某一条；点下面的作品标题，单独看每一条';
+  if (!t.has_data) {
+    return '<div class="chart-block">' + head
+      + '<div class="trend-scope mono">' + esc(scope) + '</div>'
+      + '<div class="chart-empty mono">样本还不够：新增量要同一作品相邻两个小时都采到，'
+      + '刚开始记录时要等 1 到 2 小时</div></div>';
+  }
   return '<div class="chart-block">'
-    + '<div class="chart-head"><div class="section-title">互动量趋势</div>'
-    + '<div class="chart-range mono">近 ' + d.metrics_chart.labels.length + ' 小时 · 每小时合计</div></div>'
-    + '<div class="chart-legend mono">' + legend + '</div>'
-    + body + holder + '</div>';
+    + trendBlock('detailMetrics', t, '互动量趋势', scope,
+      '新增 = 这一格里各作品互动量的增加之和；作品第一次出现的那一刻只是起点，不算新增。')
+    + '</div>';
 }
+
+// 点作品标题：就地展开 / 收起这条作品自己的趋势。数据点开才取（18 条作品 × 全部范围一次
+// 带上，绝大多数人一条都不展开）。取回来之前账号可能已经换了——只往还连在页面上的行里写
+function togglePost(btn) {
+  var i = btn.getAttribute('data-i');
+  var row = document.getElementById('postTrendRow' + i);
+  if (!row) return;
+  if (!row.hasAttribute('hidden')) {
+    row.setAttribute('hidden', '');
+    btn.setAttribute('aria-expanded', 'false');
+    return;
+  }
+  row.removeAttribute('hidden');
+  btn.setAttribute('aria-expanded', 'true');
+  var id = 'postTrend' + i;
+  if (trendStore[id]) { drawTrend(id); return; }   // 取过了：展开后按真实尺寸重画一次
+  if (row.getAttribute('data-loading') === '1') return;
+  var body = row.querySelector('.post-trend-body');
+  row.setAttribute('data-loading', '1');
+  body.innerHTML = '<div class="detail-empty">加载中...</div>';
+  var url = '/api/user/' + encodeURIComponent(row.getAttribute('data-uid'))
+    + '/post/' + encodeURIComponent(btn.getAttribute('data-cid')) + '/trend';
+  fetch(url).then(function (r) { return r.json(); }).then(function (p) {
+    row.removeAttribute('data-loading');
+    if (!row.isConnected) return;
+    if (p.error) { body.innerHTML = '<div class="detail-empty">' + esc(p.error) + '</div>'; return; }
+    if (!p.metrics_enabled) {
+      body.innerHTML = '<div class="chart-empty mono">未开启互动量记录（METRICS_ENABLED=false）</div>';
+      return;
+    }
+    if (!p.trend.has_data) {
+      body.innerHTML = '<div class="chart-empty mono">这条作品的样本还不够（目前 ' + esc(p.samples)
+        + ' 个小时的采样）：新增量要相邻两个小时都采到，新出现的作品要等 1 到 2 小时</div>';
+      return;
+    }
+    body.innerHTML = trendBlock(id, p.trend, '这条作品的互动量趋势', '', '');
+    drawTrend(id);
+  }).catch(function () {
+    row.removeAttribute('data-loading');
+    if (row.isConnected) body.innerHTML = '<div class="detail-empty">加载失败</div>';
+  });
+}
+
+// 事件委托：详情内容会整块重写，监听不能挂在会被换掉的节点上
+document.getElementById('detailContent').addEventListener('click', function (e) {
+  var t = e.target.closest ? e.target.closest('.vtoggle, [data-trend]') : null;
+  if (!t) return;
+  if (t.classList.contains('vtoggle')) { togglePost(t); return; }
+  var id = t.getAttribute('data-trend');
+  var st = trendStore[id];
+  if (!st) return;
+  if (t.hasAttribute('data-range')) st.range = t.getAttribute('data-range');
+  if (t.hasAttribute('data-mode')) st.mode = t.getAttribute('data-mode');
+  drawTrend(id);
+});
 
 function di(label, value, tip) {
   var t = tip ? ' title="' + esc(tip) + '"' : '';

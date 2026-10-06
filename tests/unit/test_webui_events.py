@@ -285,23 +285,6 @@ def test_events_chart_payload_sums_to_the_window_total():
     )
 
 
-def test_metrics_chart_payload_keeps_gaps_as_null():
-    """缺值是断点、不是 0：写 0 会在曲线上造出一个平台从没说过的悬崖。"""
-    series = [
-        {
-            "hour": NOW - timedelta(hours=1),
-            "digg": 10,
-            "comment": None,
-            "share": 1,
-            "collect": 2,
-        },
-        {"hour": NOW, "digg": None, "comment": 3, "share": 0, "collect": None},
-    ]
-    payload = webui.metrics_chart_payload(series)
-    digg = next(item for item in payload["datasets"] if item["label"] == "点赞")
-    assert digg["data"] == [10, None]
-
-
 # --------------------------------------------------------------------- 投递状态
 
 
@@ -544,3 +527,19 @@ def test_chart_bootstrap_says_so_when_it_cannot_draw():
     assert "图表库没有加载" in js and "/assets/chart.umd.min.js" in js
     assert "图表绘制失败" in js
     assert "textContent" in js, "报错文本里可能带任何字符，不能走 innerHTML"
+
+
+def test_chart_bootstrap_supports_the_trend_charts():
+    """趋势图要的四件事：整数刻度、带符号的提示、少量格子时画点、能按新载荷重绘。"""
+    js = webui.charts.BOOTSTRAP_JS
+
+    assert "precision: 0" in js, "新增量常常只有 0 到 3，不限制会给出 0.5、1.5 这种刻度"
+    assert "payload.signed" in js and "(v > 0 ? '+' : '')" in js
+    assert "payload.labels.length <= 48" in js
+    assert "payload.straight ? 0 : 0.25" in js, "离散的每格数值用直线段"
+    assert "function redraw(el)" in js and "redraw: redraw" in js
+    redraw = js[js.index("function redraw(el)") : js.index("window.dyChart = {")]
+    assert redraw.index("clear(el)") < redraw.index(
+        "removeAttribute('data-chart-ready')"
+    )
+    assert "mount(el.parentNode)" in redraw

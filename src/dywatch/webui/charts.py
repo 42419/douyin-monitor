@@ -229,32 +229,12 @@ def events_chart_payload(
     }
 
 
-def metrics_chart_payload(
-    series: Sequence[Mapping[str, Any]], *, hourly: bool = True
-) -> dict[str, Any]:
-    """一个账号逐小时的互动量 → 折线图载荷。
-
-    缺值是 `null`（断点）而不是 0：平台的载荷里没有这个数时，写 0 会在曲线上造出一个
-    "数据掉到零"的悬崖，而平台从没这么说过（`models.py` 的第一条契约）。
-    """
-    labels: list[str] = []
-    for row in series:
-        stamp = row.get("hour")
-        labels.append(
-            stamp.astimezone().strftime("%H:%M" if hourly else "%m-%d") if stamp else ""
-        )
-    return {
-        "type": "line",
-        "labels": labels,
-        "datasets": [
-            {
-                "label": label,
-                "color": _series_color(key),
-                "data": [row.get(key) for row in series],
-            }
-            for key, label in METRIC_SERIES
-        ],
-    }
+def metric_series_meta() -> list[dict[str, str]]:
+    """四个互动量指标的 `{key, label, color}`（图例顺序）；颜色是 CSS 变量名，不是色值。"""
+    return [
+        {"key": key, "label": label, "color": _series_color(key)}
+        for key, label in METRIC_SERIES
+    ]
 
 
 def _series_color(key: str) -> str:
@@ -337,7 +317,8 @@ BOOTSTRAP_JS = r"""
           beginAtZero: true,
           grid: {color: line2, drawTicks: false},
           border: {display: false},
-          ticks: {color: text3, font: {size: 10}, padding: 6,
+          // 计数没有小数：新增量常常只有 0 到 3，不限制的话 Chart.js 会给出 0.5、1.5 这种刻度
+          ticks: {color: text3, font: {size: 10}, padding: 6, precision: 0,
                   callback: function (v) { return fmtNum(v); }}
         }
       }
@@ -346,6 +327,17 @@ BOOTSTRAP_JS = r"""
 
   function build(canvas, payload) {
     var opts = baseOptions();
+    if (payload.signed) {
+      // 新增量：正数前面带 +，一眼分得清「涨了 5」和「现在是 5」
+      opts.plugins.tooltip.callbacks.label = function (item) {
+        var v = item.parsed.y;
+        return ' ' + item.dataset.label + ' ' + (v > 0 ? '+' : '') + fmtNum(v);
+      };
+    }
+    // 格子不多（24 小时 / 7 天 / 总览）时画点：新增量大多是 0，偶尔才有一两格非零，
+    // 没有点的话一段孤零零的短线几乎看不见。以前的曲线是每小时一个点、最多 336 个，
+    // 画点会变成一串珠子
+    var showPoints = payload.type !== 'bar' && payload.labels.length <= 48;
     if (payload.type === 'bar') {
       opts.scales.x.stacked = true;
       opts.scales.y.stacked = true;
@@ -356,8 +348,7 @@ BOOTSTRAP_JS = r"""
       var c = color(d.color);
       var flags = {
         label: d.label, data: d.data, borderColor: c,
-        /* 曲线上的点密度是"每小时一个"，画点会变成一串珠子 */
-        pointRadius: 0, pointHoverRadius: 3,
+        pointRadius: showPoints ? 2.5 : 0, pointHoverRadius: showPoints ? 4 : 3,
         pointHoverBackgroundColor: c, borderWidth: 1.5
       };
       if (payload.type === 'bar') {
@@ -367,7 +358,9 @@ BOOTSTRAP_JS = r"""
         flags.barPercentage = 0.86;
         flags.categoryPercentage = 0.9;
       } else {
-        flags.tension = 0.25;
+        // 离散的每格数值（新增量只有 0 到 5 这种整数）用直线段连接：平滑曲线会在点与点之间
+        // 画出并不存在的弧度，只有 3 个点的 7 天视图尤其明显。`straight` 由趋势图传入
+        flags.tension = payload.straight ? 0 : 0.25;
         flags.spanGaps = false;   // 缺值就是断点，不连线
       }
       datasets.push(flags);
@@ -465,8 +458,16 @@ BOOTSTRAP_JS = r"""
     else if (mq.addListener) mq.addListener(onTheme);
   }
 
+  // 载荷换了（切换范围 / 口径）：销毁这一个图，再按 <script data-chart-data> 里的新载荷重建
+  function redraw(el) {
+    clear(el);
+    el.removeAttribute('data-chart-ready');
+    mount(el.parentNode);
+  }
+
   window.dyChart = {
-    mount: mount, clear: clear, rebuild: rebuild, fmtNum: fmtNum, cssVar: cssVar
+    mount: mount, clear: clear, redraw: redraw, rebuild: rebuild,
+    fmtNum: fmtNum, cssVar: cssVar
   };
 
   // 页面加载完就把已经在 DOM 里的图挂上。以前这一步要靠每个页面自己记得调用：
@@ -496,7 +497,7 @@ __all__ = [
     "empty_block",
     "events_chart_payload",
     "metric_legend",
-    "metrics_chart_payload",
+    "metric_series_meta",
     "script_tag",
     "tone_legend",
 ]
