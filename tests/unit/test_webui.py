@@ -1491,3 +1491,67 @@ def test_status_page_adds_no_explanation_when_nothing_is_wrong(tmp_path):
         html = render_page(settings)
         assert "DTK 探测它时没连上" not in html, browser_rpc
         assert "健康检查没有返回 ok" not in html, browser_rpc
+
+
+# ------------------------------------------------- 内联脚本不能被提前截断
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["webui.page_status._PAGE_JS", "webui.page_events._PAGE_JS"],
+)
+def test_an_inline_script_contains_exactly_one_script_end_tag_at_the_very_end(name):
+    """这些常量自己带着 `<script>…</script>` 的外壳，而它们住在一个内联脚本里：浏览器在
+    **第一个**脚本结束标记处就把脚本截断了——哪怕它写在 JS 注释里。后面的代码会被当成页面
+    文字显示出来，整个页面的脚本都不工作。编译、单元测试都发现不了，只有页面真的被解析才暴露。
+
+    `<!--` 也不行：它之后再出现 `<script` 会让解析器进入"双重转义"状态，脚本结束标记
+    就不再结束脚本了。
+    """
+    text = eval(name, {"webui": webui})  # noqa: S307 - 只在测试里取模块常量
+
+    assert text.lower().count("</script") == 1
+    assert text.rstrip().lower().endswith("</script>")
+    assert "<!--" not in text
+
+
+def test_the_chart_bootstrap_is_free_of_script_terminators():
+    js = webui.charts.BOOTSTRAP_JS.lower()
+
+    assert "</script" not in js and "<!--" not in js
+
+
+def test_the_rendered_status_page_has_no_javascript_leaking_into_the_document(tmp_path):
+    """用符合浏览器规范的解析器看渲染结果：脚本里的代码不该出现在任何可见文字里。"""
+    from html.parser import HTMLParser
+
+    class VisibleText(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.in_script = False
+            self.text: list[str] = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag in ("script", "style"):
+                self.in_script = True
+
+        def handle_endtag(self, tag):
+            if tag in ("script", "style"):
+                self.in_script = False
+
+        def handle_data(self, data):
+            if not self.in_script:
+                self.text.append(data)
+
+    parser = VisibleText()
+    parser.feed(render_page(make_settings(tmp_path)))
+    visible = "".join(parser.text)
+
+    for marker in (
+        "function ",
+        "esc(",
+        "trendBlock",
+        "document.getElementById",
+        "var ",
+    ):
+        assert marker not in visible, f"脚本漏进了页面文字：{marker!r}"
