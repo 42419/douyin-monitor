@@ -41,16 +41,47 @@ DTK 那一侧是这样判定的（DTK v5 `routes/system.py`）：
 | DTK 探测它时没连上      | `unreachable` | 探测抛了异常：1 秒内没连上 / 没读完（含超时）、连接被拒、域名解析失败等 |
 | 它的健康检查没有返回 ok | `degraded`    | 连上了，但 `/rpc/health` 不是 2xx，或返回的 `status` 不是 `ok`          |
 
-排查 `unreachable`：
+排查 `unreachable`。**先看清「从宿主机或容器里 `curl` 得通」证明了什么**：它只证明那个地址能连通，
+而且你给的是 5 秒超时、地址是你自己从 `.env` 里读出来再传进去的。它**不能**证明 DTK 的 API
+进程此刻用的就是这个地址，也不能证明 1 秒内连得上。下面三项分别排除这两件事：
 
-1. 在 DTK 日志里搜 `system.browser_rpc.unreachable`，`error=` 后面是异常类型：`ConnectTimeout` /
-   `ReadTimeout` 是超过了 1 秒（多半是跨机器的延迟，或浏览器那一端正忙）；`ConnectError`
-   是根本连不上（地址、端口、防火墙）。
-2. 在 **DTK 的 API 容器里**直接量一次，和探测走同样的客户端：
-   `python -c "import httpx,time;t=time.time();r=httpx.get('<DTK_BROWSER_RPC_URL>/rpc/health',timeout=10);print(r.status_code,r.text,round(time.time()-t,3))"`。
-   稳定超过 1 秒，就是上面说的情况。
-3. DTK 容器里设了 `HTTP_PROXY` / `HTTPS_PROXY` 的话，确认 `NO_PROXY` 包含 browser-rpc 的地址：
-   探测用的 httpx 默认会读这些环境变量，走了代理的局域网地址多半不通。
+1. **DTK 的 API 进程实际在用哪个地址。** `env_file` 里的改动要**重建容器**才生效——
+   `docker compose restart` 不会重新读 `.env`，所以容器里可能还是改之前的值（比如 `.env.example`
+   里写的 `http://browser-rpc:9000`，换了机器之后这个名字根本解析不出来）：
+   `docker compose -p dtk -f docker/compose.yml exec -T api printenv DTK_BROWSER_RPC_URL`，
+   和 `.env` 里的对一下；不一致就 `docker compose -p dtk -f docker/compose.yml up -d --force-recreate api worker`。
+2. **用和探测同一个客户端、同样的 1 秒超时，连续量 20 次**（`httpx.get` 每次新建一个连接，
+   和探测一样；`urllib` 不是同一个客户端）：
+
+   ```bash
+   docker compose -p dtk -f docker/compose.yml exec -T api python - <<'EOF'
+   import os, time, httpx
+   url = os.environ.get("DTK_BROWSER_RPC_URL", "")
+   print("容器里实际的 URL =", repr(url))
+   ok = 0
+   for i in range(20):
+       t = time.time()
+       try:
+           r = httpx.get(url.rstrip("/") + "/rpc/health", timeout=1.0)
+           ok += r.status_code == 200
+           print(f"{i:2d}  HTTP {r.status_code}  {1000 * (time.time() - t):6.0f} ms")
+       except Exception as e:
+           print(f"{i:2d}  {type(e).__name__}  {1000 * (time.time() - t):6.0f} ms")
+       time.sleep(1)
+   print(f"成功 {ok} / 20")
+   EOF
+   ```
+
+   怎么读结果：`ReadTimeout` / `ConnectTimeout`、耗时都顶着 1000 ms，就是延迟问题；`ConnectError`
+   是地址、端口或网络不通；20 次全是 `200` 且都在几百毫秒以内，说明探测本身没问题，回到第 1 项和
+   DTK 日志。
+
+3. **DTK 日志里搜 `system.browser_rpc.unreachable`**，`error=` 后面是异常类型，和上一项对得上。
+
+走 Tailscale 连过去的话，还有一个值得排除的原因：隔了一阵没有流量之后，第一个包可能要先走中继
+（DERP）或重新打洞，那一次连接就可能超过 1 秒。`tailscale ping <对端 IP>` 能看到当前走的是直连
+还是中继。另外，DTK 容器里设了 `HTTP_PROXY` / `HTTPS_PROXY` 的话，确认 `NO_PROXY` 包含
+browser-rpc 的地址：探测用的 httpx 默认会读这些环境变量。
 
 这个读数**不会让 dywatch 停下来**，它只是 DTK 的一次健康检查。真正该看的是 DTK 控制台里身份池
 有没有在正常补充；补充正常，这一行可以放着。想让它变绿，就让 browser-rpc 到 DTK 的延迟稳定在
