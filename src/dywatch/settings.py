@@ -216,7 +216,7 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
     SettingSpec("TELEGRAM_CHAT_ID", "", "str", "Telegram 目标 chat id"),
     SettingSpec("WEBHOOK_URL", "", "str", "通用 webhook 地址（POST JSON）"),
     # ---------------------------------------------------------------- 面板
-    SettingSpec("WEB_ENABLED", False, "bool", "是否启用只读面板"),
+    SettingSpec("WEB_ENABLED", False, "bool", "是否启用 Web 面板"),
     SettingSpec("WEB_HOST", "127.0.0.1", "str", "面板监听地址（无鉴权，默认只听回环）"),
     SettingSpec("WEB_PORT", 8787, "int", "面板监听端口"),
     # ---------------------------------------------------------------- 其他

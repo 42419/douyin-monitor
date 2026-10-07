@@ -87,5 +87,5 @@ tail -f /opt/douyin-monitor/log/info/monitor.log   # 实时日志（应用侧）
 
 - 熟悉[命令行](/guide/commands)的其余子命令
 - 配置[监控列表 users.conf](/guide/users-conf)
-- 打开[只读面板](/guide/dashboard)
+- 打开[Web 面板](/guide/dashboard)
 - 按需调整[配置参考](/config/reference)里的各项参数

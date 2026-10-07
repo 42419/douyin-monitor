@@ -33,7 +33,7 @@
 
 ## 实例名
 
-投递结果（`Delivery.sent` / `failed`）与只读面板都会显示实例名，所以**它必须全局唯一**：
+投递结果（`Delivery.sent` / `failed`）与 Web 面板都会显示实例名，所以**它必须全局唯一**：
 `failed` 是字典，两个实例同名会互相覆盖失败原因。
 
 - 不写 `name=` 时按类型自动编号：第一个叫 `dingtalk`，第二个 `dingtalk-2`，第三个 `dingtalk-3`…

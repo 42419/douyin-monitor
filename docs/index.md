@@ -30,7 +30,7 @@ features:
     title: 分级确认，减少误报
     details: 新作品即时推送；作品消失、全部消失、疑似漏检各自有独立的确认轮数与抑制窗口，避免抖音接口抖动带来的误报。
   - icon: 📊
-    title: 只读面板
+    title: Web 面板
     details: WEB_ENABLED=true 打开一个不消耗身份、无需鉴权的状态面板，一屏看完每个账号的最新状态与事件历史。
   - icon: ⚙️
     title: systemd 原生部署

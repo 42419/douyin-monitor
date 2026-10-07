@@ -157,7 +157,7 @@ sudo bash deploy/install.sh --yes                  # 必须重跑：.venv 里装
 
 顺带提供机器接口：`/api/state`、`/api/health`、`/api/user/<sec_user_id>`、`/api/user/<sec_user_id>/post/<content_id>/trend`、`/api/events`、
 `/metrics`（Prometheus）、`/healthz` `/readyz`。读法与移动端布局见
-[只读面板](https://dywatch.yunov.top/guide/dashboard)。
+[Web 面板](https://dywatch.yunov.top/guide/dashboard)。
 
 ---
 
@@ -171,7 +171,7 @@ sudo bash deploy/install.sh --yes                  # 必须重跑：.venv 里装
 | 完整安装 / 卸载 / 首次配置                     | [安装 dywatch](https://dywatch.yunov.top/guide/quick-start)                                                            |
 | 查某个命令怎么用                               | [命令行](https://dywatch.yunov.top/guide/commands)                                                                     |
 | 加账号、改昵称、粘主页链接                     | [监控列表 users.conf](https://dywatch.yunov.top/guide/users-conf)                                                      |
-| 看面板每个读数是什么意思                       | [只读面板](https://dywatch.yunov.top/guide/dashboard)                                                                  |
+| 看面板每个读数是什么意思                       | [Web 面板](https://dywatch.yunov.top/guide/dashboard)                                                                  |
 | **查某个配置项的默认值与含义（全部 60 项）**   | [配置参考](https://dywatch.yunov.top/config/reference)                                                                 |
 | 估机器、网络与磁盘够不够                       | [容量估算](https://dywatch.yunov.top/config/capacity)                                                                  |
 | 搞清"新作品 / 作品消失 / 漏检 / ID 写错"怎么判 | [判定规则](https://dywatch.yunov.top/guide/detection-rules)                                                            |

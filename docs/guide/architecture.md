@@ -20,7 +20,7 @@ src/dywatch/
 ├── render.py       事件 → Markdown / 纯文本 / 短标题
 ├── alerts.py       运维告警的抑制窗口
 ├── notifiers/      六个渠道 + 静默空通知器
-└── webui/          只读面板与探针，按职责拆成一层一层（见下）
+└── webui/          Web 面板与探针，按职责拆成一层一层（见下）
     ├── theme.py      全部 CSS、页面骨架、共用小组件模板
     ├── common.py     快照读取、类型归一化、HTML 转义、账号分级、横幅
     ├── charts.py     Chart.js 静态资源、前端引导脚本、数据分桶（纯函数）

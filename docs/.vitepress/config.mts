@@ -48,7 +48,7 @@ export default defineConfig({
             { text: "安装 dywatch", link: "/guide/quick-start" },
             { text: "命令行", link: "/guide/commands" },
             { text: "监控列表 users.conf", link: "/guide/users-conf" },
-            { text: "只读面板", link: "/guide/dashboard" },
+            { text: "Web 面板", link: "/guide/dashboard" },
           ],
         },
         {

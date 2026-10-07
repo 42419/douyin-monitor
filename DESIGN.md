@@ -517,7 +517,7 @@ v5 的代码质量主要来自一批**成文且被强制执行的规矩**。本�
         │                          │                          │
 ┌───────▼────────┐      ┌──────────▼─────────┐      ┌─────────▼────────┐
 │  loop.py       │      │  pipeline.py       │      │  webui/          │
-│  轮次循环       │─────▶│  fetch→diff→persist│      │  只读面板 + 探针  │
+│  轮次循环       │─────▶│  fetch→diff→persist│      │  Web 面板 + 探针  │
 │  pacer 节奏     │      │  →notify 编排       │      │                  │
 └───────┬────────┘      └──────────┬─────────┘      └─────────┬────────┘
         │                          │                          │
@@ -568,7 +568,7 @@ v5 的代码质量主要来自一批**成文且被强制执行的规矩**。本�
 | `render.py`    | 事件 → 三类文案（markdown / 纯文本 / 短标题）                                                                                                                                                                                                                         | 不发送                                                                                    |
 | `messages.py`  | 全部文案常量与格式化（时间、时长、数字缩写、**更新频率分级**、事件与 tombstone 原因的中文）                                                                                                                                                                           | 不含逻辑分支                                                                              |
 | `notifiers/*`  | 渠道 payload 构造 + 投递 + 单渠道失败隔离                                                                                                                                                                                                                             | 不跨渠道重试、不改写文案                                                                  |
-| `webui/*`      | 只读面板：状态页 `GET /`（LED 阵列 / 数据条 / 上游健康卡片 / 自身降级横幅 / 账号列表 / 详情弹窗）与事件时间线 `GET /events`（过滤 + 柱状图 + 载荷展开）、`/healthz`、`/readyz`、`/api/state`、`/api/health`、`/api/user/{id}`、`/api/events`、`/assets/*`、`/metrics` | 不做鉴权、**不发上游请求**、不写状态库（连探针也不创建库文件）                            |
+| `webui/*`      | Web 面板：状态页 `GET /`（LED 阵列 / 数据条 / 上游健康卡片 / 自身降级横幅 / 账号列表 / 详情弹窗）与事件时间线 `GET /events`（过滤 + 柱状图 + 载荷展开）、`/healthz`、`/readyz`、`/api/state`、`/api/health`、`/api/user/{id}`、`/api/events`、`/assets/*`、`/metrics` | 不做鉴权、**不发上游请求**、不写状态库（连探针也不创建库文件）                            |
 
 `webui/` 是一个包，内部按"CSS / 数据访问 / 图表 / 两个页面 / HTTP"分层：
 `theme.py`（全部 CSS 与页面骨架）、`common.py`（快照读取、归一化、转义、账号分级）、
@@ -1241,7 +1241,7 @@ douyin-monitor/
 │   ├── notifiers/
 │   │   ├── base.py  composite.py  null.py
 │   │   └── dingtalk.py wecom.py bark.py serverchan.py telegram.py webhook.py
-│   └── webui/                 # 只读面板 + 探针，按职责分层（见 4.2）
+│   └── webui/                 # Web 面板 + 探针，按职责分层（见 4.2）
 │       ├── theme.py  common.py  charts.py  queries.py
 │       ├── page_status.py  page_events.py  server.py
 │       └── assets/chart.umd.min.js   # Chart.js 4.4.7 本地打包（不走 CDN）
@@ -1381,7 +1381,7 @@ douyin-monitor/
 | **S1** 判定与状态   | ✅   | `diff.py` 纯函数 + `state.py` SQLite；**112 个测试通过**                                                                                                                                                                                                                                                                                                           |
 | **S2** 循环与节奏   | ✅   | `loop.py` + `pacer.py` + `scheduler.py` + `pipeline.py`；`once` 从空库跑两轮：第一轮 `新增初始化 1 个`，第二轮 `均无变化`，无重复推送                                                                                                                                                                                                                              |
 | **S3** 通知层       | ✅   | 六个渠道 + 静默空通知器 + `alerts.py` 抑制窗口；钉钉/企微/Bark/Server 酱/Telegram/webhook 的 payload 形状均有单测                                                                                                                                                                                                                                                  |
-| **S4** 面板与探针   | ✅   | 只读面板 + `/healthz` `/readyz` `/metrics`；`status` 命令输出账号表。**面板后从旧项目整体移植过一次**（LED 阵列 / 数据条 / 详情弹窗，见修正 #9）                                                                                                                                                                                                                   |
+| **S4** 面板与探针   | ✅   | Web 面板 + `/healthz` `/readyz` `/metrics`；`status` 命令输出账号表。**面板后从旧项目整体移植过一次**（LED 阵列 / 数据条 / 详情弹窗，见修正 #9）                                                                                                                                                                                                                   |
 | **S5** 交付         | ✅   | systemd 单元（加固齐全）+ 日志轮转（独立 cron，D16）+ `install.sh` + README。**不做容器镜像**（D14）                                                                                                                                                                                                                                                               |
 | **S6** 隐藏作品核验 | ✅   | 见 §4.10。默认关闭（`HIDDEN_POST_CHECK_ENABLED`），第一版设计稿里没有，是上线后发现游客身份会漏看作者主页最新作品才补的能力；覆盖了触发条件、定向核验、事件分类、schema 迁移（v1→v2）的单测                                                                                                                                                                        |
 | **S7** 观测与图表   | ✅   | 2026-10-02：互动量时间序列落库（`post_metrics`，schema v5→v6）、上游健康读数进快照（**主循环定期取，面板不自己发请求**）、`SELF_DEGRADED` 补齐（磁盘余量 + 状态库可写）、`/metrics` 补上"上游健康"与"自身状态"两组、事件时间线页 `/events`（Chart.js 本地打包，不走 CDN）；`webui.py` 拆成 `webui/` 包（**CSS 整段搬运、一个字没改**）。设计与取舍见 §4.9、D22~D26 |
