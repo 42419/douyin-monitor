@@ -21,7 +21,6 @@ from dywatch.state import (
     SCHEMA_VERSION,
     StateStore,
     read_events,
-    read_metrics_series,
 )
 
 NOW = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
@@ -508,28 +507,6 @@ def test_metrics_skip_rows_without_a_single_number(store):
     with store._tx() as tx:  # noqa: SLF001
         ids = [row[0] for row in tx.execute("SELECT content_id FROM post_metrics")]
     assert ids == ["p2"]
-
-
-def test_metrics_series_sums_per_hour_and_keeps_missing_columns_null(store):
-    """读回来的序列按小时合计；整列没有值的字段是 `None`（图上的断点），不是 0。"""
-    state = sample_state()
-    store.save_round(
-        "u1",
-        state,
-        events=[],
-        now=NOW,
-        metrics=[
-            PostMetrics(content_id="p1", digg_count=100, collect_count=2),
-            PostMetrics(content_id="p2", digg_count=200),
-        ],
-    )
-
-    with store._tx() as tx:  # noqa: SLF001
-        series = read_metrics_series(tx, sec_user_id="u1")
-    assert [item["hour"] for item in series] == [NOW]
-    assert series[0]["digg"] == 300 and series[0]["posts"] == 2
-    assert series[0]["collect"] == 2
-    assert series[0]["share"] is None, "一个值都没有的字段必须是 None，不是 0"
 
 
 def test_events_are_read_newest_first_by_time_not_by_row_id(store):

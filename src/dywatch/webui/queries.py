@@ -39,7 +39,6 @@ from ..state import (
     read_event_ticks,
     read_events,
     read_latest_post_metrics,
-    read_metrics_series,
     read_post_metric_series,
 )
 from ..users import load_users_conf
@@ -106,13 +105,11 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
         ).fetchall()
         metrics_enabled = bool(settings.get("METRICS_ENABLED", True))
         keep_days = int(settings.get("METRICS_KEEP_DAYS", 14) or 14)
-        series: list[dict[str, Any]] = []
         per_post: dict[str, list[dict[str, Any]]] = {}
         latest: dict[str, dict[str, Any]] = {}
         now = datetime.now(timezone.utc)
         if metrics_enabled:
             since = now - timedelta(days=keep_days)
-            series = read_metrics_series(conn, sec_user_id=sec_user_id, since=since)
             per_post = read_all_post_metric_series(
                 conn, sec_user_id=sec_user_id, since=since
             )
@@ -195,21 +192,10 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
             }
             for event in events
         ],
-        # 互动量：小时级序列 + 是否开着记录。三条都要给——只给序列的话，
-        # "没开记录"和"开了但还没采到"在画面上长得一样，而这两种情况的处理方式完全不同。
+        # 互动量：是否开着记录 + 趋势。两个都要给——只给趋势的话，"没开记录"和"开了但还没
+        # 采到"在画面上长得一样，而这两种情况的处理方式完全不同。
         "metrics_enabled": metrics_enabled,
         "metrics_keep_days": keep_days,
-        "metrics_series": [
-            {
-                "hour": item["hour"].isoformat() if item["hour"] else None,
-                "digg": item["digg"],
-                "comment": item["comment"],
-                "share": item["share"],
-                "collect": item["collect"],
-                "posts": item["posts"],
-            }
-            for item in series
-        ],
         # 趋势由服务端算（`trend` 是纯函数，能在 Python 里直接测，丢给前端算就等于把这部分
         # 逻辑放进一段没法单测的字符串里）。**画的是新增量，不是累计总数**——总数涨幅占比
         # 不到 1%，画出来是四条水平线；也**不是某一条作品**：`posts` 是真正参与合计的作品数，

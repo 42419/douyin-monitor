@@ -883,41 +883,6 @@ def read_event_ticks(
     return out
 
 
-def read_metrics_series(
-    conn: sqlite3.Connection, *, sec_user_id: str, since: datetime | None = None
-) -> list[dict[str, Any]]:
-    """一个账号**逐小时**的互动量合计（该账号已知作品在同一小时里的和）。
-
-    `SUM` 会跳过 NULL，整列全 NULL 时返回 NULL —— 这正是要的：缺值的字段在图上应当
-    是断点，而不是 0。写 0 会在曲线里造出一个"数据突然掉到零"的假象，
-    而平台从没这么说过（`models.py` 的第一条契约）。
-    """
-    params: list[Any] = [sec_user_id]
-    clause = "WHERE sec_user_id = ?"
-    if since is not None:
-        clause += " AND hour >= ?"
-        params.append(_metrics_hour(since))
-    rows = conn.execute(
-        "SELECT hour,"
-        " SUM(digg_count) AS digg, SUM(comment_count) AS comment,"
-        " SUM(share_count) AS share, SUM(collect_count) AS collect,"
-        " COUNT(*) AS posts"
-        f" FROM post_metrics {clause} GROUP BY hour ORDER BY hour",
-        params,
-    ).fetchall()
-    return [
-        {
-            "hour": _dt(row["hour"]),
-            "digg": row["digg"],
-            "comment": row["comment"],
-            "share": row["share"],
-            "collect": row["collect"],
-            "posts": int(row["posts"] or 0),
-        }
-        for row in rows
-    ]
-
-
 def read_post_metric_series(
     conn: sqlite3.Connection,
     *,
@@ -957,8 +922,7 @@ def read_all_post_metric_series(
 ) -> dict[str, list[dict[str, Any]]]:
     """该账号**每条作品**的逐小时互动量，按 `content_id` 分组（算「新增量」用）。
 
-    和 `read_metrics_series`（按小时求和）的区别是**不求和**：新增量必须先在单条作品内
-    做相邻小时的差、再求和。先求和再做差，会把「这个小时多了/少了一条作品」当成互动量的
+    **不求和**：新增量必须先在单条作品内做相邻小时的差、再求和。先求和再做差，会把「这个小时多了/少了一条作品」当成互动量的
     涨跌——新作品一出现，合计就凭空跳高一截，而那一截不是任何人点的赞。
     """
     params: list[Any] = [sec_user_id]
@@ -1092,6 +1056,5 @@ __all__ = [
     "read_event_ticks",
     "read_events",
     "read_latest_post_metrics",
-    "read_metrics_series",
     "read_post_metric_series",
 ]

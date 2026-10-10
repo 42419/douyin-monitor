@@ -1196,7 +1196,6 @@ def test_user_detail_includes_the_engagement_series_and_trend(tmp_path):
     seed_metrics(settings)
     detail = user_detail(settings, ID_OK)
 
-    assert len(detail["metrics_series"]) == 2, "逐小时累计合计仍保留给读接口的人"
     trend = detail["metrics_trend"]
     assert trend["has_data"] is True
     assert trend["posts"] == 4, "真正参与合计的作品数"
@@ -1223,6 +1222,45 @@ def test_user_detail_includes_the_engagement_series_and_trend(tmp_path):
     assert detail["posts"][0]["metrics"]["share"] is None
     assert detail["metrics_enabled"] is True
     assert "metrics_chart" not in detail, "旧的累计总数图表载荷已被趋势取代"
+    assert "metrics_series" not in detail, (
+        "没人用的死载荷：每次打开详情白查一次、白传 336 行"
+    )
+
+
+def test_trend_counts_the_posts_that_actually_went_into_the_sum(tmp_path):
+    """图上写「N 条作品的合计」，N 必须是真正加进去的那几条。
+
+    真实账号里有些作品没有互动量记录（隐藏的、刚加的、开记录之前抓过的）：拿已知作品数当
+    N，就把覆盖面说大了。这里让其中一条没有任何记录——已知 4 条，参与合计的只有 3 条。
+    """
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    seed_metrics(settings)
+    with sqlite3.connect(settings.db_path) as conn:
+        conn.execute("DELETE FROM post_metrics WHERE content_id = ?", (f"74{0:017d}",))
+
+    trend = user_detail(settings, ID_OK)["metrics_trend"]
+
+    assert trend["known"] == 4
+    assert trend["posts"] == 3
+
+
+def test_a_single_sample_does_not_count_as_taking_part(tmp_path):
+    """有记录 ≠ 参与了合计：只有一个采样的作品还没产生任何新增量。"""
+    settings = make_settings(tmp_path)
+    seed_db(settings)
+    seed_metrics(settings)
+    with sqlite3.connect(settings.db_path) as conn:
+        conn.execute(
+            "DELETE FROM post_metrics WHERE content_id = ? AND hour = "
+            "(SELECT MIN(hour) FROM post_metrics WHERE content_id = ?)",
+            (f"74{0:017d}",) * 2,
+        )
+
+    trend = user_detail(settings, ID_OK)["metrics_trend"]
+
+    assert trend["posts"] == 3, "那条作品只剩一个采样"
+    assert trend["known"] == 4
 
 
 def test_user_detail_says_when_metrics_are_switched_off(tmp_path):
@@ -1232,7 +1270,7 @@ def test_user_detail_says_when_metrics_are_switched_off(tmp_path):
     seed_metrics(settings)
     detail = user_detail(settings, ID_OK)
     assert detail["metrics_enabled"] is False
-    assert detail["metrics_series"] == [] and detail["metrics_trend"] is None
+    assert detail["metrics_trend"] is None
 
 
 def test_detail_page_shows_per_post_engagement_badges(tmp_path):
@@ -1259,15 +1297,15 @@ def test_user_endpoint_survives_engagement_metrics(tmp_path):
         status, body = get(f"{base}/api/user/{ID_OK}")
     assert status == 200, body
     detail = json.loads(body)
-    # JSON 里没有 datetime：两处时间戳都必须是字符串
-    assert isinstance(detail["metrics_series"][0]["hour"], str)
-    assert isinstance(detail["posts"][0]["metrics"]["hour"], str)
-    # 而且**同一份数据在两处必须长得一样**：作品上那行和序列里最后一格是同一个小时桶。
-    # 只断言 `isinstance(..., str)` 是不够的——`json.dumps` 的 `default=str` 兜底会把
-    # `datetime` 降级成 `str(datetime)`（空格分隔），既不是 ISO 也不等于序列里的写法，
-    # 而"能解析出 JSON"照样成立。
-    assert detail["posts"][0]["metrics"]["hour"] == detail["metrics_series"][-1]["hour"]
+    # JSON 里没有 datetime：时间戳必须是**ISO** 字符串。只断言 `isinstance(..., str)` 不够——
+    # `json.dumps` 的 `default=str` 兜底会把 `datetime` 降级成 `str(datetime)`（空格分隔），
+    # 既不是 ISO、前端也解析不了，而"能解析出 JSON"照样成立
+    hour = detail["posts"][0]["metrics"]["hour"]
+    assert isinstance(hour, str) and "T" in hour
+    assert datetime.fromisoformat(hour).minute == 0, "小时桶：整点"
     assert detail["posts"][0]["metrics"]["digg"] == 180
+    # 趋势载荷是纯 JSON 类型，走的是同一次 json.dumps
+    assert detail["metrics_trend"]["has_data"] is True
 
 
 def test_metrics_json_normalises_only_the_timestamp():
