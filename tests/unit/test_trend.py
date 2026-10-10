@@ -115,6 +115,44 @@ def test_nothing_to_difference_means_no_increments(rows):
     assert trend.increments(rows) == {}
 
 
+# --------------------------------------------------------------------- contributing_posts
+
+
+def test_contributing_posts_counts_only_posts_that_went_into_the_sum():
+    """「N 条作品的合计」的 N：有记录 ≠ 参与了合计。"""
+    rows = {
+        "pair": [row(1, digg=1), row(0, digg=2)],
+        "single": [row(0, digg=5)],
+        "gap": [row(3, digg=1), row(0, digg=9)],
+        "none": [
+            row(1, digg=None, comment=None, collect=None, share=None),
+            row(0, digg=None, comment=None, collect=None, share=None),
+        ],
+        "empty": [],
+    }
+
+    assert trend.contributing_posts(rows) == 1
+
+
+def test_a_post_counts_once_however_many_pairs_it_has():
+    rows = {"a": [row(2, digg=1), row(1, digg=2), row(0, digg=3)]}
+
+    assert trend.contributing_posts(rows) == 1
+
+
+def test_a_post_with_a_value_on_both_sides_of_any_one_field_counts():
+    rows = {"a": [row(1, digg=None, comment=3), row(0, digg=None, comment=4)]}
+
+    assert trend.contributing_posts(rows) == 1
+
+
+def test_contributing_posts_agrees_with_has_data():
+    """没有任何作品参与 ⇔ 没有任何新增量。两个不能各说各话。"""
+    for rows in ({}, {"a": [row(0, digg=1)]}, {"a": [row(1, digg=1), row(0, digg=2)]}):
+        out = trend.trend_views(rows, now=NOW, known=3)
+        assert (out["posts"] > 0) == out["has_data"]
+
+
 # --------------------------------------------------------------------- bucketize
 
 
@@ -206,9 +244,11 @@ def test_cumulative_of_nothing_is_nothing():
 def test_trend_views_cover_every_range_and_both_modes_for_every_series():
     rows = {"a": [row(1, digg=10, comment=1), row(0, digg=13, comment=1)]}
 
-    out = trend.trend_views(rows, now=NOW, posts=7)
+    out = trend.trend_views(rows, now=NOW, known=7)
 
-    assert out["posts"] == 7 and out["has_data"] is True
+    assert out["posts"] == 1, "真正参与合计的"
+    assert out["known"] == 7, "现在已知的"
+    assert out["has_data"] is True
     assert [s["key"] for s in out["series"]] == ["digg", "comment", "collect", "share"]
     assert all(s["color"].startswith("--") for s in out["series"])
     assert set(out["views"]) == {"24h", "7d", "all"}
@@ -220,15 +260,16 @@ def test_trend_views_cover_every_range_and_both_modes_for_every_series():
 
 
 def test_trend_views_say_when_there_is_nothing_to_draw():
-    out = trend.trend_views({"a": [row(0, digg=5)]}, now=NOW, posts=1)
+    out = trend.trend_views({"a": [row(0, digg=5)]}, now=NOW, known=1)
 
     assert out["has_data"] is False
+    assert out["posts"] == 0, "一条都没加进去"
 
 
 def test_trend_views_are_plain_json():
     """载荷原样进 /api/user 的 JSON：不能带 datetime / tuple 之类的东西。"""
     rows = {"a": [row(1, digg=1), row(0, digg=2)]}
 
-    out = trend.trend_views(rows, now=NOW, posts=1)
+    out = trend.trend_views(rows, now=NOW, known=1)
 
     assert json.loads(json.dumps(out)) == out

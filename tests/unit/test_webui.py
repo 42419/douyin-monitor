@@ -1199,7 +1199,8 @@ def test_user_detail_includes_the_engagement_series_and_trend(tmp_path):
     assert len(detail["metrics_series"]) == 2, "逐小时累计合计仍保留给读接口的人"
     trend = detail["metrics_trend"]
     assert trend["has_data"] is True
-    assert trend["posts"] == len(detail["posts"]), "写明是几条作品的合计，而不是某一条"
+    assert trend["posts"] == 4, "真正参与合计的作品数"
+    assert trend["known"] == len(detail["posts"]), "现在已知的作品数"
     assert [item["label"] for item in trend["series"]] == [
         "点赞",
         "评论",
@@ -1619,11 +1620,16 @@ def test_expanded_post_rows_never_write_into_a_replaced_account(tmp_path):
 
 
 def test_account_trend_says_it_is_a_sum_not_one_video(tmp_path):
-    """ "这条趋势是哪个视频的"——图上必须写明：不是任何一条，是该账号全部作品的合计。"""
+    """ "这条趋势是哪个视频的"——图上必须写明：不是任何一条，是该账号作品的合计。
+
+    N 写真正加进图里的作品数；它和已知作品数不同时两个数都写，并说明没有足够记录的不参与。
+    """
     html = render_page(make_settings(tmp_path))
 
-    assert "已知作品的合计，不是某一条" in html
-    assert "点下面的作品标题，单独看每一条" in html
+    assert "，不是某一条；点下面的作品标题，单独看每一条" in html
+    assert "' 条已知作品的合计' + tail" in html, "两个数相同：沿用简洁的说法"
+    assert "这张图合计了 " in html and "没有足够记录的不参与" in html
+    assert "t.posts === t.known" in html, "不能拿已知作品数冒充参与合计的作品数"
     assert "作品第一次出现的那一刻只是起点，不算新增" in html
 
 

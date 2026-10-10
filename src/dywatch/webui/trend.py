@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 from . import charts
 
@@ -30,6 +30,37 @@ FIELDS: tuple[str, ...] = tuple(key for key, _label in charts.METRIC_SERIES)
 RANGES: tuple[str, ...] = ("24h", "7d", "all")
 
 _HOUR = timedelta(hours=1)
+
+
+def _valid_pairs(
+    rows: Sequence[Mapping[str, Any]],
+) -> Iterator[tuple[Mapping[str, Any], Mapping[str, Any]]]:
+    """一条作品里**相邻整一小时**的采样对：新增量只能从这样的一对里算出来。
+
+    隔了不止一个小时的一对不算（见模块文档的第二条约定）。
+    """
+    ordered = sorted((r for r in rows if r.get("hour")), key=lambda r: r["hour"])
+    for prev, cur in zip(ordered, ordered[1:]):
+        if cur["hour"] - prev["hour"] == _HOUR:
+            yield prev, cur
+
+
+def contributing_posts(rows_by_post: Mapping[str, Sequence[Mapping[str, Any]]]) -> int:
+    """**真正参与合计**的作品数：至少有一对有效的相邻采样、且至少一个指标两头都有值。
+
+    不是「有互动量记录的作品数」：只有一个采样的作品有记录，但它还没产生任何新增量；
+    也不是「已知作品数」：隐藏的、刚加的、开记录之前抓过的作品根本没有记录。图上写
+    「N 条作品的合计」，N 必须是图里实际加进去的那几条，否则就把覆盖面说大了。
+    """
+    return sum(
+        1
+        for rows in rows_by_post.values()
+        if any(
+            prev.get(field) is not None and cur.get(field) is not None
+            for prev, cur in _valid_pairs(rows)
+            for field in FIELDS
+        )
+    )
 
 
 def increments(
@@ -42,10 +73,7 @@ def increments(
     """
     out: dict[datetime, dict[str, int]] = {}
     for rows in rows_by_post.values():
-        ordered = sorted((r for r in rows if r.get("hour")), key=lambda r: r["hour"])
-        for prev, cur in zip(ordered, ordered[1:]):
-            if cur["hour"] - prev["hour"] != _HOUR:
-                continue
+        for prev, cur in _valid_pairs(rows):
             for field in FIELDS:
                 before, after = prev.get(field), cur.get(field)
                 if before is None or after is None:
@@ -119,7 +147,7 @@ def trend_views(
     rows_by_post: Mapping[str, Sequence[Mapping[str, Any]]],
     *,
     now: datetime,
-    posts: int,
+    known: int,
 ) -> dict[str, Any]:
     """一个账号（或一条作品）的全部趋势视图：3 个范围 × 2 种口径。
 
@@ -137,11 +165,20 @@ def trend_views(
             "cumulative": {f: cumulative(values) for f, values in delta.items()},
         }
     return {
-        "posts": posts,
+        "posts": contributing_posts(rows_by_post),
+        "known": known,
         "has_data": bool(inc),
         "series": charts.metric_series_meta(),
         "views": views,
     }
 
 
-__all__ = ["FIELDS", "RANGES", "bucketize", "cumulative", "increments", "trend_views"]
+__all__ = [
+    "FIELDS",
+    "RANGES",
+    "bucketize",
+    "contributing_posts",
+    "cumulative",
+    "increments",
+    "trend_views",
+]

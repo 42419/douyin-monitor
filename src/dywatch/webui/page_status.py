@@ -635,11 +635,18 @@ function metricsSection(d) {
       + '<div class="chart-empty mono">还没有采到样本：下一轮抓到作品页时开始记录（按小时聚合，'
       + '保留 ' + d.metrics_keep_days + ' 天）</div>';
   }
-  // 回答"这是哪个视频的"：不是任何一条，是这个账号全部作品的合计
-  var scope = '该账号 ' + t.posts + ' 条已知作品的合计，不是某一条；点下面的作品标题，单独看每一条';
+  // 回答"这是哪个视频的"：不是任何一条，是这个账号作品的合计。N 要写**真正加进图里**的
+  // 那几条（`t.posts`），不是已知作品数（`t.known`）：隐藏的 / 刚加的 / 开记录之前抓过的
+  // 作品没有互动量记录，写成"N 条已知作品的合计"就把覆盖面说大了
+  var tail = '，不是某一条；点下面的作品标题，单独看每一条';
+  var scope = t.posts === t.known
+    ? '该账号 ' + t.known + ' 条已知作品的合计' + tail
+    : '这张图合计了 ' + t.posts + ' 条作品的互动量（该账号现在已知 ' + t.known
+      + ' 条；没有足够记录的不参与）' + tail;
   if (!t.has_data) {
+    // 一条都还没加进去：没有"合计"可言，只说账号有几条作品
     return '<div class="chart-block">' + head
-      + '<div class="trend-scope mono">' + esc(scope) + '</div>'
+      + '<div class="trend-scope mono">' + esc('该账号 ' + t.known + ' 条已知作品' + tail) + '</div>'
       + '<div class="chart-empty mono">样本还不够：新增量要同一作品相邻两个小时都采到，'
       + '刚开始记录时要等 1 到 2 小时</div></div>';
   }

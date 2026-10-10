@@ -212,10 +212,10 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
         ],
         # 趋势由服务端算（`trend` 是纯函数，能在 Python 里直接测，丢给前端算就等于把这部分
         # 逻辑放进一段没法单测的字符串里）。**画的是新增量，不是累计总数**——总数涨幅占比
-        # 不到 1%，画出来是四条水平线；也**不是某一条作品**：`posts` 是参与合计的作品数。
-        # `metrics_series`（逐小时累计合计）仍然保留给读接口的人。
+        # 不到 1%，画出来是四条水平线；也**不是某一条作品**：`posts` 是真正参与合计的作品数，
+        # `known` 是现在已知的作品数，两者可以不同（见 `trend.contributing_posts`）。
         "metrics_trend": (
-            trend.trend_views(per_post, now=now, posts=len(posts)) if per_post else None
+            trend.trend_views(per_post, now=now, known=len(posts)) if per_post else None
         ),
     }
 
@@ -249,7 +249,7 @@ def post_trend(
         "content_id": content_id,
         "metrics_enabled": bool(settings.get("METRICS_ENABLED", True)),
         "samples": len(rows),
-        "trend": trend.trend_views({content_id: rows}, now=now, posts=1),
+        "trend": trend.trend_views({content_id: rows}, now=now, known=1),
     }
 
 
