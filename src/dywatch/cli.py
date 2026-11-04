@@ -496,6 +496,7 @@ async def cmd_run(settings: Settings, *, once: bool) -> int:
     )
     for line in runtime.describe():
         logger.info("config", line=line.strip())
+    panel = None
     if settings["WEB_ENABLED"]:
         try:
             from .webui import PanelServer
@@ -524,6 +525,15 @@ async def cmd_run(settings: Settings, *, once: bool) -> int:
     finally:
         elapsed = int((datetime.now(timezone.utc) - started).total_seconds())
         logger.info("dywatch.stopped", uptime_seconds=elapsed)
+        # 面板跑在自己的 daemon 线程里；进程退出时线程会随之消失，但显式 stop() 才会
+        # shutdown()+server_close()，把监听 socket 干净地放掉。
+        if panel is not None:
+            try:
+                panel.stop()
+            except Exception as exc:  # noqa: BLE001 - 关停失败不该盖住正常退出
+                logger.warning(
+                    "panel.stop_failed", error=f"{type(exc).__name__}: {exc}"[:160]
+                )
         await runtime.aclose()
     return 0
 
