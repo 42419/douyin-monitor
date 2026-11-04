@@ -193,6 +193,7 @@ async def cmd_doctor(settings: Settings) -> int:
         wait=0,
         timeout=float(settings["DTK_TIMEOUT"]),
         user_agent=str(settings["DTK_USER_AGENT"]),
+        identity=str(settings["DTK_IDENTITY"]),
     ) as client:
         # 1) 凭据本身
         try:
@@ -222,6 +223,8 @@ async def cmd_doctor(settings: Settings) -> int:
             for scope in REQUIRED_SCOPES
             if scope != "archive:read" or settings["ARCHIVE_ENABLED"]
         ]
+        if settings["DTK_IDENTITY"]:
+            required.append("identity:manage")
         missing = [scope for scope in required if scope not in scopes]
         optional_missing = [
             scope
@@ -234,6 +237,7 @@ async def cmd_doctor(settings: Settings) -> int:
             print(
                 "  archive:read -> 归档交叉确认（可在配置里用 ARCHIVE_ENABLED=false 关掉）"
             )
+            print("  identity:manage -> 把读请求钉在 DTK_IDENTITY 指定的身份上")
             for scope in missing:
                 problems.append(f"缺少 {scope}")
         else:
@@ -271,47 +275,28 @@ async def cmd_doctor(settings: Settings) -> int:
                 except MonitorError as exc:
                     print(f"! 读取存储用量失败：{exc.code}")
 
-        if settings["HIDDEN_POST_CHECK_ENABLED"]:
-            if not settings["PINNED_IDENTITY_ID"]:
-                print("✗ HIDDEN_POST_CHECK_ENABLED=true，但 PINNED_IDENTITY_ID 未配置")
-                problems.append("缺少 PINNED_IDENTITY_ID（隐藏作品核验需要）")
+        if settings["DTK_IDENTITY"]:
+            if "identity:manage" in scopes:
+                role = str(user.get("role") or "")
+                if role not in ("operator", "admin"):
+                    print(
+                        f"✗ 定向读取需要 operator 及以上角色，当前是 {role}"
+                        "（DTK 的 pin 校验 role，不只是 scope）"
+                    )
+                    problems.append("角色不足（定向读取需要 operator）")
+                else:
+                    print(
+                        f"✓ 定向读取身份 {str(settings['DTK_IDENTITY'])[:8]}…（不走身份池）"
+                    )
             else:
-                pin_key_configured = bool(settings["PIN_DTK_API_KEY"])
-                if pin_key_configured:
-                    # 独立 Key：跟主 Key 不是一回事，得单独查一次它自己的 scopes
-                    try:
-                        async with DtkClient(
-                            settings["DTK_BASE_URL"],
-                            settings["PIN_DTK_API_KEY"],
-                            wait=0,
-                            timeout=float(settings["DTK_TIMEOUT"]),
-                            user_agent=str(settings["DTK_USER_AGENT"]),
-                        ) as pin_client:
-                            pin_me = await pin_client.me()
-                        pin_scopes = set((pin_me.get("user") or {}).get("scopes") or [])
-                    except MonitorError as exc:
-                        print(f"✗ PIN_DTK_API_KEY 不可用：{exc.code} —— {exc.message}")
-                        problems.append("PIN_DTK_API_KEY 不可用")
-                        pin_scopes = set()
-                else:
-                    pin_scopes = (
-                        scopes  # 没配独立 Key，复用主 Key，scopes 前面已经查过了
-                    )
-
-                if "identity:manage" not in pin_scopes:
-                    which = "PIN_DTK_API_KEY" if pin_key_configured else "DTK_API_KEY"
-                    print(
-                        f"✗ HIDDEN_POST_CHECK_ENABLED=true，但 {which} 缺少 identity:manage scope"
-                    )
-                    print(
-                        "  这个 scope 能解密查看任意身份的 cookie 明文，建议单独开一把 Key 只给这一处用"
-                    )
-                    problems.append("缺少 identity:manage（隐藏作品核验需要）")
-                else:
-                    print(
-                        f"✓ 隐藏作品核验可用：定向身份 {str(settings['PINNED_IDENTITY_ID'])[:8]}…"
-                        f"（{'独立 Key' if pin_key_configured else '复用主 Key'}）"
-                    )
+                print(
+                    "  定向读取需要 identity:manage；这个 scope 能解密查看任意身份的 cookie 明文，"
+                    "不要把带它的 Key 给别的工具用"
+                )
+        else:
+            print("! 未配置 DTK_IDENTITY：会退回身份池轮换")
+            print("  抖音对未登录访客隐藏最新作品，这条路拿不到完整列表，只适合排障")
+            problems.append("未配置 DTK_IDENTITY（生产环境必填）")
 
         rate = me.get("rate_limit_per_min")
         print(
@@ -328,8 +313,14 @@ async def cmd_doctor(settings: Settings) -> int:
                 f"cooling={douyin.get('cooling')} degraded={douyin.get('degraded')}"
             )
             if not douyin.get("active"):
-                print("! 身份池里没有可用的 douyin 身份 —— 任何抓取都会 503")
-                problems.append("身份池为空")
+                if settings["DTK_IDENTITY"]:
+                    print(
+                        "  ! 身份池是空的——对本工具无影响（读请求点名 DTK_IDENTITY，"
+                        "不走池），但那个身份必须存在且 active"
+                    )
+                else:
+                    print("! 身份池里没有可用的 douyin 身份 —— 任何抓取都会 503")
+                    problems.append("身份池为空")
         except MonitorError as exc:
             print(f"! 读取实例状态失败：{exc.code}")
 

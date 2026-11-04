@@ -56,24 +56,14 @@ TRIGGERS: Final[Mapping[EventKind, TriggerSpec]] = {
     # 又有人回归了"——线上踩过：两条作品同时被恢复，第二条被账号级窗口压掉、且不会补发，
     # 面板里两条"作品回归"、通知只来一条（见 DESIGN 修正 #22）。
     EventKind.REVIVED: TriggerSpec("info", 6 * HOUR, "post"),
-    # `hidden_from_guest` 刻意**不在**这张表里，见下面 `NO_WINDOW_EVENTS` 里的理由
 }
 
 #: 没有抑制窗口的事件——它们**每条都携带一次性的新信息**，抑制等于丢通知。
-#:
-#: `HIDDEN_FROM_GUEST` 曾按"6 小时/账号"给过窗口（2026-09-20 改掉）：那条思路是错的，
-#: 而且和它自己的机制相反——一条作品被核验标记之后就**再也不会进入核验**（标记存在的
-#: 目的就是让它不再被判成消失），所以同一条作品根本不可能重复产生这个事件。窗口在这里
-#: 唯一能压掉的，只会是"6 小时内又发现了**另一条**被藏的作品"这种真正的新信息，而那条
-#: 通知永远不会补发（标记已落库、不会再次核验）→ 永久丢失。
-#: 发现速率本身由作者的发布节奏决定，且同一次核验里发现的多条会**聚合成一条**，
-#: 不需要窗口兜重复。
 NO_WINDOW_EVENTS: Final[frozenset[EventKind]] = frozenset(
     {
         EventKind.NEW_POST,
         EventKind.POST_REMOVED,
         EventKind.ALL_GONE,
-        EventKind.HIDDEN_FROM_GUEST,
     }
 )
 

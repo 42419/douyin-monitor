@@ -47,7 +47,6 @@ from .models import Content, Event, EventKind, Kind
 
 SEVERITY: Final[Mapping[EventKind, str]] = {
     EventKind.NEW_POST: "info",
-    EventKind.HIDDEN_FROM_GUEST: "info",
     EventKind.POST_REMOVED: "warning",
     EventKind.ALL_GONE: "error",
     EventKind.GAP_DETECTED: "warning",
@@ -338,14 +337,6 @@ def _build(
             *_context_rows(payload),
         ]
         return subject, _card(heading, rows)
-
-    if kind is EventKind.HIDDEN_FROM_GUEST:
-        # 静默事件（只落库 + 面板可见）：这里保留可读形态是为了日志与排障
-        hidden = _entries(payload, "hidden")
-        subject, heading = _titles(
-            msg.T_HIDDEN_FROM_GUEST, plain_name, md_name, count=len(hidden)
-        )
-        return subject, _card(heading, _list_rows(hidden), msg.NOTE_HIDDEN_FROM_GUEST)
 
     if kind is EventKind.TITLE_CHANGED:
         subject, heading = _titles(msg.T_TITLE_CHANGED, plain_name, md_name)

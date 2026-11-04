@@ -25,9 +25,8 @@ from dywatch.render import MAX_BODY_BYTES, TITLE_CLIP, render_event
 HOSTILE: list[dict] = [
     {},
     {"title": None, "old": None, "new": None},
-    {"removed": None, "hidden": None},
+    {"removed": None},
     {"removed": [None, 1, "不是字典"]},
-    {"hidden": [None, {"content_id": "1", "title": "看不见的", "created_at": None}]},
     {
         "title": "带 * 星号与 [方括号](x) 还有 `反引号`",
         "kind": "不存在的类型",

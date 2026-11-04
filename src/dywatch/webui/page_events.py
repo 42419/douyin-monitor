@@ -1,7 +1,7 @@
 """事件时间线页：`GET /events`。
 
 状态页回答"每个账号现在怎么样"，这一页回答**"最近到底发生了什么"**——两者的区别在
-状态页看不见的东西上：窗口挪动（`scrolled_out` / `trimmed`）、平台限制（`hidden_from_guest`）、
+状态页看不见的东西上：窗口挪动（`scrolled_out` / `trimmed`）、
 上游与自身的问题（`upstream_degraded` / `self_degraded`）、以及**被抑制窗口压掉的重复**。
 它们都落库了，但状态页只给每账号 12 条、且混在一起看不出形状。
 
@@ -54,7 +54,7 @@ RANGES: Mapping[str, Mapping[str, Any]] = {
 }
 DEFAULT_RANGE = "24h"
 
-#: 类别分组。**必须覆盖全部 16 种事件、且不重叠**——有测试盯着（`test_webui_events.py`）：
+#: 类别分组。**必须覆盖全部 15 种事件、且不重叠**——有测试盯着（`test_webui_events.py`）：
 #: 少一个就会有一个事件永远筛不出来，而它在"全部"里又看得见，人会以为自己点错了。
 GROUPS: Mapping[str, tuple[str, tuple[EventKind, ...]]] = {
     "all": ("全部", ()),
@@ -66,7 +66,6 @@ GROUPS: Mapping[str, tuple[str, tuple[EventKind, ...]]] = {
             EventKind.ALL_GONE,
             EventKind.REVIVED,
             EventKind.TITLE_CHANGED,
-            EventKind.HIDDEN_FROM_GUEST,
         ),
     ),
     "account": (
@@ -208,22 +207,6 @@ def _summarize(kind: EventKind, data: Mapping[str, Any]) -> str:
     if kind is EventKind.TITLE_CHANGED:
         return (
             f"{_clip(str(data.get('old') or ''))} → {_clip(str(data.get('new') or ''))}"
-        )
-    if kind is EventKind.HIDDEN_FROM_GUEST:
-        rows = data.get("hidden")
-        rows = (
-            [row for row in rows if isinstance(row, Mapping)]
-            if isinstance(rows, list)
-            else []
-        )
-        titles = "、".join(
-            _clip(str(row.get("title") or row.get("content_id") or ""))
-            for row in rows[:3]
-        )
-        return (
-            f"{len(rows)} 条登录可见、访客看不到：{titles}"
-            if titles
-            else f"{len(rows)} 条登录可见、访客看不到"
         )
     if kind is EventKind.GAP_DETECTED:
         return (

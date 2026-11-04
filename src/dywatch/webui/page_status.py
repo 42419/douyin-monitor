@@ -468,7 +468,6 @@ function renderDetail(d) {
   h += di('状态', d.status_text);
   h += di('已知作品', d.known_posts + ' 条');
   h += di('已消失', d.tombstones + ' 条');
-  h += di('对访客不可见', (d.hidden_posts || 0) + ' 条', d.hidden_posts ? '登录可见、未登录看不到' : '');
   h += di('连续失败', d.consecutive_fails + ' 次');
   h += di('最新作品发布', d.newest_post_at || '还没有作品');
   h += di('距最新作品', d.newest_post_ago);
@@ -496,8 +495,6 @@ function renderDetail(d) {
       }
       if (v.is_top) h += '<span class="vtop">置顶</span>';
       if (v.absent_rounds > 0) h += '<span class="vabsent">缺席 ' + v.absent_rounds + ' 轮</span>';
-      if (v.hidden) h += '<span class="vhidden" title="' + esc(v.hidden_since)
-        + ' 起对访客不可见（登录视角一直看得到）">对访客不可见</span>';
       var line = metricLine(v.metrics);
       if (line) h += '<span class="vkind mono">' + esc(line) + '</span>';
       h += '<span class="vkind">' + esc(v.kind) + '</span>';
@@ -636,7 +633,7 @@ function metricsSection(d) {
       + '保留 ' + d.metrics_keep_days + ' 天）</div>';
   }
   // 回答"这是哪个视频的"：不是任何一条，是这个账号作品的合计。N 要写**真正加进图里**的
-  // 那几条（`t.posts`），不是已知作品数（`t.known`）：隐藏的 / 刚加的 / 开记录之前抓过的
+  // 那几条（`t.posts`），不是已知作品数（`t.known`）：已消失的 / 刚加的 / 开记录之前抓过的
   // 作品没有互动量记录，写成"N 条已知作品的合计"就把覆盖面说大了
   var tail = '，不是某一条；点下面的作品标题，单独看每一条';
   var scope = t.posts === t.known

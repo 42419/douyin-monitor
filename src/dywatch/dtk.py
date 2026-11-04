@@ -29,7 +29,7 @@ from typing import Any, Final, Mapping, Sequence
 
 import httpx
 
-from .models import ArchiveItem, AuthorProfile, Content, Kind, Page
+from .models import ArchiveItem, Content, Kind, Page
 
 #: 上游错误码里，值得整体闸门暂停的那些 —— 都是"现在别发请求"的意思
 GATE_CODES: Final[frozenset[str]] = frozenset(
@@ -324,24 +324,19 @@ def parse_archive_item(node: Mapping[str, Any]) -> ArchiveItem:
     )
 
 
-def parse_author_profile(payload: Mapping[str, Any]) -> AuthorProfile:
-    """`GET /api/v1/douyin/user` 的裁剪版解析——目前只要 `content_count`。
-
-    实测字段路径是 `stats.content_count`（DTK 的 `AuthorStats` 模型），
-    不存在时按 `None` 处理，不当成 0——道理跟 `parse_content` 里 `play_count`
-    的处理一样：缺值和"确实是 0 条"是两件不同的事。
-    """
-    stats = payload.get("stats") or {}
-    return AuthorProfile(content_count=_int_or_none(stats.get("content_count")))
-
-
 # ---------------------------------------------------------------------------
 # 客户端
 # ---------------------------------------------------------------------------
 
 
 class DtkClient:
-    """A thin, read-only client for one DTK v5 instance."""
+    """A thin client for one DTK v5 instance.
+
+    `identity` 是"钉住"的身份 UUID：设了它，所有**内容读取**都会带上 `identity=`，
+    DTK 只会用这一个身份服务（不走身份池、不读写缓存、失败不换身份）。这是本工具的
+    唯一工作方式——抖音对未登录访客隐藏最新作品，游客池拿不到完整列表。
+    留空则退回身份池轮换，只用于排障。
+    """
 
     def __init__(
         self,
@@ -354,12 +349,14 @@ class DtkClient:
         user_agent: str = "dywatch/0.1",
         poll_interval: float = 2.0,
         max_polls: int = 15,
+        identity: str = "",
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.wait = float(wait)
         self.refresh = bool(refresh)
+        self.identity = str(identity or "")
         self.poll_interval = poll_interval
         self.max_polls = max_polls
         self._timeout = httpx.Timeout(timeout, connect=min(10.0, timeout))
@@ -506,14 +503,21 @@ class DtkClient:
         self,
         path: str,
         params: Mapping[str, Any] | None = None,
+        *,
+        pin_identity: bool = True,
     ) -> tuple[dict[str, Any], int, str | None]:
         """One read that follows whichever of the two shapes comes back.
 
         Returns `(payload, http_status, task_id)`. The payload is the endpoint's own
         object in both cases — the 202 detour is absorbed here so no caller has to
         know the difference.
+
+        `pin_identity=True` 时把客户端配置的身份 UUID 塞进 `identity=`；`archive` 这类
+        本地库读取传 `False`——它不需要 `identity:manage`，也不该被这把权限牵连。
         """
-        query = dict(params or {})
+        query = {k: v for k, v in (params or {}).items() if v is not None}
+        if pin_identity and self.identity:
+            query.setdefault("identity", self.identity)
         if self.wait:
             query["wait"] = self.wait
         if self.refresh:
@@ -547,15 +551,11 @@ class DtkClient:
         count: int,
         *,
         include_raw: bool = False,
-        identity: str | None = None,
     ) -> Page:
         """★ 主抓手：作者最新一页作品。
 
-        `identity` 默认不传——走身份池正常调度。传了就等于`定向`：这次请求只用
-        这一个身份，且**不读不写缓存、只有 1 次传输尝试**（DTK 的语义，不是本客户端
-        加的限制）。需要 Key 带 `identity:manage` scope，且 owner 账号至少 operator——
-        比监控本身用的 `douyin:read`/`archive:read` 高一截，只在隐藏作品核验时才用，
-        见 `HIDDEN_POST_CHECK_ENABLED`。
+        请求的身份由客户端配置的 `identity` 决定（`identity=` 由 `_call` 统一加上）。
+        定向请求的语义是 DTK 的：**不读不写缓存、只有 1 次传输尝试**。
         """
         payload, _status, task_id = await self._call(
             "/api/v1/douyin/user/posts",
@@ -563,23 +563,9 @@ class DtkClient:
                 "sec_user_id": sec_user_id,
                 "count": count,
                 "include_raw": "true" if include_raw else None,
-                "identity": identity,
             },
         )
         return parse_page(payload, raw_included=include_raw, task_id=task_id)
-
-    async def author_profile(self, sec_user_id: str) -> AuthorProfile:
-        """作者主页统计（目前只要发布总数）。
-
-        零身份成本的情况居多：DTK 对这个端点有 15 分钟缓存（`cache.author_ttl`），
-        本客户端固定带 `refresh=true`（见 `__init__`），所以每次都是真实请求、
-        每次都消耗身份——这是刻意的，隐藏作品核验要的就是"当下的真实值"，不能被
-        15 分钟前的缓存糊弄过去。
-        """
-        payload, _status, _task = await self._call(
-            "/api/v1/douyin/user", {"sec_user_id": sec_user_id}
-        )
-        return parse_author_profile(payload)
 
     async def content_detail(self, content_id: str) -> Content:
         """One post's detail. Note: `raw.is_top` here is always 0 — never read it."""
@@ -629,6 +615,7 @@ class DtkClient:
         payload, _status, _task = await self._call(
             "/api/v1/archive",
             {"platform": "douyin", "author_uid": sec_user_id, "limit": limit},
+            pin_identity=False,
         )
         raw_items = payload.get("items")
         if raw_items is None:

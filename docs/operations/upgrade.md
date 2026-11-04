@@ -59,4 +59,27 @@ sudo bash deploy/install.sh --check
 systemctl status dywatch
 journalctl -u dywatch -f
 dywatch config-check       # 确认新版本引入的配置项来源符合预期
+dywatch doctor             # 应看到「✓ 定向读取身份 …（不走身份池）」
 ```
+
+## 从「游客 + 隐藏核验」版本升级（2026-11 起）
+
+这一版把读取方式改成了**单一登录态身份**，并删掉了整套隐藏作品核验。升级前按顺序做：
+
+1. **DTK 侧**：确认有一个登录态身份（Import cookies），把它的 UUID 准备好；
+   建议把它的「轮换范围」设为「只服务点名它的请求」。
+2. **Key**：`DTK_API_KEY` 必须带 `identity:manage`，且 owner 至少 `operator`
+   （DTK 的 `require_credential_access` 同时校验 scope 与角色）。没有就先补上或新建。
+3. **`.env`**：
+   - 新增 `DTK_IDENTITY=<那个 UUID>`（老的 `PINNED_IDENTITY_ID` 的值可以直接搬过来）；
+   - 删掉 `HIDDEN_POST_CHECK_ENABLED`、`HIDDEN_CHECK_INTERVAL_MINUTES`、
+     `PINNED_IDENTITY_ID`、`PIN_DTK_API_KEY`（留着不会拦启动，但日志里会逐条提醒）。
+4. **备份状态库**：`cp -a data/dywatch.db* /somewhere/`。启动时 schema v6→v7 会删除
+   隐藏核验的 5 个列（自动迁移，但**不可逆**；迁移后回滚旧版会因为"库比程序新"拒绝启动）。
+5. 升级并启动，然后跑一次 `dywatch doctor`，再观察一轮日志。
+
+::: warning 升级后的首轮可能补报一批历史事件
+以前被游客视角藏住、从未被核验发现的作品，会作为 `new_post` 补报（发布时间是旧的）；
+以前带「对访客不可见」标记、后来被作者删掉的作品，会从这一轮开始计缺席，约两轮后报
+`post_removed`。两者都是正确结果，不是升级 bug。
+:::

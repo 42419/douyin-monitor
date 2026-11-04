@@ -17,32 +17,33 @@ dywatch 不直接访问抖音，它需要一个可达的
 
 已经有一个可用的 DTK v5 实例和 API Key？直接去[安装 dywatch](/guide/quick-start)。
 
-## 一、身份池不能是空的
+## 一、先导入一个登录态身份
 
-DTK 的**身份池默认是空的**，而 dywatch 每次抓取都要从池子里拿一个身份——池子空着时所有请求
-会一直报 `503 IDENTITY_POOL_EXHAUSTED`，**跟 Key、scope 都无关**。这一步最容易漏，因为部署
-本身不会报错。
+dywatch 的每条读请求都会**点名一个身份**（`DTK_IDENTITY`），所以 DTK 里必须有一份
+**登录态 cookie**。控制台 **Identities → Import cookies**，导入浏览器里那份（带
+`sessionid` 即可），再把它的 **UUID** 复制下来。
 
-两条路二选一（官方
-[Step 3](https://douyin.wtf/quickstart/#step-3--decide-about-the-browser-container) 讲得很细）：
-加 `--profile browser` 让浏览器容器自动铸造，或在控制台 **Identities → Import cookies**
-手动导入一份登录态 Cookie。装完先确认 **Identities** 页面至少有一个 `active` 身份，
-再去装 dywatch。
+导入后点开这个身份，把「轮换范围」设为「**只服务点名它的请求**」：日常流量不会和别的
+工具抢身份，也不占身份池水位——dywatch 每次读都点名它。
 
-## 二、一把 Key，只要两个 scope
+::: tip 身份池可以是空的
+dywatch 不走身份池，池子里有没有游客都不影响它；但那个登录态身份必须存在且 `active`。
+:::
 
-控制台 **API keys → Create key**。dywatch 的监控本身只需要两个：
+## 二、一把 Key，三个 scope
 
-| scope          | 用途                                               |
-| -------------- | -------------------------------------------------- |
-| `douyin:read`  | 读作者作品列表（主抓手）、识别分享链接、读任务结果 |
-| `archive:read` | 读本地归档，做删除交叉确认（零身份成本）           |
+控制台 **API keys → Create key**。dywatch 需要三个：
 
-::: tip 建 Key 需要 operator/admin，但 Key 只按自己的 scope 鉴权
-`viewer` 账号看不到 Create key 的入口，用初始化向导建的管理员账号来建就行。Key 建好后，
-`douyin:read` / `archive:read` 这些端点**只认 Key 自身的 scope、不看创建者的角色**——
-所以只勾这两个，就算是管理员建的 Key 也碰不到别的东西
-（详见[权限 / API Key](/reference/permissions)）。
+| scope             | 用途                                               |
+| ----------------- | -------------------------------------------------- |
+| `douyin:read`     | 读作者作品列表（主抓手）、识别分享链接、读任务结果 |
+| `archive:read`    | 读本地归档，做删除交叉确认（零身份成本）           |
+| `identity:manage` | 把读请求钉在 `DTK_IDENTITY` 指定的身份上           |
+
+::: tip 建 Key 需要 operator 及以上
+`identity:manage` 走的是 DTK 的凭据访问校验：**既看 scope、也看角色**（operator/admin）。
+viewer 建的 Key 即使勾了 scope 也会被拒。这个 scope 能解密任意身份的 cookie 明文，
+所以这把 Key 只给 dywatch 用（详见[权限 / API Key](/reference/permissions)）。
 :::
 
 后续要开[归档下载](/guide/archive-download)再加 `media:write`，但**不建议第一次部署就开**。

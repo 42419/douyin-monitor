@@ -22,7 +22,7 @@ hero:
 features:
   - icon: 🔒
     title: 默认只读
-    details: 不自带签名、不碰 Cookie、不碰身份池、不直接访问抖音。对上游 DTK v5 只需要 douyin:read 与 archive:read 两个 scope，不提交任务、不改设置。
+    details: 不自带签名、不碰 Cookie、不直接访问抖音。对上游 DTK v5 需要 douyin:read、archive:read 与 identity:manage 三个 scope（最后一项用来把读请求钉在登录态身份上），不提交任务、不改设置。
   - icon: 🛎️
     title: 六种推送渠道
     details: 钉钉、企业微信、Bark、Server 酱、Telegram、通用 webhook，可同时开启多个渠道，新作品优先送达。

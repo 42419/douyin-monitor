@@ -26,7 +26,7 @@ from .loop import MonitorLoop
 from .messages import one_line
 from .notifiers import build_notifier
 from .pacer import RequestPacer, RoundWaiter
-from .pipeline import ArchiveTrigger, HiddenCheckConfig
+from .pipeline import ArchiveTrigger
 from .scheduler import GlobalGate
 from .settings import Settings
 from .state import StateStore
@@ -180,16 +180,10 @@ class Runtime:
     gate: GlobalGate
     dedup: Deduplicator
     loop: MonitorLoop
-    #: 隐藏作品核验用的独立 Key 建的 client；未配 PIN_DTK_API_KEY 时复用 `client`，
-    #: 这时候不持有独立引用（否则 aclose() 会把同一个连接池关两次）
-    pin_client: DtkClient | None = None
 
     async def aclose(self) -> None:
         with contextlib.suppress(Exception):
             await self.client.aclose()
-        if self.pin_client is not None and self.pin_client is not self.client:
-            with contextlib.suppress(Exception):
-                await self.pin_client.aclose()
         with contextlib.suppress(Exception):
             await self.notifier.aclose()
         self.store.close()
@@ -222,12 +216,11 @@ class Runtime:
                 if self.settings["SILENT_MODE"]
                 else ", ".join(self.notifier.names) or "（无）"
             ),
-            f"  隐藏作品核验  : "
+            f"  读取身份      : "
             + (
-                f"开启（身份 {str(self.settings['PINNED_IDENTITY_ID'])[:8]}…，"
-                f"{'独立 Key' if self.settings['PIN_DTK_API_KEY'] else '复用主 Key'}）"
-                if self.settings["HIDDEN_POST_CHECK_ENABLED"]
-                else "关闭"
+                f"定向 {str(self.settings['DTK_IDENTITY'])[:8]}…（不走身份池）"
+                if self.settings["DTK_IDENTITY"]
+                else "身份池轮换（未配 DTK_IDENTITY —— 抖音下会缺最新作品，仅用于排障）"
             ),
             f"  状态库        : {self.settings.db_path}",
             f"  工作目录      : {self.settings.home}",
@@ -245,6 +238,7 @@ def build_runtime(settings: Settings, *, logger: StructuredLogger) -> Runtime:
         timeout=float(settings["DTK_TIMEOUT"]),
         refresh=bool(settings["DTK_REFRESH"]),
         user_agent=str(settings["DTK_USER_AGENT"]),
+        identity=str(settings["DTK_IDENTITY"]),
     )
     notifier = build_notifier(settings)
     pacer = RequestPacer(
@@ -274,29 +268,6 @@ def build_runtime(settings: Settings, *, logger: StructuredLogger) -> Runtime:
             logger=logger,
         )
 
-    # 隐藏作品核验：同理，关着的时候不建任何东西。开着且配了 PIN_DTK_API_KEY 时才
-    # 建第二个 client——独立 Key 是为了不让 identity:manage 这种更重的权限混进
-    # 主监控用的 Key 里，泄露的影响面不牵连到只读凭据（见 doctor 的说明）
-    hidden_check = None
-    pin_client: DtkClient | None = None
-    if settings["HIDDEN_POST_CHECK_ENABLED"]:
-        pin_key = str(settings["PIN_DTK_API_KEY"]) or str(settings["DTK_API_KEY"])
-        if str(settings["PIN_DTK_API_KEY"]):
-            pin_client = DtkClient(
-                settings["DTK_BASE_URL"],
-                pin_key,
-                wait=float(settings["DTK_WAIT"]),
-                timeout=float(settings["DTK_TIMEOUT"]),
-                refresh=bool(settings["DTK_REFRESH"]),
-                user_agent=str(settings["DTK_USER_AGENT"]),
-            )
-        else:
-            pin_client = client
-        hidden_check = HiddenCheckConfig(
-            pinned_identity=str(settings["PINNED_IDENTITY_ID"]),
-            pin_client=pin_client,
-        )
-
     loop = MonitorLoop(
         settings=settings,
         store=store,
@@ -308,7 +279,6 @@ def build_runtime(settings: Settings, *, logger: StructuredLogger) -> Runtime:
         dedup=dedup,
         logger=logger,
         archive_trigger=archive_trigger,
-        hidden_check=hidden_check,
     )
     return Runtime(
         settings=settings,
@@ -321,7 +291,6 @@ def build_runtime(settings: Settings, *, logger: StructuredLogger) -> Runtime:
         gate=gate,
         dedup=dedup,
         loop=loop,
-        pin_client=pin_client,
     )
 
 

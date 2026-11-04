@@ -416,7 +416,6 @@ def metrics_text(settings: Settings) -> str:
             ((("name", name),), 1 if features.get(key) else 0)
             for name, key in (
                 ("metrics", "metrics"),
-                ("hidden_check", "hidden_check"),
                 ("archive_download", "archive_download"),
             )
         ],

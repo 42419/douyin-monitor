@@ -137,8 +137,6 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
 
     freq = frequency_stats(post_states)
 
-    # 作品列表先建好，再让「对访客不可见」那格从**同一份数据**里数——两个读数各算一遍
-    # 是错过的（`_post_state` 掉了列 → 统计恒 0、徽章却是对的，同一页自相矛盾）
     post_list = [
         {
             "content_id": post["content_id"],
@@ -148,8 +146,6 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
             "date": fmt_time(_parse_dt(post["created_at"])),
             "first_seen": fmt_time(_parse_dt(post["first_seen_at"])),
             "absent_rounds": int(post["absent_rounds"] or 0),
-            "hidden": bool(post["hidden_from_guest_at"]),
-            "hidden_since": fmt_time(_parse_dt(post["hidden_from_guest_at"])),
             "metrics": _metrics_json(latest.get(str(post["content_id"]))),
         }
         for post in posts
@@ -162,9 +158,6 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
         "status_color": color,
         "known_posts": len(posts),
         "tombstones": removed_total,
-        # 核验确认过"登录可见、未登录看不到"的那些（它们仍在 known_posts 里——
-        # 作品没消失，只是访客视角看不到，这也是不在"已消失"里计数的原因）
-        "hidden_posts": sum(1 for p in post_list if p["hidden"]),
         "consecutive_fails": row["consecutive_fails"],
         "newest_post_ago": _format_post_age(hours),
         "newest_post_at": fmt_time(newest),
@@ -264,10 +257,8 @@ def _metrics_json(item: Mapping[str, Any] | None) -> dict[str, Any] | None:
 def _post_state(post: sqlite3.Row) -> PostState:
     """行 → 模型，**只映射下面几处读数要用的列**（最新作品时间、更新频率）。
 
-    刻意不是"把每一列都搬过来"：逐条作品的展示字段（尤其是 `hidden_from_guest_at`
-    这种标志位）在 `user_detail` 里直接从原始行建列表，不走这里。曾经因为有人拿这个
-    局部视图去数"对访客不可见"的作品，掉了一个列 → 统计恒为 0、而同一页的徽章仍然
-    是对的（徽章读原始行），一个弹窗里两个互相矛盾的说法。要数逐条作品的属性，
+    刻意不是"把每一列都搬过来"：逐条作品的展示字段在 `user_detail` 里直接从原始行
+    建列表，不走这里。这个局部视图只服务时间与频率两处读数；要数逐条作品的属性，
     数 `post_list` 那份，别数这里。
     """
     return PostState(

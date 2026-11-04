@@ -29,18 +29,20 @@ dywatch test-notify    # 给每个渠道发一条测试消息
 ```
 dywatch 0.1.0 —— 自检
 上游实例: http://192.168.20.4:8000
-✓ 凭据有效：username=yunfei role=admin via=api_key
-  scopes: archive:read, douyin:read, media:read, media:write
+✓ 凭据有效：username=yunfei role=operator via=api_key
+  scopes: archive:read, douyin:read, identity:manage, media:read
 ✓ 必需的 scope 齐备
+✓ 定向读取身份 3f9c0a52…（不走身份池）
 ✓ 归档下载可用：已用 6.9MB / 上限 2048MB（0%），已 pin 0 条，下载器 在线   ← 开了归档下载才有这行
-✓ 实例 5.1.0：身份池 douyin active=3 cooling=0 degraded=0
+✓ 实例 5.1.7：身份池 douyin active=13 cooling=0 degraded=0
 检查 1 个账号（每个消耗 1 个身份）…
   ✓ 示例账号: 18 条（非置顶 15 / 置顶 3，count=15） 2640ms has_more=True
 ✓ 自检通过
 ```
 
-`doctor` 与 `once` 每个账号会消耗 1 个 DTK 身份，属正常开销；两者不打网络也能
-给出有用的结论（配置校验、Key 的 scope、账号 ID 是否有效）。
+`doctor` 与 `once` 每个账号会消耗 1 个身份（pin 模式下消耗的是 `DTK_IDENTITY` 那个身份的
+配额），属正常开销；两者不打网络也能给出有用的结论（配置校验、Key 的 scope 与角色、
+账号 ID 是否有效）。
 
 ## `dywatch add`：把主页链接转成 sec_user_id
 

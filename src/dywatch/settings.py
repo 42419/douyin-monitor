@@ -7,7 +7,8 @@
 三条规矩：
 
 * **缺省即合法。** 每一项都有可用的默认值，`.env` 只是覆盖。只有 `DTK_API_KEY`
-  是必须由人填的（它的默认值空着，并在启动自检时明确报错）。
+  是必须由人填的（它的默认值空着，并在启动自检时明确报错）；`DTK_IDENTITY` 不填会退回
+  身份池轮换——那条路在抖音上拿不到最新作品，所以实际部署必须填。
 * **跨项约束集中在这里。** `DTK_WAIT < DTK_TIMEOUT`、`POLL_INTERVAL_MIN >= 10`
   这类关系放在 `validate()` 里一次说清，而不是散落在用到它们的地方。
 * **来源可追溯。** `--config-check` 会打出每个生效值来自默认值、`.env` 还是环境变量；
@@ -17,6 +18,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Final, Iterable, Mapping
@@ -73,6 +75,15 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
     SettingSpec(
         "DTK_USER_AGENT", "dywatch/0.1", "str", "请求 UA，便于在 DTK 侧日志辨认"
     ),
+    SettingSpec(
+        "DTK_IDENTITY",
+        "",
+        "str",
+        "登录态身份的 UUID（DTK 控制台 Identities 页面可查）。填了就把它钉在所有读请求上"
+        "（`identity=` 参数）：不走身份池、永远是同一个登录视角，这是本工具唯一支持的工作"
+        "方式。留空会退回身份池轮换——那条路在抖音上拿不到最新作品，只用于排障。"
+        "需要 DTK_API_KEY 带 identity:manage scope，且 Key 的 owner 至少 operator",
+    ),
     # ---------------------------------------------------------------- 节奏
     SettingSpec("REQUEST_INTERVAL_MIN", 3.0, "float", "全局相邻请求最小间隔（秒）"),
     SettingSpec("REQUEST_INTERVAL_MAX", 8.0, "float", "全局相邻请求最大间隔（秒）"),
@@ -126,43 +137,6 @@ SETTINGS: Final[tuple[SettingSpec, ...]] = (
         "int",
         "每轮最多触发几条归档下载。请求会过全局节奏器（3~8 秒一次），所以这个数直接"
         "决定旁路最多把一轮拖长多久；超出预算的条目排队等下一轮，不会丢",
-    ),
-    # ---------------------------------------------------------------- 隐藏作品核验
-    SettingSpec(
-        "HIDDEN_POST_CHECK_ENABLED",
-        False,
-        "bool",
-        "游客身份有时看不到作者主页最新发布的作品（抖音的访客限制，与本工具无关）。"
-        "开启后，在账号初始化 / 本轮有新作品 / 作品消失确认 / 长期无更新兜底触发的"
-        "那一刻，顺手核对一次作者的发布总数：数字对不上时，才用一次登录态身份把这一轮"
-        "的列表重新拉一遍，把「对访客不可见」和「真的被删了」分开。默认关闭；"
-        "不是逐轮轮询——除了上面那四种事件，还有一条每账号 HIDDEN_CHECK_INTERVAL_MINUTES"
-        "分钟的低频保底（见那一项为什么是必需的）。",
-    ),
-    SettingSpec(
-        "PINNED_IDENTITY_ID",
-        "",
-        "str",
-        "登录态身份的 UUID（DTK 控制台 Identities 页面可查），核验时把请求定向到这一个"
-        "身份。HIDDEN_POST_CHECK_ENABLED=true 时必填。需要 Key 带 identity:manage scope，"
-        "且 Key 的 owner 账号至少 operator——比监控本身用的 scope 高一截，建议用",
-    ),
-    SettingSpec(
-        "PIN_DTK_API_KEY",
-        "",
-        "str",
-        "定向核验专用的 Key（留空则复用 DTK_API_KEY）。identity:manage 能解密查看"
-        "任意身份的 cookie 明文，权限比监控本身重得多，建议单独开一把 Key、只给这一处用，"
-        "泄露的影响面才不会牵连到主监控用的只读凭据",
-    ),
-    SettingSpec(
-        "HIDDEN_CHECK_INTERVAL_MINUTES",
-        30,
-        "int",
-        "低频保底：基准值超过这么久没核对过，就无条件核对一次发布总数（分钟，0 = 关闭）。"
-        "这条不是优化而是必需——两类变化在游客视角完全不留痕迹：新作品从发布起就不可见、"
-        "已知对访客不可见的作品被删；没有它只能等 STALE_FALLBACK_DAYS 那次兜底。"
-        "代价是每账号每 30 分钟一次（相对每账号每轮的抓取可忽略）",
     ),
     # ---------------------------------------------------------------- 可观测与自身
     SettingSpec(
@@ -236,13 +210,11 @@ SPECS: Final[Mapping[str, SettingSpec]] = {spec.key: spec for spec in SETTINGS}
 #: `config-check`（`Settings.describe()`）里**必须打码**的键。
 #:
 #: 这份清单是"对外输出"的防线：`config-check` 的输出被排障文档鼓励贴进 issue，漏一个
-#: 就等于公开一把钥匙。曾经漏了两个：`PIN_DTK_API_KEY`——它带 `identity:manage`，
-#: 能解密任意身份的 cookie 明文，比主监控那把只读钥匙重得多——以及旧写法的
-#: `WEBHOOK_URL`（回调地址通常自带密钥）。新增凭据类配置时**必须同步加到这里**。
+#: 就等于公开一把钥匙。曾经漏过旧写法的 `WEBHOOK_URL`（回调地址通常自带密钥）。
+#: 新增凭据类配置时**必须同步加到这里**。
 MASKED_KEYS: Final[frozenset[str]] = frozenset(
     {
         "DTK_API_KEY",
-        "PIN_DTK_API_KEY",
         "DINGTALK_TOKEN",
         "DINGTALK_SECRET",
         "WECOM_WEBHOOK_KEY",
@@ -312,6 +284,9 @@ class Settings:
     #: python-dotenv 遇到配不平的引号只往 stderr 打一行、然后把整条语句丢掉——
     #: 那会让这个键悄悄退回默认值（例如 `NOTIFY_TARGETS` 被丢 → 静默回落旧凭据）。
     file_problems: tuple[str, ...] = ()
+    #: 老 `.env` 里还留着的**已下线**键。不是错误（不该因此起不来），但必须在启动日志里
+    #: 说一句：沉默忽略会让人以为自己还在用那个功能，或者已经把身份填好了。
+    retired_env_keys: tuple[str, ...] = ()
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.values.get(key, default)
@@ -483,16 +458,19 @@ class Settings:
         ):
             errors.append("WEBHOOK_URL 必须以 http:// 或 https:// 开头")
 
-        if v["HIDDEN_POST_CHECK_ENABLED"] and not v["PINNED_IDENTITY_ID"]:
-            errors.append(
-                "HIDDEN_POST_CHECK_ENABLED=true 但 PINNED_IDENTITY_ID 未配置 —— "
-                "核验时不知道该定向到哪个身份，去 DTK 控制台 Identities 页面复制一个"
-                "登录态身份的 UUID 填进来"
-            )
-        if v["HIDDEN_CHECK_INTERVAL_MINUTES"] < 0:
-            # 负数会被 `interval > 0` 的守卫当成"关闭保底"——静默失效是最坏的一种，
-            # 因为读配置的人会以为自己配了个值（跟 POLL_INTERVAL_MIN 那条同一个道理）
-            errors.append("HIDDEN_CHECK_INTERVAL_MINUTES 不能为负（0 = 关闭保底）")
+        if v["DTK_IDENTITY"]:
+            raw_identity = str(v["DTK_IDENTITY"])
+            try:
+                parsed_identity = uuid.UUID(raw_identity)
+            except (ValueError, AttributeError, TypeError):
+                parsed_identity = None
+            # 只认规范形态：`uuid.UUID()` 也接受 32 位无连字符、urn:uuid: 与花括号写法，
+            # 那些在 DTK 侧未必被当作同一个值。控制台复制出来的一定是 36 位带连字符的。
+            if parsed_identity is None or str(parsed_identity) != raw_identity.lower():
+                errors.append(
+                    "DTK_IDENTITY 必须是 DTK 控制台里那个登录态身份的 UUID"
+                    "（36 个字符，带连字符）"
+                )
 
         if v["METRICS_KEEP_DAYS"] < 1:
             # 0 或负数会被 `metrics_days > 0` 的守卫当成"不清理"——那是**无限的**磁盘增长，
@@ -519,27 +497,26 @@ class Settings:
                 "DTK_API_KEY 不以 dtk_ 开头，形态可能不对"
                 "（DTK 的 Key 是 dtk_<12位十六进制>_<32位base64url>，共 49 字符）"
             )
+        if not v["DTK_IDENTITY"]:
+            out.append(
+                "未配置 DTK_IDENTITY：会退回身份池轮换——抖音对未登录访客隐藏最新作品，"
+                "这条路拿不到完整列表；生产环境请把登录态身份的 UUID 填进来"
+            )
+        for key in self.retired_env_keys:
+            out.append(f".env 里的 {key} 已不再使用：{RETIRED_KEYS[key]}")
 
         # 速率余量：pacer 决定上限，与账号数无关
         avg = (v["REQUEST_INTERVAL_MIN"] + v["REQUEST_INTERVAL_MAX"]) / 2
         if avg > 0:
             per_min = 60.0 / avg
             out.append(
-                f"请求速率上限约 {per_min:.1f} 次/分钟"
-                f"（DTK 默认限额 {120}/分钟，身份池 target_size 通常 8）"
+                f"请求速率上限约 {per_min:.1f} 次/分钟（DTK 默认限额 {120}/分钟）"
             )
             if per_min > 100:
                 out.append(
                     "速率偏高：请调大 REQUEST_INTERVAL_MIN/MAX，"
                     "或提高该 API Key 的 rate_limit"
                 )
-        if v["HIDDEN_POST_CHECK_ENABLED"] and v["HIDDEN_CHECK_INTERVAL_MINUTES"] == 0:
-            out.append(
-                "HIDDEN_CHECK_INTERVAL_MINUTES=0 关掉了低频保底：有两类变化在游客视角"
-                "完全不留痕迹（新作品从发布起就不可见、已标记为对访客不可见的作品被删），"
-                "事件驱动的触发永远等不到它们——它们只会在 STALE_FALLBACK_DAYS"
-                f"（{v['STALE_FALLBACK_DAYS']} 天）那次兜底时被顺带发现，甚至更久"
-            )
         targets = v["NOTIFY_TARGETS"]
         if targets.configured and self.sources.get("NOTIFY_CHANNELS") in (
             "env",
@@ -625,6 +602,8 @@ def load_settings(
         except ImportError:  # pragma: no cover - dotenv is a declared dependency
             file_values = _parse_env_file(Path(env_file))
         file_problems.extend(_dropped_env_keys(Path(env_file), file_values))
+    # 已下线的键：不拦启动，但要在 warnings() 里说清楚（见 Settings.retired_env_keys）
+    retired = tuple(key for key in RETIRED_KEYS if key in file_values)
 
     env = dict(os.environ if environ is None else environ)
 
@@ -645,7 +624,28 @@ def load_settings(
         except (TypeError, ValueError):
             values[spec.key] = spec.default
             sources[spec.key] = f"{source}(非法,已回退默认)"
-    return Settings(values=values, sources=sources, file_problems=tuple(file_problems))
+    return Settings(
+        values=values,
+        sources=sources,
+        file_problems=tuple(file_problems),
+        retired_env_keys=retired,
+    )
+
+
+#: 已从注册表删除、但老 `.env` 里可能还留着的键 → 一句怎么办。
+#:
+#: 升级时**沉默忽略是最坏的一种**：用户会以为自己还在用那个功能（隐藏作品核验），
+#: 或者已经把登录身份填好了（`PINNED_IDENTITY_ID` → `DTK_IDENTITY` 改名）。
+RETIRED_KEYS: Final[Mapping[str, str]] = {
+    "HIDDEN_POST_CHECK_ENABLED": "隐藏作品核验已整体下线（2026-11-04），这行可以删掉",
+    "HIDDEN_CHECK_INTERVAL_MINUTES": "隐藏作品核验已整体下线（2026-11-04），这行可以删掉",
+    "PIN_DTK_API_KEY": (
+        "核验专用 Key 已取消：现在只有一把 Key（DTK_API_KEY），且它需要 identity:manage"
+    ),
+    "PINNED_IDENTITY_ID": (
+        "改名为 DTK_IDENTITY：把这里的 UUID 原样填到 DTK_IDENTITY，然后删掉这行"
+    ),
+}
 
 
 def _dropped_env_keys(path: Path, parsed: Mapping[str, str]) -> list[str]:

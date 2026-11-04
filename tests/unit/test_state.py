@@ -272,9 +272,9 @@ def test_a_failed_write_leaves_the_previous_round_intact(store):
 
 # ---------------------------------------------------------------- schema 迁移
 def test_migrate_upgrades_a_v1_database_without_losing_data(tmp_path):
-    """模拟一个升级前的旧库（没有 baseline_content_count 两列，version=1），
-    验证 `migrate()` 能把它升到 v2、不报错、也不丢已有数据——这是这个项目
-    第一条真正的迁移路径（v1 → v2），值得单独锁住。
+    """模拟一个升级前的旧库（version=1），验证 `migrate()` 能一路升到当前版本、
+    不报错、也不丢已有数据——这是这个项目第一条真正的迁移路径（v1 → v2），
+    值得单独锁住。同时验证 v7 把隐藏核验那几列**删掉了**。
     """
     import sqlite3
 
@@ -351,18 +351,18 @@ def test_migrate_upgrades_a_v1_database_without_losing_data(tmp_path):
         # 而"版本号涨了但迁移没写"这件事 `migrate()` 自己会抛错，不需要靠这个数盯着
         assert version == SCHEMA_VERSION
         columns = {row[1] for row in tx.execute("PRAGMA table_info(authors)")}
-        assert "baseline_content_count" in columns
-        assert "baseline_content_count_at" in columns
-        assert "content_count_drift_rounds" in columns
+        # 隐藏核验那三列先在 v2/v3 加上，又在 v7 删掉；升到最新版本后不该留下
+        assert "baseline_content_count" not in columns
+        assert "baseline_content_count_at" not in columns
+        assert "content_count_drift_rounds" not in columns
         post_columns = {row[1] for row in tx.execute("PRAGMA table_info(posts)")}
-        assert "hidden_from_guest_at" in post_columns
-        assert "hidden_seen_streak" in post_columns
-        # 老行要原样留下，新列是 NULL（"没有这个已知情况"），不能变成别的值
+        assert "hidden_from_guest_at" not in post_columns
+        assert "hidden_seen_streak" not in post_columns
+        # 老行要原样留下
         old_post = tx.execute(
-            "SELECT absent_rounds, hidden_from_guest_at FROM posts WHERE content_id = 'old_post'"
+            "SELECT absent_rounds FROM posts WHERE content_id = 'old_post'"
         ).fetchone()
         assert old_post[0] == 1
-        assert old_post[1] is None
 
     authors = store.load_authors()
     assert "old_user" in authors
@@ -370,14 +370,7 @@ def test_migrate_upgrades_a_v1_database_without_losing_data(tmp_path):
     assert old.nickname == "老账号"
     assert old.runs == 42
     assert old.ever_had_posts is True
-    # 老账号从没做过隐藏作品核验，新列必须是 None（"还没确认过"），不能悄悄变成 0
-    # （0 会被读成"账号发布数是 0"，是另一件事）
-    assert old.baseline_content_count is None
-    assert old.baseline_content_count_at is None
-    # drift 计数器默认应该是 0（"目前没有未解决的缺口"），不是 NULL
-    assert old.content_count_drift_rounds == 0
-    # 老作品同样：没被核验标记过，所以是 None
-    assert [p.hidden_from_guest_at for p in old.posts] == [None]
+    assert [p.content_id for p in old.posts] == ["old_post"]
 
     with store._tx() as tx:  # noqa: SLF001 —— 验证 v5→v6 建出来的东西
         tables = {
@@ -393,18 +386,103 @@ def test_migrate_upgrades_a_v1_database_without_losing_data(tmp_path):
         # 老库里没有互动量行——迁移只建表，不凭空造数据
         assert tx.execute("SELECT COUNT(*) FROM post_metrics").fetchone()[0] == 0
 
-    # 迁移之后新列要能正常读写，不是只加了个空壳
-    updated = old.with_updates(baseline_content_count=7, baseline_content_count_at=NOW)
+    # 迁移之后写入仍然正常（不是只把表改坏）
+    updated = old.with_updates(runs=43)
     store.save_round("old_user", updated, events=[], now=NOW)
-    reloaded = store.load_authors()["old_user"]
-    assert reloaded.baseline_content_count == 7
+    assert store.load_authors()["old_user"].runs == 43
 
-    # 新列（posts.hidden_from_guest_at）也要能往返
-    marked = reloaded.with_updates(
-        posts=tuple(p.with_updates(hidden_from_guest_at=NOW) for p in reloaded.posts)
+
+def test_migrate_v6_to_v7_drops_the_hidden_columns_and_is_idempotent(tmp_path):
+    """v6 → v7 删掉 5 个遗留列，且重复执行不炸。
+
+    `migrate()` 里 `executescript(SCHEMA)` 会隐式提交，5 条 `ALTER TABLE DROP COLUMN`
+    是逐条自动提交的——中途崩溃会留下"version=6 但列删了一半"的中间态。能救回来的前提
+    就是这里钉住的"先查列再删"。
+    """
+    import sqlite3
+
+    db_path = tmp_path / "v6.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE schema_version (version INTEGER NOT NULL);
+        INSERT INTO schema_version (version) VALUES (6);
+
+        CREATE TABLE authors (
+          sec_user_id           TEXT PRIMARY KEY,
+          nickname              TEXT NOT NULL DEFAULT '',
+          initialized_at        TEXT,
+          ever_had_posts        INTEGER NOT NULL DEFAULT 0,
+          consecutive_fails     INTEGER NOT NULL DEFAULT 0,
+          last_error            TEXT,
+          last_error_code       TEXT,
+          fail_alerted          INTEGER NOT NULL DEFAULT 0,
+          last_fail_alert_at    TEXT,
+          all_gone_rounds       INTEGER NOT NULL DEFAULT 0,
+          empty_rounds          INTEGER NOT NULL DEFAULT 0,
+          never_seen_alerted    INTEGER NOT NULL DEFAULT 0,
+          newest_seen_created_at TEXT,
+          raw_refresh_round     INTEGER NOT NULL DEFAULT 0,
+          last_new_video_at     TEXT,
+          last_update_at        TEXT,
+          stale_alerted         INTEGER NOT NULL DEFAULT 0,
+          last_seen_at          TEXT,
+          runs                  INTEGER NOT NULL DEFAULT 0,
+          created_at            TEXT NOT NULL,
+          updated_at            TEXT NOT NULL,
+          baseline_content_count    INTEGER,
+          baseline_content_count_at TEXT,
+          content_count_drift_rounds INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO authors (
+          sec_user_id, nickname, runs, created_at, updated_at,
+          baseline_content_count, baseline_content_count_at, content_count_drift_rounds
+        ) VALUES (
+          'old_user', '老账号', 7, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00',
+          5, '2026-01-02T00:00:00+00:00', 2
+        );
+
+        CREATE TABLE posts (
+          sec_user_id     TEXT NOT NULL,
+          content_id      TEXT NOT NULL,
+          kind            TEXT NOT NULL DEFAULT 'unknown',
+          title           TEXT NOT NULL DEFAULT '',
+          created_at      TEXT,
+          is_top          INTEGER NOT NULL DEFAULT 0,
+          first_seen_at   TEXT,
+          last_seen_at    TEXT,
+          absent_rounds   INTEGER NOT NULL DEFAULT 0,
+          absent_is_top   INTEGER NOT NULL DEFAULT 0,
+          hidden_from_guest_at TEXT,
+          hidden_seen_streak  INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (sec_user_id, content_id)
+        );
+        INSERT INTO posts (
+          sec_user_id, content_id, title, hidden_from_guest_at, hidden_seen_streak
+        ) VALUES ('old_user', 'old_post', '老作品', '2026-01-03T00:00:00+00:00', 1);
+        """
     )
-    store.save_round("old_user", marked, events=[], now=NOW)
-    assert store.load_authors()["old_user"].posts[0].hidden_from_guest_at == NOW
+    conn.commit()
+    conn.close()
+
+    for attempt in range(2):
+        store = StateStore(db_path)
+        store.migrate()  # 第二次跑时列已经没了，PRAGMA 判断必须让它安全通过
+        store.close()
+
+    check = sqlite3.connect(db_path)
+    assert check.execute("SELECT version FROM schema_version").fetchone()[0] == 7
+    authors_cols = {row[1] for row in check.execute("PRAGMA table_info(authors)")}
+    posts_cols = {row[1] for row in check.execute("PRAGMA table_info(posts)")}
+    assert not {c for c in authors_cols if "content_count" in c}
+    assert not {c for c in posts_cols if "hidden" in c}
+    # 数据本身一条都不能少
+    assert check.execute("SELECT nickname, runs FROM authors").fetchone() == (
+        "老账号",
+        7,
+    )
+    assert check.execute("SELECT title FROM posts").fetchone() == ("老作品",)
+    check.close()
 
 
 # ------------------------------------------------------------ 互动量时间序列

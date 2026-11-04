@@ -46,7 +46,7 @@ class Logger:
 
 
 class Client:
-    """只回空列表：够跑完一轮，且不会碰 `author_profile`（核验没打开）。"""
+    """只回空列表：够跑完一轮。"""
 
     async def author_posts(self, sec_user_id: str, count: int, **kwargs: Any) -> Page:
         return Page(items=(), raw_included=False)

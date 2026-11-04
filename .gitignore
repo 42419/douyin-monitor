@@ -31,3 +31,6 @@ node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
 docs/.vitepress/*.timestamp-*.mjs
+
+# pytest 在仓库根留下的 basetemp（测试崩在中途时才会出现）
+/pytest-of-*/

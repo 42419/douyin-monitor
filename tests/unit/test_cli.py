@@ -225,11 +225,11 @@ def test_without_explicit_env_a_missing_file_is_still_fine(
     assert "配置文件不存在" not in capsys.readouterr().err
 
 
-def test_config_check_masks_the_identity_key_and_webhook_url(tmp_path, capsys):
+def test_config_check_masks_the_api_key_and_webhook_url(tmp_path, capsys):
     """这份输出会被贴进 issue（排障文档就是这么建议的），凭据一个都不能明文。"""
     settings = settings_for(
         tmp_path,
-        PIN_DTK_API_KEY="dtk_bbbbbbbbbbbb_IDENTITYKEYIDENTITYKEYIDENTITYKEY1234",
+        DTK_API_KEY="dtk_bbbbbbbbbbbb_IDENTITYKEYIDENTITYKEYIDENTITYKEY1234",
         WEBHOOK_URL="https://hooks.example.com/T0KEN-IN-THE-PATH",
     )
 
@@ -238,7 +238,7 @@ def test_config_check_masks_the_identity_key_and_webhook_url(tmp_path, capsys):
 
     assert "IDENTITYKEY" not in printed
     assert "T0KEN-IN-THE-PATH" not in printed
-    assert "PIN_DTK_API_KEY" in printed, "打码不等于不显示这个键"
+    assert "DTK_API_KEY" in printed, "打码不等于不显示这个键"
 
 
 # --------------------------------------------------------------------- 文件权限
@@ -370,9 +370,9 @@ async def test_doctor_requires_archive_scope_only_when_archive_is_enabled(
             return {
                 "user": {
                     "username": "u",
-                    "role": "viewer",
+                    "role": "operator",
                     "via": "api_key",
-                    "scopes": ["douyin:read"],
+                    "scopes": ["douyin:read", "identity:manage"],
                 }
             }
 
@@ -388,10 +388,108 @@ async def test_doctor_requires_archive_scope_only_when_archive_is_enabled(
     # 零个账号也能跑 doctor（自检的对象是实例、凭据与 scope，不是账号列表）
     (tmp_path / "users.conf").write_text("", encoding="utf-8")
 
-    enabled = settings_for(tmp_path)
+    enabled = settings_for(
+        tmp_path, DTK_IDENTITY="3f9c0a52-1b2c-4d5e-8f90-123456789abc"
+    )
     code_enabled = await cli.cmd_doctor(enabled)
     assert code_enabled == 1, "默认开启归档 + 缺 archive:read 必须判为需要处理"
 
-    disabled = settings_for(tmp_path, ARCHIVE_ENABLED="false")
+    disabled = settings_for(
+        tmp_path,
+        ARCHIVE_ENABLED="false",
+        DTK_IDENTITY="3f9c0a52-1b2c-4d5e-8f90-123456789abc",
+    )
     code_disabled = await cli.cmd_doctor(disabled)
     assert code_disabled == 0, "关掉归档时缺 archive:read 不该算问题"
+
+
+def _doctor_client_factory(scopes: list[str], role: str = "operator"):
+    class _Client:
+        def __init__(self, *args: Any, **kwargs: Any) -> None: ...
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *exc: Any) -> None: ...
+
+        async def me(self) -> dict[str, Any]:
+            return {
+                "user": {
+                    "username": "u",
+                    "role": role,
+                    "via": "api_key",
+                    "scopes": scopes,
+                }
+            }
+
+        async def system_status(self) -> dict[str, Any]:
+            return {"version": "5.1.7", "pool": {"douyin": {"active": 14}}}
+
+        async def author_posts(self, *args: Any, **kwargs: Any) -> Any:
+            from dywatch.models import Page
+
+            return Page(items=())
+
+    return _Client
+
+
+async def test_doctor_requires_identity_manage_when_an_identity_is_pinned(
+    tmp_path, monkeypatch, capsys
+):
+    """`identity:manage` 的必需性跟着 `DTK_IDENTITY` 走——配了身份就必须有这个 scope。"""
+    monkeypatch.setattr(
+        cli, "DtkClient", _doctor_client_factory(["douyin:read", "archive:read"])
+    )
+    (tmp_path / "users.conf").write_text("", encoding="utf-8")
+
+    settings = settings_for(
+        tmp_path, DTK_IDENTITY="3f9c0a52-1b2c-4d5e-8f90-123456789abc"
+    )
+    code = await cli.cmd_doctor(settings)
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert "identity:manage" in out
+    assert "必需的 scope 齐备" not in out, "不能先打 ✓ 再打 ✗"
+
+
+async def test_doctor_requires_operator_role_for_a_pinned_identity(
+    tmp_path, monkeypatch, capsys
+):
+    """DTK 的 pin 校验 role（`require_credential_access`），不只是 scope。"""
+    monkeypatch.setattr(
+        cli,
+        "DtkClient",
+        _doctor_client_factory(
+            ["douyin:read", "archive:read", "identity:manage"], role="viewer"
+        ),
+    )
+    (tmp_path / "users.conf").write_text("", encoding="utf-8")
+
+    settings = settings_for(
+        tmp_path, DTK_IDENTITY="3f9c0a52-1b2c-4d5e-8f90-123456789abc"
+    )
+    code = await cli.cmd_doctor(settings)
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert "operator" in out
+
+
+async def test_doctor_flags_a_missing_identity_as_a_problem(
+    tmp_path, monkeypatch, capsys
+):
+    """没配 `DTK_IDENTITY` 时监控会退回拿不到最新作品的那条路——doctor 必须判为问题。"""
+    monkeypatch.setattr(
+        cli,
+        "DtkClient",
+        _doctor_client_factory(["douyin:read", "archive:read", "identity:manage"]),
+    )
+    (tmp_path / "users.conf").write_text("", encoding="utf-8")
+
+    settings = settings_for(tmp_path)
+    code = await cli.cmd_doctor(settings)
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert "DTK_IDENTITY" in out

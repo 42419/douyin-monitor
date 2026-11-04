@@ -20,15 +20,16 @@ DTK v5 是一个自托管的抖音 / TikTok 数据采集后端：签名算法、
 PostgreSQL 归档、REST API / MCP server / Web 控制台，都由它负责。dywatch **不**重新实现
 任何一部分——它只是 DTK 之上的一个 HTTP 客户端。
 
-> dywatch 本工具不自带签名、不碰 Cookie、不碰身份池、不直接访问抖音。抓取、风控绕行、
-> 身份轮换全部由 DTK v5 负责。
+> dywatch 本工具不自带签名、不碰 Cookie、不直接访问抖音。抓取、风控绕行、身份调度
+> 全部由 DTK v5 负责；dywatch 只把读请求**钉在你指定的那个登录态身份**上
+> （`DTK_IDENTITY`），因为游客视角拿不到作者的最新作品。
 
 这个边界带来两个直接后果：
 
 - dywatch 对 DTK **默认是纯只读的**——不提交采集任务、不改 DTK 的设置、不注册
-  watchlist，所以只需要 `douyin:read` 与 `archive:read` 两个 scope（见
+  watchlist；需要 `douyin:read`、`archive:read` 与 `identity:manage` 三个 scope（见
   [权限 / API Key](/reference/permissions)），也不会把你的 DTK 实例搞坏。
-- 唯一的例外是一个**默认关闭**的开关：打开 `ARCHIVE_DOWNLOAD_ENABLED` 后会请求 DTK
+- 唯一的写操作是一个**默认关闭**的开关：打开 `ARCHIVE_DOWNLOAD_ENABLED` 后会请求 DTK
   把新作品的媒体存一份，那需要额外授一个 `media:write`（见
   [归档下载](/guide/archive-download)）。
 

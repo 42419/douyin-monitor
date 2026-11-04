@@ -33,7 +33,7 @@ from .models import (
     Tombstone,
 )
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -59,10 +59,7 @@ CREATE TABLE IF NOT EXISTS authors (
   last_seen_at          TEXT,
   runs                  INTEGER NOT NULL DEFAULT 0,
   created_at            TEXT NOT NULL,
-  updated_at            TEXT NOT NULL,
-  baseline_content_count    INTEGER,
-  baseline_content_count_at TEXT,
-  content_count_drift_rounds INTEGER NOT NULL DEFAULT 0
+  updated_at            TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS posts (
@@ -76,8 +73,6 @@ CREATE TABLE IF NOT EXISTS posts (
   last_seen_at    TEXT,
   absent_rounds   INTEGER NOT NULL DEFAULT 0,
   absent_is_top   INTEGER NOT NULL DEFAULT 0,
-  hidden_from_guest_at TEXT,
-  hidden_seen_streak  INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (sec_user_id, content_id)
 );
 
@@ -209,6 +204,35 @@ def _migrate_5_to_6(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_6_to_7(conn: sqlite3.Connection) -> None:
+    """删除隐藏作品核验留下的 5 个列。
+
+    这条链路已经整体下线：监控现在只用登录态身份一个视角，不再有"访客看不到"这个
+    判定维度。列留着会让下一个读代码的人以为还有人在写它们，所以直接删。
+
+    SQLite 的 `DROP COLUMN` 需要 3.35+（Python 3.11 自带的都够）。删除前先 `PRAGMA`
+    确认列存在——迁移要幂等，重跑不该炸。
+    """
+    if sqlite3.sqlite_version_info < (3, 35, 0):
+        # Debian 11 / 老 Armbian 自带 3.34，报出来的是 `near "DROP": syntax error`——
+        # 一句无法归因的启动失败。这里换成能照着做的说明。
+        raise RuntimeError(
+            f"SQLite {sqlite3.sqlite_version} 不支持 DROP COLUMN，schema v7 迁移需要 3.35+。"
+            "请换用自带新版 SQLite 的 Python（Ubuntu 22.04+ / Python 3.11+），"
+            "或先备份 data/dywatch.db 再手工删列。"
+        )
+    for table, column in (
+        ("authors", "baseline_content_count"),
+        ("authors", "baseline_content_count_at"),
+        ("authors", "content_count_drift_rounds"),
+        ("posts", "hidden_from_guest_at"),
+        ("posts", "hidden_seen_streak"),
+    ):
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column in existing:
+            conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+
+
 #: 版本号 -> "从这个版本升到下一个版本"的步骤。新增迁移时按顺序追加，
 #: 键是**升级前**的版本号（比如从 2 升到 3 的步骤，键是 2）。
 _MIGRATIONS: Final[Mapping[int, Callable[[sqlite3.Connection], None]]] = {
@@ -217,6 +241,7 @@ _MIGRATIONS: Final[Mapping[int, Callable[[sqlite3.Connection], None]]] = {
     3: _migrate_3_to_4,
     4: _migrate_4_to_5,
     5: _migrate_5_to_6,
+    6: _migrate_6_to_7,
 }
 
 
@@ -304,9 +329,10 @@ class StateStore:
         不能指望重跑一遍 `SCHEMA` 常量就把旧库补齐。
 
         这是这个项目第一次真的需要一条迁移路径（v1 → v2，加两列存
-        `baseline_content_count` / `_at`，给隐藏作品核验用）。以前只有一个版本，
-        版本不对直接报错就够了；现在开始，`_MIGRATIONS` 按顺序追加，"当前版本"
-        永远是最后一步迁移完成后的版本。
+        `baseline_content_count` / `_at`，给隐藏作品核验用；后来核验整条链路下线，
+        v6 → v7 又把它们连同 `posts` 上的两列一起删了——历史步骤保持原样，不回头改）。
+        以前只有一个版本，版本不对直接报错就够了；现在开始，`_MIGRATIONS` 按顺序追加，
+        "当前版本"永远是最后一步迁移完成后的版本。
         """
         with self._tx() as conn:
             conn.executescript(SCHEMA)
@@ -460,9 +486,8 @@ class StateStore:
                   last_error, last_error_code, fail_alerted, last_fail_alert_at,
                   all_gone_rounds, empty_rounds, never_seen_alerted, newest_seen_created_at,
                   raw_refresh_round, last_new_video_at, last_update_at, stale_alerted,
-                  last_seen_at, runs, created_at, updated_at,
-                  baseline_content_count, baseline_content_count_at, content_count_drift_rounds
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  last_seen_at, runs, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(sec_user_id) DO UPDATE SET
                   nickname=excluded.nickname,
                   initialized_at=excluded.initialized_at,
@@ -482,10 +507,7 @@ class StateStore:
                   stale_alerted=excluded.stale_alerted,
                   last_seen_at=excluded.last_seen_at,
                   runs=excluded.runs,
-                  updated_at=excluded.updated_at,
-                  baseline_content_count=excluded.baseline_content_count,
-                  baseline_content_count_at=excluded.baseline_content_count_at,
-                  content_count_drift_rounds=excluded.content_count_drift_rounds
+                  updated_at=excluded.updated_at
                 """,
                 (
                     state.sec_user_id,
@@ -509,9 +531,6 @@ class StateStore:
                     state.runs,
                     _iso(now),
                     _iso(now),
-                    state.baseline_content_count,
-                    _iso(state.baseline_content_count_at),
-                    state.content_count_drift_rounds,
                 ),
             )
 
@@ -519,9 +538,8 @@ class StateStore:
             conn.execute("DELETE FROM posts WHERE sec_user_id = ?", (sec_user_id,))
             conn.executemany(
                 "INSERT INTO posts (sec_user_id, content_id, kind, title, created_at, is_top,"
-                " first_seen_at, last_seen_at, absent_rounds, absent_is_top, hidden_from_guest_at,"
-                " hidden_seen_streak)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                " first_seen_at, last_seen_at, absent_rounds, absent_is_top)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
                 [
                     (
                         sec_user_id,
@@ -534,8 +552,6 @@ class StateStore:
                         _iso(post.last_seen_at),
                         post.absent_rounds,
                         1 if post.absent_is_top else 0,
-                        _iso(post.hidden_from_guest_at),
-                        post.hidden_seen_streak,
                     )
                     for post in state.posts
                 ],
@@ -1005,13 +1021,6 @@ def _row_to_state(
         stale_alerted=bool(row["stale_alerted"]),
         last_seen_at=_dt(row["last_seen_at"]),
         runs=int(row["runs"]),
-        baseline_content_count=(
-            int(row["baseline_content_count"])
-            if row["baseline_content_count"] is not None
-            else None
-        ),
-        baseline_content_count_at=_dt(row["baseline_content_count_at"]),
-        content_count_drift_rounds=int(row["content_count_drift_rounds"] or 0),
         posts=tuple(
             PostState(
                 content_id=p["content_id"],
@@ -1023,18 +1032,6 @@ def _row_to_state(
                 last_seen_at=_dt(p["last_seen_at"]),
                 absent_rounds=int(p["absent_rounds"]),
                 absent_is_top=bool(p["absent_is_top"]),
-                # 旧库在迁移前没有这一列；`migrate()` 会补上，但读一条还没迁移的行时
-                # 不该炸——按"没有这个已知情况"处理（`None`）
-                hidden_from_guest_at=(
-                    _dt(p["hidden_from_guest_at"])
-                    if "hidden_from_guest_at" in p.keys()
-                    else None
-                ),
-                hidden_seen_streak=(
-                    int(p["hidden_seen_streak"] or 0)
-                    if "hidden_seen_streak" in p.keys()
-                    else 0
-                ),
             )
             for p in posts
         ),

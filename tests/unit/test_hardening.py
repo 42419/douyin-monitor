@@ -208,25 +208,24 @@ def test_config_check_masks_every_credential_key():
     """`config-check` 的输出会被贴进 issue：凭据类键一个都不能明文出现。"""
     from dywatch.settings import MASKED_KEYS, SPECS
 
-    assert {"PIN_DTK_API_KEY", "WEBHOOK_URL", "DTK_API_KEY"} <= MASKED_KEYS
+    assert {"WEBHOOK_URL", "DTK_API_KEY"} <= MASKED_KEYS
     for key in MASKED_KEYS:
         assert key in SPECS, f"{key} 不在注册表里，说明这份清单过期了"
 
 
-def test_describe_never_prints_the_identity_key_or_the_webhook_url():
+def test_describe_never_prints_the_api_key_or_the_webhook_url():
     settings = load_settings(
         None,
         environ={
             "DTK_API_KEY": "dtk_aaaaaaaaaaaa_SECRETSECRETSECRETSECRETSECRETSECRET12",
-            "PIN_DTK_API_KEY": "dtk_bbbbbbbbbbbb_VERYVERYVERYSECRETKEYKEYKEYKEYKEYKEY12",
             "WEBHOOK_URL": "https://hooks.example.com/T0KEN-IN-THE-PATH",
         },
     )
     printed = "\n".join(settings.describe())
 
-    assert "VERYVERYVERYSECRET" not in printed
+    assert "SECRETSECRET" not in printed
     assert "T0KEN-IN-THE-PATH" not in printed
-    assert "PIN_DTK_API_KEY" in printed and "***" in printed
+    assert "DTK_API_KEY" in printed and "***" in printed
 
 
 def test_masked_keys_covers_every_notifier_secret_field():

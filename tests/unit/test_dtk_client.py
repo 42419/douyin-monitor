@@ -883,3 +883,57 @@ def test_include_raw_policy():
         )
         is False
     )
+
+
+# ------------------------------------------------- 定向身份（单 cookie 模式）
+IDENTITY = "3f9c0a52-1b2c-4d5e-8f90-123456789abc"
+
+
+async def test_identity_is_sent_on_every_post_read():
+    """配了 identity 之后，读作品列表必须带 `identity=`。
+
+    这是"只用一个登录态 cookie"的全部实现：DTK 侧不再轮换身份，永远同一个视角。
+    """
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200, json=envelope({"items": [], "cursor": None, "has_more": False})
+        )
+
+    async with make_client(handler, identity=IDENTITY) as client:
+        await client.author_posts("u", 5)
+
+    for request in seen:
+        assert dict(request.url.params)["identity"] == IDENTITY
+
+
+async def test_without_identity_the_pool_is_used():
+    """不配 `DTK_IDENTITY` 时不发这个参数——退回身份池，只用于排障。"""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200, json=envelope({"items": [], "cursor": None, "has_more": False})
+        )
+
+    async with make_client(handler) as client:
+        await client.author_posts("u", 5)
+
+    assert "identity" not in dict(seen[0].url.params)
+
+
+async def test_archive_reads_are_not_pinned():
+    """归档是本地库读取：不需要 identity:manage，也不该被这把权限牵连。"""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=envelope({"items": []}))
+
+    async with make_client(handler, identity=IDENTITY) as client:
+        await client.archive_of_author("u1")
+
+    assert "identity" not in dict(seen[0].url.params)

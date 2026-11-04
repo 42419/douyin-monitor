@@ -301,7 +301,6 @@ CSS = """
   .video-list .vtop { flex: 0 0 auto; font-size: 11px; color: var(--amber); font-weight: 600; }
   .video-list .vkind { flex: 0 0 auto; font-size: 11px; color: var(--text3); }
   .video-list .vabsent { flex: 0 0 auto; font-size: 11px; color: var(--red); font-weight: 600; }
-  .video-list .vhidden { flex: 0 0 auto; font-size: 11px; color: var(--amber); font-weight: 600; }
   /* 作品标题是个按钮：点开就地展开这条作品自己的趋势。把按钮的默认外观全部抹掉，
      看起来仍是原来那个标题，只是前面多了一个展开箭头 */
   .video-list .vtoggle {

@@ -184,7 +184,6 @@ def test_summarize_covers_every_kind_without_raising():
         },
         EventKind.REVIVED: {"title": "回来了"},
         EventKind.TITLE_CHANGED: {"old": "旧", "new": "新"},
-        EventKind.HIDDEN_FROM_GUEST: {"hidden": [{"content_id": "1", "title": "隐"}]},
         EventKind.GAP_DETECTED: {
             "oldest_in_page": "2026-09-01T00:00:00+00:00",
             "previous_newest": "2026-08-30T00:00:00+00:00",
@@ -264,7 +263,7 @@ def test_events_chart_payload_sums_to_the_window_total():
     ticks = [
         (since + timedelta(hours=1), "new_post"),
         (since + timedelta(hours=1, minutes=5), "account_failed"),
-        (since + timedelta(hours=20), "hidden_from_guest"),
+        (since + timedelta(hours=20), "scrolled_out"),
         (since + timedelta(hours=20), "self_degraded"),
     ]
     payload = webui.events_chart_payload(
@@ -275,7 +274,7 @@ def test_events_chart_payload_sums_to_the_window_total():
     )
     assert sum(sum(item["data"]) for item in payload["datasets"]) == 4
     assert len(payload["labels"]) == 24
-    # 静默事件（对访客不可见）不该和"失败"共用一档，否则图上只剩两种颜色
+    # 静默事件（窗口挪动）不该和"失败"共用一档，否则图上只剩两种颜色
     tones = {item["label"]: sum(item["data"]) for item in payload["datasets"]}
     assert (
         tones["正向"] == 1
@@ -291,7 +290,7 @@ def test_events_chart_payload_sums_to_the_window_total():
 def test_delivery_state_separates_designed_silence_from_a_lost_push():
     """`静默`（设计如此）和`未推送`（该推没推成）必须分开：混成一个灰点，
     就再也看不出通知链路到底有没有在工作。"""
-    silent = {"kind": "hidden_from_guest", "delivery": {}}
+    silent = {"kind": "scrolled_out", "delivery": {}}
     lost = {"kind": "new_post", "delivery": {}}
     sent = {"kind": "new_post", "delivery": {"sent": ["dingtalk"], "failed": {}}}
     failed = {

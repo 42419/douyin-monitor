@@ -189,19 +189,6 @@ def diff(
         item = current[content_id]
         entry = posts[content_id]
         changes: dict[str, Any] = {"last_seen_at": now, "absent_rounds": 0}
-        if entry.hidden_from_guest_at is not None:
-            # 又能在访客列表里看到它了。**但清标记也要分级确认**：访客视角本身就会抖
-            # （这次看不到、下次看得到），见一次就清会跟下面的"缺席确认删除"来回横跳——
-            # 线上表现为同一条作品每几分钟被重新核验一次（标记清除 → 缺席 2 轮 → 确认删除
-            # → 总数出现缺口 → 定向核验 → 重新标记，闭环）。要连续 `delete_rounds` 轮都
-            # 看得到才认定"它真的又能被访客看到了"；中间有一轮看不到就归零（见下面的缺席段）。
-            # 刻意不发事件：我们**从来没有报过它消失**，所以也没有"回归"可报。
-            streak = entry.hidden_seen_streak + 1
-            if streak >= cfg.delete_rounds:
-                changes["hidden_from_guest_at"] = None
-                changes["hidden_seen_streak"] = 0
-            else:
-                changes["hidden_seen_streak"] = streak
         if item.title != entry.title:
             title_changed += 1
             changes["title"] = item.title
@@ -238,15 +225,7 @@ def diff(
             last_seen_at=now,
         )
 
-    # "全部作品都不见了"只对**访客本来能看到**的作品才有意义：如果已知作品全部带
-    # `hidden_from_guest_at` 标记，访客列表为空是预期内的常态，不是"删光"。不这么判的话，
-    # 那个账号每一轮都会满足这个条件，`all_gone_rounds` 会一直往上涨（虽然此刻没有可确认
-    # 的条目、发不出事件，但等真有作品进入确认流程时，它会绕过"全体消失等 N 轮"的等待）。
-    all_gone = (
-        bool(prev.posts)
-        and not current_ids
-        and (any(p.hidden_from_guest_at is None for p in prev.posts))
-    )
+    all_gone = bool(prev.posts) and not current_ids
     all_gone_rounds = prev.all_gone_rounds + 1 if all_gone else 0
 
     # ---- 删除判定（挤出预算 + 分级确认） ----------------------------------
@@ -266,16 +245,6 @@ def diff(
     for content_id in ordered:
         entry = posts.get(content_id)
         if entry is None:  # pragma: no cover - 防御：状态不一致时跳过
-            continue
-        if entry.hidden_from_guest_at is not None:
-            # 核验确认过"这条对访客不可见"：它**缺席访客列表是预期内的**，不是可疑信号。
-            # 既不计缺席、也不算被挤出窗口、更不判消失——否则每轮都会把它确认成
-            # "已消失"，紧接着又被核验从登录视角填回来，两个视角来回横跳（曾经的真实故障）。
-            # 标记要连续 `delete_rounds` 轮都看得到才清（见上面的标题同步段）：所以这一轮
-            # 看不到就把"连续可见"归零——否则"看得见、看不到"交替的那种抖动会把计数慢慢
-            # 攒够，标记被清掉，循环又回来了。
-            if entry.hidden_seen_streak:
-                posts[content_id] = entry.with_updates(hidden_seen_streak=0)
             continue
         is_top = entry.is_top
 
