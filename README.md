@@ -190,3 +190,8 @@ sudo bash deploy/install.sh --yes                  # 必须重跑：.venv 里装
 
 设计取舍、每条规则的来历、以及"为什么不那样做"，都在 [`DESIGN.md`](./DESIGN.md) 里；
 真实接口契约（含实测数据）在它的第 2 章。
+
+## 参与开发
+
+开发环境、常用命令（`make check` 等）、目录结构与提交约定见
+[`CONTRIBUTING.md`](./CONTRIBUTING.md)。许可：[MIT](./LICENSE)。
