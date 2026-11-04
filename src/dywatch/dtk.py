@@ -29,86 +29,13 @@ from typing import Any, Final, Mapping, Sequence
 
 import httpx
 
+from .errors import MonitorError
 from .models import ArchiveItem, Content, Kind, Page
-
-#: 上游错误码里，值得整体闸门暂停的那些 —— 都是"现在别发请求"的意思
-GATE_CODES: Final[frozenset[str]] = frozenset(
-    {
-        "RATE_LIMITED",
-        "IDENTITY_POOL_EXHAUSTED",
-        "ENDPOINT_CIRCUIT_OPEN",
-        "QUEUE_FULL",
-    }
-)
-
-#: 配置性问题，重试没有意义，应当直接告诉人。
-#:
-#: **`INVALID_PARAM` 刻意不在这里。** 它虽然也是"重试没有意义"，但它的作用域通常只有
-#: 一个账号（典型来源是 `users.conf` 里某一个 `sec_user_id` 写错，DTK 回 400），而
-#: `is_config` 的处理是"连坐所有账号：关闸一小时 + 一条全局告警"。把它放进来过一次，
-#: 结果是**一个坏 ID 让其余全部账号每小时停摆一小时**（那个账号每轮到期后又被撞一次，
-#: 闸门就再也开不回来），而该账号本该走的"连续失败 → 标记 ID 无效"告警被推迟到约 5 小时。
-#: 现在它按普通失败处理：`_on_failure` 照样累计失败次数并告警，只是不牵动全局。
-CONFIG_CODES: Final[frozenset[str]] = frozenset(
-    {"UNAUTHENTICATED", "FORBIDDEN_SCOPE", "NOT_CONFIGURED"}
-)
 
 #: 写请求（归档下载、pin）的超时。DTK 受理一个下载请求是本地操作，正常都在 1 秒内；
 #: 10 秒还不回来就是它不对劲，再等下去只会把整轮的结束时间往后拖——写请求在旁路上，
 #: 没有哪个人在等它。
 WRITE_TIMEOUT: Final[float] = 10.0
-
-#: 上游侧的临时问题，该账号记一次失败然后退避
-TRANSIENT_CODES: Final[frozenset[str]] = frozenset(
-    {
-        "UPSTREAM_RISK_CONTROL",
-        "UPSTREAM_CHANGED",
-        "SIGNING_FAILED",
-        "INTERNAL",
-        "DTK_UNREACHABLE",
-        "DTK_MALFORMED",
-        "TASK_TIMEOUT",
-    }
-)
-
-#: 我们自己的错误码 = 上游没有的那些
-LOCAL_CODES: Final[frozenset[str]] = frozenset(
-    {"DTK_UNREACHABLE", "DTK_MALFORMED", "CONTRACT_VIOLATION", "TASK_TIMEOUT"}
-)
-
-
-class MonitorError(RuntimeError):
-    """Every failure this tool can produce, normalized to one code."""
-
-    def __init__(
-        self,
-        code: str,
-        message: str = "",
-        *,
-        details: Mapping[str, Any] | None = None,
-        retry_after: int | None = None,
-    ) -> None:
-        super().__init__(f"{code}: {message}" if message else code)
-        self.code = code
-        self.message = message
-        self.details = dict(details or {})
-        self.retry_after = retry_after
-
-    @property
-    def is_gate(self) -> bool:
-        return self.code in GATE_CODES
-
-    @property
-    def is_config(self) -> bool:
-        return self.code in CONFIG_CODES
-
-    @property
-    def is_contract(self) -> bool:
-        return self.code == "CONTRACT_VIOLATION"
-
-    def __str__(self) -> str:  # pragma: no cover - trivial
-        return f"{self.code}: {self.message}" if self.message else self.code
-
 
 # ---------------------------------------------------------------------------
 # 解析（纯函数，可脱网单测）
@@ -566,13 +493,6 @@ class DtkClient:
             },
         )
         return parse_page(payload, raw_included=include_raw, task_id=task_id)
-
-    async def content_detail(self, content_id: str) -> Content:
-        """One post's detail. Note: `raw.is_top` here is always 0 — never read it."""
-        payload, _status, _task = await self._call(
-            "/api/v1/douyin/video", {"aweme_id": content_id}
-        )
-        return parse_content(payload, raw_included=False)
 
     async def identify_url(self, url: str) -> dict[str, Any]:
         """Share link → `{platform, resource, resource_id, ...}`. Costs no identity."""

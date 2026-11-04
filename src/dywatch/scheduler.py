@@ -20,10 +20,9 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
-from .dtk import MonitorError
+from .errors import MonitorError
 
 
 @dataclass(slots=True)
@@ -187,20 +186,4 @@ class GlobalGate:
         }
 
 
-def should_alert_failure(
-    *,
-    fails: int,
-    threshold: int,
-    last_alert: datetime | None,
-    now: datetime,
-    cooldown_seconds: int,
-) -> bool:
-    """Whether a failing account deserves another notification yet."""
-    if fails < threshold:
-        return False
-    if last_alert is None:
-        return True
-    return (now - last_alert).total_seconds() >= cooldown_seconds
-
-
-__all__ = ["GlobalGate", "should_alert_failure"]
+__all__ = ["GlobalGate"]
