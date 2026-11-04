@@ -180,7 +180,9 @@ async def run_author(
     ):
         if not event.should_notify:
             continue
-        allowed, key = should_send(event, dedup)
+        allowed, key = should_send(
+            event, dedup, account_fail_window=cfg.fail_cooldown
+        )
         if not allowed:
             _log(logger, "debug", "notify.suppressed", kind=event.kind.value, key=key)
             continue
@@ -677,10 +679,6 @@ def _summarize(
         duration_ms=int((time.monotonic() - started) * 1000),
         events=events,
     )
-
-
-def _include_raw_mode(cfg: DiffConfig) -> str:
-    return getattr(cfg, "include_raw", "auto")
 
 
 def _log(logger: Any, level: str, event: str, **fields: Any) -> None:

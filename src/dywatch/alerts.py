@@ -40,7 +40,8 @@ class TriggerSpec:
 TRIGGERS: Final[Mapping[EventKind, TriggerSpec]] = {
     # 上游整体问题：按错误码分桶，1 小时一次
     EventKind.UPSTREAM_DEGRADED: TriggerSpec("error", HOUR, "global"),
-    # 账号级：窗口与 FAIL_COOLDOWN 保持一致（settings 里那一项就是给它用的）
+    # 账号级：默认窗口只是"调用方没带配置时"的兜底；实际生效值由调用方传入的
+    # FAIL_COOLDOWN 覆盖（见 should_send(..., account_fail_window=...)）。
     EventKind.ACCOUNT_FAILED: TriggerSpec("error", 5 * MINUTE, "author"),
     EventKind.ACCOUNT_RECOVERED: TriggerSpec("info", 0, "none"),
     EventKind.NEVER_SEEN: TriggerSpec("warning", 6 * HOUR, "author"),
@@ -152,13 +153,26 @@ class Deduplicator:
         self._marks.clear()
 
 
-def should_send(event: Event, dedup: Deduplicator) -> tuple[bool, str]:
-    """Whether this event should be delivered now, and the key it claimed."""
+def should_send(
+    event: Event,
+    dedup: Deduplicator,
+    *,
+    account_fail_window: int | None = None,
+) -> tuple[bool, str]:
+    """Whether this event should be delivered now, and the key it claimed.
+
+    `account_fail_window` 让调用方用配置里的 `FAIL_COOLDOWN` 覆盖 `ACCOUNT_FAILED`
+    的默认窗口（`TRIGGERS` 里的 5 分钟只是"没带配置时"的兜底）。不这么做的话，用户把
+    `FAIL_COOLDOWN` 调小就会被静默压到 5 分钟——配置项形同虚设。
+    """
     if event.kind in NO_WINDOW_EVENTS:
         return True, ""
     spec = TRIGGERS.get(event.kind)
     if spec is None:
         return True, ""
+    window = spec.window_seconds
+    if event.kind is EventKind.ACCOUNT_FAILED and account_fail_window is not None:
+        window = max(0, int(account_fail_window))
     key = dedup_key(event)
     if spec.scope == "global":
         # 全局事件按**具体原因**分桶，别只按事件类型分：
@@ -171,7 +185,7 @@ def should_send(event: Event, dedup: Deduplicator) -> tuple[bool, str]:
             key = f"{key}:{event.payload.get('code', 'unknown')}"
         elif event.kind is EventKind.SELF_DEGRADED:
             key = f"{key}:{event.payload.get('reason', 'unknown')}"
-    return dedup.allow(key, spec.window_seconds), key
+    return dedup.allow(key, window), key
 
 
 __all__ = [
