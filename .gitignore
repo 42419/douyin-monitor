@@ -20,6 +20,10 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+.tv/
+.testenv/
+.uvcache/
+.ruff_cache/
 *.egg-info/
 .pytest_cache/
 uv.lock

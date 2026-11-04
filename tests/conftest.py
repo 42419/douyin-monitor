@@ -1,4 +1,10 @@
-"""Test bootstrap: make `src/` importable without an editable install."""
+"""Test bootstrap: make `src/` importable without an editable install.
+
+`tmp_path` 在受限环境（某些 Windows 沙箱 / 只读挂载）里可能因为对基准目录的
+`chmod` / `rm_rf` 被拒而在 **setup** 阶段报 `PermissionError`——这类环境请改在
+Linux / WSL（或 CI，见 `.github/workflows/ci.yml`）上跑测试。下面 `pytest_configure`
+的兜底只处理**收尾**时的清扫，不改变 setup 行为。
+"""
 
 from __future__ import annotations
 

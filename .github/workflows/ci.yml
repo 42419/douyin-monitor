@@ -1,0 +1,35 @@
+name: CI
+
+# Python 包的测试与格式检查。文档站有单独的 docs.yml。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          # 与 DTK 一致用 3.12；项目要求 >= 3.11
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖（含 dev）
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: 格式检查（ruff format；本项目不开 lint 规则，见 pyproject）
+        run: ruff format --check src tests
+
+      - name: 测试
+        run: python -m pytest -q

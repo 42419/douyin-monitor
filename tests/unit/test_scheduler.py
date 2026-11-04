@@ -301,7 +301,9 @@ def test_one_capped_incident_is_counted_once_however_many_requests_hit_it():
     assert g.snapshot()["retry_after_capped"] == 1
     assert log.names().count("gate.retry_after_capped") == 1
     assert g.times_closed == 1
-    assert 3599 <= g.remaining() <= 3600
+    # 留 1e-6 的余量：`remaining()` 是"截止时刻 - 当前单调钟"，两次读时钟之间
+    # 的浮点误差会让它比 3600 多出 1e-12 量级（不是真的多停了）
+    assert 3599 <= g.remaining() <= 3600 + 1e-6
 
 
 def test_a_straggler_that_really_extends_the_gate_to_the_cap_is_counted():
