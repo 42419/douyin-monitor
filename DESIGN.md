@@ -1302,7 +1302,7 @@ douyin-monitor/
 | **S6** 隐藏作品核验 | ⬜   | **已于 2026-11-04 下线**（见 §4.10 与 D27）。原设计见历史记录；游客视角漏看最新作品的根因改用「单身份读取」解决，`hidden_from_guest` 事件、核验配置与 schema 列全部删除                                                                                                                                                                                            |
 | **S7** 观测与图表   | ✅   | 2026-10-02：互动量时间序列落库（`post_metrics`，schema v5→v6）、上游健康读数进快照（**主循环定期取，面板不自己发请求**）、`SELF_DEGRADED` 补齐（磁盘余量 + 状态库可写）、`/metrics` 补上"上游健康"与"自身状态"两组、事件时间线页 `/events`（Chart.js 本地打包，不走 CDN）；`webui.py` 拆成 `webui/` 包（**CSS 整段搬运、一个字没改**）。设计与取舍见 §4.9、D22~D26 |
 
-代码规模：`src/dywatch` **38 个 `.py`**（顶层 19 个模块 + `notifiers/` 10 个 + `webui/` 9 个），约 1.3 万行；测试 **712 项**（709 通过 / 3 跳过；`tmp_path` 用例需在 Linux / CI 上跑，Windows 沙箱里会因权限拒绝而无法启动）。
+代码规模：`src/dywatch` **38 个 `.py`**（顶层 19 个模块 + `notifiers/` 10 个 + `webui/` 9 个），约 1.3 万行；测试 **714 项**（711 通过 / 3 跳过；`tmp_path` 用例需在 Linux / CI 上跑，Windows 沙箱里会因权限拒绝而无法启动）。
 
 ### 实现过程中对设计的修正（都记在这里，免得以后当成 bug）
 
@@ -1368,6 +1368,7 @@ douyin-monitor/
 | 55 | 错误码映射停在 DTK 5.1.3 | 复核 5.1.4→5.1.10：`IDENTITY_LOGIN_REQUIRED`（v5.1.4 新增）并入 `CONFIG_CODES`（全局配置错误）；`UPSTREAM_UNREACHABLE` 按普通瞬时失败；新增 §2.8 | 5.1.4 新增的 `IDENTITY_LOGIN_REQUIRED` 语义是「读请求需要已登录身份」，单身份下等于 `DTK_IDENTITY` 过期/没登录——是全局问题。不映射会让每个账号各自累计失败、各发一条告警（N 条噪音） |
 | 56 | `StateStore.ensure_author` 对已存在作者返回**不带 posts/tombstones** 的空壳 | 返回完整 `AuthorState`（顺带读完两张子表） | 函数名像「加载作者」，调用者若把这个空壳当当前状态喂给 `diff`，会把全部已知作品当成新作品。当前调用点恰好只在新建时用它，但这是迟早会踩的陷阱 |
 | 57 | 面板线程 `PanelServer` 起了从不 `stop()`；`.gitignore` 漏 `.tv/` 等；配置参考自称「由 SETTINGS 生成」但无人校验 | `cmd_run` 的 `finally` 里 `panel.stop()`；`.gitignore` 补 `.tv/ .testenv/ .uvcache/ .ruff_cache/`；新增 `tests/unit/test_config_docs.py` 校验 `.env.example` 与参考页不漏键 | 监听 socket 应干净释放；嵌套 `.gitignore` 兜住是运气不是约定；「生成」的说法要能被测试证明，否则新增配置项就会静默漏文档 |
+| 58 | 启动时逐项打 `config line=...`（一次十几行、每行重复时间戳与 `config line=` 前缀），`config.note` 也用 WARNING 逐条刷 | 合成一段可扫读的多行横幅（`StructuredLogger.banner` + `cli._startup_banner`）：配置分组、提示集中、面板地址单列；结构化细节降到 debug 日志 | 终端 / journal 上真正需要注意的（速率余量、`NOTIFY_TARGETS` 覆盖旧凭据、面板暴露）被十几行重复前缀淹没。横幅只保留一个时间戳前缀，正文按「实例/节奏/判定/归档/身份」分组；排障细节仍可在 debug 日志里 grep |
 
 ### 尚未做（明确不在第一版范围）
 

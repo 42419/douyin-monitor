@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import signal
 import sys
 from datetime import datetime, timezone
@@ -460,6 +461,42 @@ async def cmd_add(settings: Settings, target: str, nickname: str) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _startup_banner(
+    runtime,
+    settings: Settings,
+    *,
+    once: bool,
+    panel_urls: list[str],
+    panel_exposed: str | None,
+) -> str:
+    """启动横幅：把「实例 / 节奏 / 判定 / 归档 / 身份…」压成一段可扫读的多行文本。
+
+    以前这些是每项一条 `config line=...` 日志：一次启动刷十几行、每行都带重复的
+    时间戳与 `config line=` 前缀，真正需要注意的提示（速率余量、NOTIFY_TARGETS
+    覆盖旧凭据、面板暴露）反而被淹没。现在合成一段，提示与面板单独成节。
+    """
+    lines = [
+        f"dywatch {__version__} · {'单轮' if once else '常驻'} · pid {os.getpid()}",
+        "",
+    ]
+    lines.extend(line.rstrip() for line in runtime.describe())
+    notes = list(settings.warnings())
+    if panel_exposed:
+        notes.append(
+            f"面板监听 {panel_exposed} 且无鉴权；对外暴露请自己加反代鉴权"
+            "（面板只读、不发上游请求）"
+        )
+    if notes:
+        lines.append("")
+        lines.append("  提示")
+        lines.extend(f"  - {note}" for note in notes)
+    if panel_urls:
+        lines.append("")
+        lines.append("  面板")
+        lines.append("  " + "  ·  ".join(panel_urls))
+    return "\n".join(lines)
+
+
 async def cmd_run(settings: Settings, *, once: bool) -> int:
     errors = settings.validate()
     if errors:
@@ -468,9 +505,6 @@ async def cmd_run(settings: Settings, *, once: bool) -> int:
         return 2
 
     logger, _raw = setup_logging(settings)
-    for note in settings.warnings():
-        logger.warning("config.note", note=note)
-
     runtime = build_runtime(settings, logger=logger)
     stop = asyncio.Event()
     runtime.loop.stop = stop
@@ -490,35 +524,41 @@ async def cmd_run(settings: Settings, *, once: bool) -> int:
             signal.signal(sig, lambda s, _f: _request_stop(int(s)))
 
     started = datetime.now(timezone.utc)
-    logger.info("=" * 60)
-    logger.info(
-        "dywatch.started", version=__version__, pid=__import__("os").getpid(), once=once
-    )
-    for line in runtime.describe():
-        logger.info("config", line=line.strip())
+
+    # 面板先起：横幅里要带它的访问地址
     panel = None
+    panel_urls: list[str] = []
+    panel_exposed: str | None = None
     if settings["WEB_ENABLED"]:
         try:
             from .webui import PanelServer
 
             panel = PanelServer(settings)
             panel.start()
-            for url in panel.urls(settings):
-                logger.info("panel.listening", url=url)
-            logger.info(
-                "panel.readonly",
-                hint="只读且无鉴权；列表读 status.json、详情读状态库，不发上游请求、不消耗身份",
-            )
-            if str(settings["WEB_HOST"]) not in ("127.0.0.1", "::1", "localhost"):
-                logger.warning(
-                    "panel.exposed",
-                    host=str(settings["WEB_HOST"]),
-                    hint="按这个地址监听等于把面板摊在网络上，而它没有鉴权；"
-                    "云服务器还要记得放通端口时自己评估",
-                )
+            panel_urls = panel.urls(settings)
+            host = str(settings["WEB_HOST"])
+            if host not in ("127.0.0.1", "::1", "localhost"):
+                panel_exposed = host
         except OSError as exc:
             logger.error("panel.failed", error=str(exc))
-    logger.info("=" * 60)
+
+    # 一段可扫读的启动横幅（终端与日志各一个时间戳前缀，后面是多行正文）。
+    logger.banner(
+        _startup_banner(
+            runtime,
+            settings,
+            once=once,
+            panel_urls=panel_urls,
+            panel_exposed=panel_exposed,
+        )
+    )
+    # 结构化细节只进 debug 日志（排障时 grep 得到），不再逐行刷到终端。
+    for line in runtime.describe():
+        logger.debug("config", line=line.strip())
+    for note in settings.warnings():
+        logger.debug("config.note", note=note)
+    for url in panel_urls:
+        logger.debug("panel.listening", url=url)
 
     try:
         await runtime.loop.run(once=once)

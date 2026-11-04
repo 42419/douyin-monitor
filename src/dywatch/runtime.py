@@ -59,6 +59,17 @@ class StructuredLogger:
     def info(self, event: str, **fields: Any) -> None:
         self._emit(logging.INFO, event, **fields)
 
+    def banner(self, text: str) -> None:
+        """把一段**人读的多行摘要**作为一个 INFO 记录写出。
+
+        与 `info(event, **fields)` 的区别：字段值会被 `_short`/`one_line` 压成一行，
+        而启动横幅要保留换行才好看。整段作为一条记录写入，所以文件与终端各只有一个
+        时间戳前缀，后面是原样的多行正文。
+        """
+        if not self._log.isEnabledFor(logging.INFO):
+            return
+        self._log.info("%s", text)
+
     def warning(self, event: str, **fields: Any) -> None:
         self._emit(logging.WARNING, event, **fields)
 
