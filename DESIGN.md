@@ -498,6 +498,19 @@ dtk_<12 位十六进制前缀>_<32 位 base64url>     共 49 字符，必须以 
 的判据继续有效，`dtk.py` 无需改动。**线上佐证**：同日面板读数 3 个账号全部
 `round_status=ok`、`last_error_code=null`，上游 `version=5.1.3`、健康。
 
+### 2.8 版本复核（2026-11，dtk 5.1.4 → 5.1.10）
+
+现网与本地 clone 均已到 **5.1.10**。对 5.1.4..5.1.10 之间**本工具用到的接口面**再 diff 一次：
+
+| 变化 | 影响 / 处理 |
+| --- | --- |
+| 新增错误码 `IDENTITY_LOGIN_REQUIRED`（503，v5.1.4，commit `d2cf32b`） | 语义是"这条读请求需要已登录身份"。单身份模式下等价于 `DTK_IDENTITY` 那个 cookie 没登录 / 过期，是**全局配置问题**。已并入 `errors.CONFIG_CODES`：走全局闸门 + 一条告警，而不是每个账号各发一条（修正 #55） |
+| 新增错误码 `UPSTREAM_UNREACHABLE`（502，v5.1.4 之后，commit `08f61b8`） | 网络不可达，按普通瞬时失败处理（`_on_failure` 累计即可），无需特判 |
+| `AUTHOR_POSTS` 变为 `login=PREFERRED, paging_login=REQUIRED` | 本工具只取第一页、不翻页，行为不变；但 pinned 的游客身份仍可能静默拿到更少作品，§4.10 的告警继续成立 |
+| `system/status` 的 `components` 多了 `downloader` / `transcriber`，`storage` 多了 `rows` | `loop.summarize_upstream_status` 只取认得的字段，多余字段忽略，无破坏 |
+
+`Content` 字段、`user/posts` / `archive` / `auth/me` 参数、`identity=` 的角色要求均未变。
+
 ---
 
 ## 3. 从 v5 学到并要落地的架构原则
@@ -563,7 +576,10 @@ v5 的代码质量主要来自一批**成文且被强制执行的规矩**。本�
 **没有类型能突破的边界**（每条都要在代码里成立）：
 
 - `diff.py` / `render.py` / `messages.py` / `models.py` **不 import** `dtk.py`、`state.py`、
-  `notifiers/`、任何网络或数据库库。只吃 dataclass、吐 dataclass。
+  `notifiers/`、任何网络或数据库库。只吃 dataclass、吐 dataclass。`diff.py` 需要的
+  `MonitorError`（判定里要读 `error.is_gate` / `error.is_config`）来自不依赖任何东西的
+  `errors.py`，而不是 `dtk.py`——这条接缝 2026-11 才补齐（修正 #52），此前 `diff` 实际
+  import 了 `dtk`。
 - `notifiers/` **不 import** `dtk.py`、`state.py`；只接收渲染好的 `Message`。
 - `state.py` **不 import** `dtk.py`、`notifiers/`。
 - `dtk.py` **不 import** 上面任何一个（它不知道"监控"这件事存在）。
@@ -855,9 +871,12 @@ def diff(prev: AuthorState, page: Page, now: datetime, cfg: DiffConfig
      （is_top 只在带 include_raw 的轮次才是新值；不带时**不要**把已有值覆盖成 0——
       否则置顶状态会被"没带 raw 的轮次"抹掉，这是本设计里最容易写错的一处）
 
-⑦ 回归静默恢复
-     reappeared = (current − known) ∩ tombstones
-     → 从 tombstone 摘除、写回 known、记日志，**不推送**（防窗口回移重复通知）
+⑦ 回归处理（分两种，按 tombstone 的 reason 区分）
+     came_back = (current − known) ∩ tombstones
+     → 从 tombstone 摘除、写回 known
+     - confirmed / scrolled_out：产出 REVIVED（"作品回归"，会推送；见修正 #14/#54）
+     - trimmed：只是被 KNOWN_IDS_MAX 裁剪过，**静默放回、不产生事件**
+       （当回归推是误报；当新作品推更糟）
 
 ⑧ 无新增无消失 → 只更新 last_update_at（若标题变过）+ 兜底提醒，return
 
@@ -1095,6 +1114,11 @@ DTK 侧建议把这个身份设为「只服务点名它的请求」（`rotation_
 角色与账号可读性）——这是照旧脚本的取舍；过期只能靠观察列表条数或重新导入 cookie 发现。
 决策见 D27。
 
+> **2026-11 补充（DTK 5.1.4+）**：`user/posts` 现在是 `login=PREFERRED`（首屏）/
+> `paging_login=REQUIRED`（翻页）。本工具只取首屏，所以"静默退回游客、少一条"的老风险
+> 依旧存在；但 DTK 对需要登录的接口已能返回 `IDENTITY_LOGIN_REQUIRED`，本工具已把它当
+> 全局配置错误处理（见 §2.8）。`doctor` 仍不探测该身份的登录态——这是已知取舍。
+
 ---
 
 ## 5. 目录结构
@@ -1116,6 +1140,7 @@ douyin-monitor/
 │   ├── __init__.py  __main__.py
 │   ├── cli.py                 # 参数、信号、PID 锁、--once/--status/--doctor/--config-check
 │   ├── settings.py            # SettingSpec 注册表 + 跨项校验 + 来源追溯
+│   ├── errors.py              # MonitorError + 错误码分类（dtk 与 diff 共用，避免 diff import dtk）
 │   ├── runtime.py             # 组装与生命周期
 │   ├── loop.py                # 轮次循环（users.conf 热加载 / 汇总 / 轮末随机等待）
 │   ├── pacer.py               # 全局请求节奏（3~8 秒随机，独立于并发）
@@ -1277,7 +1302,7 @@ douyin-monitor/
 | **S6** 隐藏作品核验 | ⬜   | **已于 2026-11-04 下线**（见 §4.10 与 D27）。原设计见历史记录；游客视角漏看最新作品的根因改用「单身份读取」解决，`hidden_from_guest` 事件、核验配置与 schema 列全部删除                                                                                                                                                                                            |
 | **S7** 观测与图表   | ✅   | 2026-10-02：互动量时间序列落库（`post_metrics`，schema v5→v6）、上游健康读数进快照（**主循环定期取，面板不自己发请求**）、`SELF_DEGRADED` 补齐（磁盘余量 + 状态库可写）、`/metrics` 补上"上游健康"与"自身状态"两组、事件时间线页 `/events`（Chart.js 本地打包，不走 CDN）；`webui.py` 拆成 `webui/` 包（**CSS 整段搬运、一个字没改**）。设计与取舍见 §4.9、D22~D26 |
 
-代码规模：`src/dywatch` **37 个 `.py`**（顶层 18 个模块 + `notifiers/` 10 个 + `webui/` 9 个），约 1.3 万行；测试 **706 项**（703 通过 / 3 跳过，2026-11-04 在 Python 3.13 上全量复跑）。
+代码规模：`src/dywatch` **38 个 `.py`**（顶层 19 个模块 + `notifiers/` 10 个 + `webui/` 9 个），约 1.3 万行；测试 **712 项**（709 通过 / 3 跳过；`tmp_path` 用例需在 Linux / CI 上跑，Windows 沙箱里会因权限拒绝而无法启动）。
 
 ### 实现过程中对设计的修正（都记在这里，免得以后当成 bug）
 
@@ -1337,6 +1362,12 @@ douyin-monitor/
 | 49 | 上游健康卡片里「上游存储」一行写两个量：`身份 20 个 · 177.7 MB` | 拆成两行：`身份总数（含不可用）` 与 `上游数据库大小`，各带一句口径 | 两个数互不相干，用一个点号连起来读成「20 个身份占了 177.7 MB」，更像内存占用。核对 DTK 源码：`identities` 是 `select count(*) from identities`（**不区分是否可用**，可用数是「全平台可用身份」）；`db_size_bytes` 是 `pg_database_size(current_database())`——整个 PostgreSQL 数据库在磁盘上的大小，**不是内存**，也不只是身份的 |
 | 50 | 趋势图上「该账号 N 条已知作品的合计」的 N 是 `len(posts)`（已知作品数） | `trend_views` 返回 `posts`（**真正参与合计**的作品数）与 `known`（已知作品数）；两者相同时沿用简洁说法，不同时写成「这张图合计了 M 条作品的互动量（该账号现在已知 K 条；没有足够记录的不参与）」 | 参与合计的只有**有互动量记录**的作品：隐藏的、刚加的、开记录之前抓过的作品没有记录，拿已知作品数当 N 就把覆盖面说大了（复现：4 条已知、删掉其中 1 条的记录后图上仍写 4 条）。审查建议用 `len(per_post)`（有记录的作品数），**我没有照做**：只有一个采样的作品有记录，却还没产生任何新增量，数进去仍是说大。所以数的是至少有一对**相邻整小时**采样、且至少一个指标两头都有值的作品（`trend.contributing_posts`），并保证它和 `has_data` 同时为真或同时为假。已消失作品的历史记录仍然算在内（不然 7 天 / 总览里它当时真实的涨幅会被追溯抹掉），所以 M 可以大于 K，文案对两种方向都成立 |
 | 51 | 账号详情 JSON 仍带 `metrics_series`（逐小时累计合计，最多 14 天 × 24 = 336 行） | 删掉：字段、`read_metrics_series` 查询与函数、对应测试一并移除 | 趋势取代了它之后，页面和文档都不再用它，只剩测试在断言它存在——每次打开详情白查一次、白传最多 336 行。当初保留它的理由「留给读接口的人」站不住：文档里从没写过这个字段。**这是 `/api/user/<id>` 响应里一个字段的移除**；要读逐小时的数据请用 `metrics_trend`（新增量，已按范围分好格）。HTTP 层那条「`datetime` 进 JSON 会掐断响应」的回归保留，改为直接断言 `posts[].metrics.hour` 是 ISO 字符串（以前靠和序列里的写法比较，序列没了） |
+| 52 | `diff.py` 用 `from .dtk import MonitorError`（判定要读 `error.is_gate/is_config`） | 把 `MonitorError` 与错误码分类抽到新的 `errors.py`；`dtk.py` 转出、`diff.py` 从 `errors` 导入 | DESIGN §4.1 与包说明都写「`diff.py` 不 import `dtk.py`」，而实现一直偷偷 import 了它——文档说 A、代码做 B，最容易被当成 bug 删掉。`errors.py` 不含任何 I/O、不 import 本包其它模块，接缝于是真的成立 |
+| 53 | `alerts.TRIGGERS` 给 `ACCOUNT_FAILED` 硬编码 `5 * MINUTE`，注释却称「与 `FAIL_COOLDOWN` 一致」 | `should_send(..., account_fail_window=cfg.fail_cooldown)`；`TRIGGERS` 的 5 分钟只作兜底 | 用户把 `FAIL_COOLDOWN` 调到 300 秒以下会被去重窗口静默压回 5 分钟——配置项形同虚设；只有调大时才是碰巧对 |
+| 54 | 超限裁剪（`trimmed`）的作品若重新出现在首页，`reappeared` 会把它当「作品回归」推送 | `trimmed` 的重现**静默放回 known、不产生事件**；只有 `confirmed` / `scrolled_out` 的重现才是 `REVIVED` | 裁剪不是「消失」，当回归推是误报；而当新作品推更糟（彻头彻尾的误报）。用 tombstone 的 `reason` 区分 |
+| 55 | 错误码映射停在 DTK 5.1.3 | 复核 5.1.4→5.1.10：`IDENTITY_LOGIN_REQUIRED`（v5.1.4 新增）并入 `CONFIG_CODES`（全局配置错误）；`UPSTREAM_UNREACHABLE` 按普通瞬时失败；新增 §2.8 | 5.1.4 新增的 `IDENTITY_LOGIN_REQUIRED` 语义是「读请求需要已登录身份」，单身份下等于 `DTK_IDENTITY` 过期/没登录——是全局问题。不映射会让每个账号各自累计失败、各发一条告警（N 条噪音） |
+| 56 | `StateStore.ensure_author` 对已存在作者返回**不带 posts/tombstones** 的空壳 | 返回完整 `AuthorState`（顺带读完两张子表） | 函数名像「加载作者」，调用者若把这个空壳当当前状态喂给 `diff`，会把全部已知作品当成新作品。当前调用点恰好只在新建时用它，但这是迟早会踩的陷阱 |
+| 57 | 面板线程 `PanelServer` 起了从不 `stop()`；`.gitignore` 漏 `.tv/` 等；配置参考自称「由 SETTINGS 生成」但无人校验 | `cmd_run` 的 `finally` 里 `panel.stop()`；`.gitignore` 补 `.tv/ .testenv/ .uvcache/ .ruff_cache/`；新增 `tests/unit/test_config_docs.py` 校验 `.env.example` 与参考页不漏键 | 监听 socket 应干净释放；嵌套 `.gitignore` 兜住是运气不是约定；「生成」的说法要能被测试证明，否则新增配置项就会静默漏文档 |
 
 ### 尚未做（明确不在第一版范围）
 
