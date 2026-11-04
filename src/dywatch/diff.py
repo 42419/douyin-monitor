@@ -31,7 +31,7 @@ from .models import (
     PostState,
     Tombstone,
 )
-from .dtk import MonitorError
+from .errors import MonitorError
 
 #: tombstone 的三种来源。区分它们是为了让日志能回答"它为什么不在列表里了"。
 REASON_CONFIRMED = "confirmed"
@@ -147,13 +147,21 @@ def diff(
     known_ids = set(prev.known_ids)
     tomb_ids = set(prev.tombstone_ids)
 
-    # ---- 回归：曾经消失、现在又出现在列表里（窗口回移）→ 静默恢复 ----------
-    reappeared = (current_ids - known_ids) & tomb_ids
+    # ---- 回归：曾经离开过、现在又出现在列表里（窗口回移）--------------------
+    #
+    # 分两种，处置不同：
+    #   * `confirmed` / `scrolled_out`：真的离开过窗口（删除确认，或被新作品挤出）。
+    #     回来是一条 `REVIVED`（"作品回归"），会推送。
+    #   * `trimmed`：它从来没有"消失"，只是当初因为超过 KNOWN_IDS_MAX 被移出跟踪。
+    #     当回归推送是误报（它不是回归），当新作品推送更糟。所以**静默放回 known**，
+    #     不产生任何事件。
+    tomb_reasons = {t.content_id: t.reason for t in prev.tombstones}
+    came_back = (current_ids - known_ids) & tomb_ids
 
     posts: dict[str, PostState] = {p.content_id: p for p in prev.posts}
     tombstones: dict[str, Tombstone] = {t.content_id: t for t in prev.tombstones}
 
-    for content_id in reappeared:
+    for content_id in came_back:
         tombstones.pop(content_id, None)
         item = current[content_id]
         posts[content_id] = PostState(
@@ -165,13 +173,16 @@ def diff(
             first_seen_at=now,
             last_seen_at=now,
         )
+        if tomb_reasons.get(content_id) == REASON_TRIMMED:
+            # 只是被跟踪上限裁剪过，不是真的消失过：静默放回，不报回归也不报新作品
+            continue
         events.append(
             Event(
                 EventKind.REVIVED,
                 sec_user_id=prev.sec_user_id,
                 nickname=prev.nickname,
                 content_id=content_id,
-                # 带上 kind 与 web_url：这两条现在会推送，通知里给得出类型和链接
+                # 带上 kind 与 web_url：这条会推送，通知里给得出类型和链接
                 payload={
                     "title": item.title,
                     "kind": item.kind.value,
@@ -180,7 +191,7 @@ def diff(
             )
         )
 
-    new_ids = current_ids - known_ids - reappeared
+    new_ids = current_ids - known_ids - came_back
     disappeared_ids = known_ids - current_ids
 
     # ---- 标题/置顶同步（只对本页仍出现的作品） -----------------------------
