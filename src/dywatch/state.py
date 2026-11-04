@@ -413,7 +413,20 @@ class StateStore:
                         "UPDATE authors SET nickname = ?, updated_at = ? WHERE sec_user_id = ?",
                         (nickname, _iso(now), sec_user_id),
                     )
-            return _row_to_state(row, [], [])
+                # 昵称刚改过：重读一行，返回的状态才和库里一致
+                row = self._conn.execute(
+                    "SELECT * FROM authors WHERE sec_user_id = ?", (sec_user_id,)
+                ).fetchone()
+            # **返回完整状态**：函数名叫"ensure author"，若只回一个没有
+            # posts/tombstones 的空壳，下一个调用者把它当作当前状态喂给 diff，
+            # 就会把全部已知作品当成新作品。这里把两条子表一并读出来。
+            posts = self._conn.execute(
+                "SELECT * FROM posts WHERE sec_user_id = ?", (sec_user_id,)
+            ).fetchall()
+            tombs = self._conn.execute(
+                "SELECT * FROM tombstones WHERE sec_user_id = ?", (sec_user_id,)
+            ).fetchall()
+            return _row_to_state(row, posts, tombs)
         with self._tx() as conn:
             conn.execute(
                 "INSERT INTO authors (sec_user_id, nickname, created_at, updated_at)"
