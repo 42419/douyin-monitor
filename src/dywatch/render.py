@@ -4,7 +4,7 @@
 Markdown（钉钉/企业微信/Server 酱）、纯文本（Telegram/Bark/webhook）、短标题（通知栏/Bark）。
 渲染一次、各渠道各取所需，比每个渠道自己拼一遍要少一半不一致。
 
-## 版式只用三种块级元素
+## 版式：每个字段自成一段，不用列表圆点
 
 钉钉与企业微信**共用同一个 `markdown` 字段**，所以版式取两者的交集
 （钉钉：[消息发送与接收类型]；企业微信：[群机器人消息推送配置]）：
@@ -12,16 +12,17 @@ Markdown（钉钉/企业微信/Server 酱）、纯文本（Telegram/Bark/webhook
 | 元素 | 钉钉 | 企业微信 markdown |
 | ---------------- | -- | ------------------------------- |
 | `###` 标题 | ✅ | ✅（`#` 与文字之间要有空格） |
-| `**加粗**` | ✅ | ✅ |
 | `[文字](链接)` | ✅ | ✅ |
 | `>` 引用 | ✅ | ✅ |
-| `- ` 无序列表 | ✅ | ✗（原样显示 `- `，仍可读） |
+| `- ` 无序列表 | ✅ | ✗（原样显示 `- `）——**不用** |
 | 表格 / 代码块 / 行内代码 / 分隔线 / 斜体 | ✗ | ✗ |
 
-于是**每一行都必须是块级元素**：`### 标题`、`- 列表项`、`> 引用`，块与块之间空一行。
-**不允许裸段落行**：钉钉把单个换行当软换行折叠成一整行（官方建议 `\\n` 前后各加两个空格
-才有硬换行），所以靠 `\\n` 拼出来的 `**标签**：值` 会全部挤成一坨——那正是第一版
-"推送内容太乱"的根因。用块级元素 + 空行则两边都能正确分行，且不依赖行尾那些不可见的空格。
+最早的 bash 版就是 `标签：值` 一行一段，清爽；后来改成 `- **标签**：值` 列表，圆点多了反而乱，
+所以改回来。分行靠**段落之间的空行**：钉钉把**单个**换行当软换行折叠（官方建议 `\\n` 前后各加
+两个空格才有硬换行），相邻两行只隔一个换行会挤成一整行——那正是第一版"太乱"的根因。
+空行隔开的段落两边都能正确分行，且不依赖行尾那些不可见的空格。
+
+新作品在钉钉里另走 ActionCard（`Message.card_markdown` / `card_url`，见 `_new_post_card`）。
 
 ## 两个长度约束
 
@@ -39,7 +40,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Final, Mapping, Sequence
 
 from . import messages as msg
@@ -85,6 +86,10 @@ class Message:
     text: str
     sec_user_id: str | None = None
     content_id: str | None = None
+    #: 钉钉 ActionCard 版正文与整块跳转地址（目前只有"新作品"有）。**不进 `as_dict`**：
+    #: 这是给钉钉渠道挑版式用的，不是 webhook 载荷契约的一部分。
+    card_markdown: str | None = None
+    card_url: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -121,13 +126,13 @@ def _title(value: Any, limit: int = TITLE_CLIP) -> str:
 
 
 def _field(label: str, value: Any) -> str:
-    """一个字段行：`- **标签**：值`。**必须是列表项**——裸文本行会被钉钉折叠掉。"""
-    return f"- **{label}**：{value}"
+    """一个字段段落：`标签：值`。段落之间由 `_card` 统一隔一个空行。"""
+    return f"{label}：{value}"
 
 
 def _item(text: str) -> str:
-    """列表项（多条目事件用：一条作品一行）。"""
-    return f"- {text}"
+    """一条自成段落的文字（多条目事件里的一条作品、一句陈述）。"""
+    return text
 
 
 def _link(label: str, url: Any) -> str | None:
@@ -153,13 +158,12 @@ def _titles(
 
 
 def _card(heading: str, rows: Sequence[str], note: str = "") -> str:
-    """统一版式：`### 标题` + 空行 + 列表 + 空行 + 引用。
+    """统一版式：`### 标题`，每一行各自成段（段间一个空行），最后可选一段引用。
 
-    每一行都是块级元素；块之间空行。这是"各家客户端都能正确分行"的唯一稳妥写法。
+    **没有列表圆点**：最早的 bash 版就是这样推的，看着最清爽。分行靠的是"段落之间的空行"
+    ——钉钉与企业微信都会把空行隔开的两段渲染成两行；挤成一坨的只是"单个换行"。
     """
-    blocks = [f"### {heading}"]
-    if rows:
-        blocks.append("\n".join(rows))
+    blocks = [f"### {heading}", *rows]
     if note:
         blocks.append(f"> {note}")
     return "\n\n".join(blocks)
@@ -176,7 +180,7 @@ def _entries(payload: Mapping[str, Any], key: str) -> list[Mapping[str, Any]]:
 
 
 def _list_rows(items: Sequence[Mapping[str, Any]]) -> list[str]:
-    """多条目事件的列表：`- 标题 · 时间（置顶）`。"""
+    """多条目事件的列表：一条一段，`标题（置顶） · 时间`。"""
     rows = []
     for item in items[:MAX_LIST_ITEMS]:
         when = msg.fmt_time(_parse(item.get("created_at")))
@@ -229,8 +233,19 @@ def _to_text(markdown: str) -> str:
     三件事：`### ` 标题前缀、`**加粗**`、`[文字](url)` → `文字 <url>`（纯文本里点不开，
     所以把地址显式写出来），以及 `md_escape` 加的那些反斜杠转义（单遍替换正好是它的逆）。
     """
+    # 版面里每个字段都自成一段（段间空行）；纯文本里字段该紧挨着，所以把相邻的字段段落并回
+    # 一组，只在 标题 / 字段组 / 引用 之间留空行
+    groups: list[str] = []
+    prev_is_row = False
+    for block in markdown.split("\n\n"):
+        is_row = not block.startswith(("### ", "> "))
+        if is_row and prev_is_row:
+            groups[-1] += "\n" + block
+        else:
+            groups.append(block)
+        prev_is_row = is_row
     lines = []
-    for line in markdown.split("\n"):
+    for line in "\n\n".join(groups).split("\n"):
         if line.startswith("### "):
             lines.append(line[4:])
         elif line.startswith("> "):
@@ -249,6 +264,11 @@ def render_event(event: Event, *, now: datetime | None = None) -> Message:
 
     subject, markdown = _build(event, payload, nickname, now)
     markdown = _cap(markdown)
+    card = None
+    if event.kind is EventKind.NEW_POST:
+        card = _new_post_card(
+            payload, msg.md_escape(msg.one_line(_clip(nickname, 40))), now
+        )
     return Message(
         event=event.kind,
         severity=severity,
@@ -257,7 +277,58 @@ def render_event(event: Event, *, now: datetime | None = None) -> Message:
         text=_to_text(markdown),
         sec_user_id=event.sec_user_id or None,
         content_id=event.content_id,
+        card_markdown=card[0] if card else None,
+        card_url=card[1] if card else None,
     )
+
+
+def _new_post_card(
+    payload: Mapping[str, Any], md_name: str, now: datetime | None
+) -> tuple[str, str] | None:
+    """钉钉 ActionCard 版"新作品"：最早那版 bash 脚本的样子，`(正文, 跳转地址)`。
+
+    ```
+    ### 新视频发布
+
+    用户：xxx
+
+    标题：xxx
+
+    时间：2026-11-10 18:24:00
+
+    检测时间：2026-11-10 18:25:03
+
+    ![封面](https://…)
+    ```
+
+    **这里是"裸段落行"版式的唯一例外**（见模块头注释）：每一行之间都隔着空行，所以钉钉会把
+    它们当成各自独立的段落；挤成一坨的只是"单个换行"。标题、昵称仍然先压成一行再转义。
+
+    没有可用的作品链接（既没有合法的 `web_url`，也无法给视频拼出地址）就返回 None，
+    钉钉渠道会退回通用的 markdown 版——整块可点的卡片没有地址可跳，不如不用。
+    """
+    content = payload.get("content")
+    if content is None:
+        return None
+    url = str(content.web_url or "").strip()
+    if not _URL_OK.match(url):
+        url = f"https://www.douyin.com/video/{content.content_id}"
+        if content.kind is not Kind.VIDEO or not _URL_OK.match(url):
+            return None
+
+    heading = msg.CARD_HEADING.format(kind=msg.kind_label(content.kind))
+    detected = now or datetime.now(timezone.utc)
+    blocks = [
+        f"### {heading}",
+        f"{msg.CARD_USER}：{md_name}",
+        f"{msg.ROW_TITLE}：{_title(content.title)}",
+        f"{msg.CARD_PUBLISHED}：{msg.fmt_time(content.created_at, seconds=True)}",
+        f"{msg.CARD_DETECTED}：{msg.fmt_time(detected, seconds=True)}",
+    ]
+    cover = str(content.cover_url or "").strip()
+    if _URL_OK.match(cover):
+        blocks.append(f"![{msg.CARD_COVER_ALT}]({cover})")
+    return "\n\n".join(blocks), url
 
 
 # ------------------------------------------------------------------- 各事件
@@ -399,7 +470,7 @@ def _build(
     if kind is EventKind.STALE_NO_UPDATE:
         days = _val(payload.get("days") or "?", 10)
         subject, heading = _titles(msg.T_STALE, plain_name, md_name, days=days)
-        # 这两行是"陈述"而不是"字段"，所以不套 `**标签**：`：套上去会读成
+        # 这两行是"陈述"而不是"字段"，所以不套 `标签：`：套上去会读成
         # "发布：已 14 天没有新作品"（标签和值在说两件事）
         rows = [
             _item(f"已 {days} 天没有新作品"),

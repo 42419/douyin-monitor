@@ -67,6 +67,15 @@ MORE_ITEMS = "…另有 {count} 条"
 LINK_POST = "打开作品"
 LINK_COVER = "查看封面图"
 
+# --- 钉钉 ActionCard 版"新作品"（沿用最早 bash 版的样子，见 render._new_post_card）----
+CARD_HEADING = "新{kind}发布"
+CARD_USER = "用户"
+CARD_PUBLISHED = "时间"
+CARD_DETECTED = "检测时间"
+CARD_COVER_ALT = "封面"
+#: ActionCard 底部整块可点的按钮文案
+CARD_BUTTON = "点击观看"
+
 #: 正文超长时的收尾（企业微信正文上限 4096 字节，见 render.MAX_BODY_BYTES）
 NOTE_TRUNCATED = "内容较长，已截断；完整内容见 Web 面板的账号详情"
 
@@ -149,11 +158,13 @@ def kind_label(kind: Kind, image_count: int = 0) -> str:
     return KIND_UNKNOWN
 
 
-def fmt_time(value: datetime | None, *, local: bool = True) -> str:
+def fmt_time(
+    value: datetime | None, *, local: bool = True, seconds: bool = False
+) -> str:
     if value is None:
         return "未知"
     stamp = value.astimezone() if local and value.tzinfo else value
-    return stamp.strftime("%Y-%m-%d %H:%M")
+    return stamp.strftime("%Y-%m-%d %H:%M:%S" if seconds else "%Y-%m-%d %H:%M")
 
 
 def fmt_gap(value: datetime | None, now: datetime | None = None) -> str:

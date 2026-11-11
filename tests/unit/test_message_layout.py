@@ -2,8 +2,9 @@
 
 这些不是风格偏好，是**在真机上会坏**的东西：
 
-- 钉钉把单个换行当软换行折叠（官方建议 `\\n` 前后各加两个空格才算硬换行）→ 靠换行拼出来的
-  裸段落行会把整条通知挤成一坨，第一版就是这样"太乱"的；
+- 钉钉把单个换行当软换行折叠（官方建议 `\\n` 前后各加两个空格才算硬换行）→ 靠单个换行拼出来的
+  相邻行会把整条通知挤成一坨，第一版就是这样"太乱"的；所以**每个字段自成一段、段间空一行**
+  （最早的 bash 版就是这样推的：没有列表圆点，清爽）；
 - 钉钉不支持行内代码 / 表格 / 代码块 / 分隔线 → 用了就会原样显示反引号和竖线；
 - 企业微信 markdown 正文上限 **4096 字节** → 超了整条消息发不出去；
 - 转义与截断的顺序：先转义再截断会切出落单的反斜杠（`webui._label` 踩过同一个坑）。
@@ -85,7 +86,6 @@ HOSTILE: list[dict] = [
 ]
 
 KINDS = list(EventKind)
-ALLOWED_PREFIX = ("### ", "- ", "> ")
 
 
 def unescaped(markdown: str, char: str) -> bool:
@@ -107,23 +107,28 @@ def make(kind: EventKind, payload: dict) -> str:
 
 
 @pytest.mark.parametrize("kind", KINDS)
-def test_every_line_is_a_block_element(kind):
-    """每一行都必须是 `### ` / `- ` / `> ` 之一（空行除外）。
+def test_every_row_is_its_own_paragraph(kind):
+    """每个字段自成一段：任意两个非空行之间必须隔着空行，且不出现列表圆点。
 
-    裸段落行会被钉钉折叠进上一行——这正是第一版"推送内容挤成一坨"的根因，所以这条是硬约束。
+    相邻两行只隔一个换行，钉钉会把它们折叠成一行——这正是第一版"推送内容挤成一坨"的根因；
+    列表圆点则是后来"前面好几个点、看着乱"的来源（用户内容里的 `-` 已被转义，不会误伤）。
     """
     for payload in HOSTILE:
+        previous_blank = True
         for line in make(kind, payload).split("\n"):
-            if not line.strip():
-                continue
-            assert line.startswith(ALLOWED_PREFIX), (
-                f"{kind.value} 出现裸段落行：{line[:60]!r}"
+            blank = not line.strip()
+            assert not (blank is False and previous_blank is False), (
+                f"{kind.value} 有两行紧挨着（会被钉钉折叠）：{line[:60]!r}"
             )
+            assert not line.startswith(("- ", "* ", "+ ")), (
+                f"{kind.value} 出现列表圆点：{line[:60]!r}"
+            )
+            previous_blank = blank
 
 
 @pytest.mark.parametrize("kind", KINDS)
 def test_no_row_has_an_empty_value(kind):
-    """字段行的值不能是空的——`- **已出现轮次**：` 这种行对读的人毫无意义。
+    """字段行的值不能是空的——`已出现轮次：` 这种行对读的人毫无意义。
 
     踩过：早期 `_clip` 里写的是 `raw or ""`，于是 `rounds=0`、`fails=False` 这类**有效值**
     被悄悄吞成空串，渲染出一行只有标签的字段。
@@ -135,37 +140,14 @@ def test_no_row_has_an_empty_value(kind):
             )
 
 
-@pytest.mark.parametrize("kind", KINDS)
-def test_blocks_are_separated_by_a_blank_line(kind):
-    """不同类型的块之间必须空一行。
-
-    连续同类型（同一个列表里的一串 `- `）可以只换行；但"标题后面紧跟列表""引用紧跟在列表
-    后面"这类**换块**必须空一行——钉钉用的不是标准 markdown 解析器，别去赌它会正确收尾。
-    """
-    for payload in HOSTILE:
-        previous = None
-        for line in make(kind, payload).splitlines():
-            if not line.strip():
-                previous = None
-                continue
-            kind_of_block = "list" if line.startswith("- ") else line[:3]
-            if previous is not None:
-                same_list = previous == kind_of_block == "list"
-                assert same_list, (
-                    f"{kind.value} 换块之间没有空行：{previous!r} 后面紧跟 {line[:40]!r}"
-                )
-            previous = kind_of_block
-
-
 def test_channel_probe_uses_the_same_layout():
     """`dywatch test-notify` 的自检消息也走同一套版式（它曾经是手写的裸段落行）。"""
     from dywatch.render import render_probe
 
     probe = render_probe()
     assert probe.markdown.startswith("### ")
-    for line in probe.markdown.splitlines():
-        if line.strip():
-            assert line.startswith(ALLOWED_PREFIX), f"自检消息出现裸段落行：{line!r}"
+    assert "\n- " not in probe.markdown, "自检消息也不该有列表圆点"
+    assert "\n\n" in probe.markdown, "标题与正文之间要空一行"
     assert "**" not in probe.text and "](" not in probe.text
 
 
@@ -224,7 +206,7 @@ def test_a_long_title_is_clipped_before_escaping():
     md = render_event(event).markdown
     assert "…" in md, "超长标题要截断"
     assert title not in md, "不该原样塞进去"
-    row = next(line for line in md.split("\n") if line.startswith("- **标题**"))
+    row = next(line for line in md.split("\n") if line.startswith("标题："))
     assert not row.rstrip().endswith("\\"), "截断点不能留下落单的反斜杠"
 
 
@@ -262,3 +244,24 @@ def test_plain_text_variant_is_free_of_markdown(kind):
         for line in text.split("\n"):
             trailing = len(line) - len(line.rstrip("\\"))
             assert trailing % 2 == 0, f"{kind.value} 纯文本行尾有落单的反斜杠"
+
+
+def test_new_post_card_survives_hostile_payloads():
+    """钉钉 ActionCard 版：载荷再畸形也不抛异常；有卡片时一定带着合法的跳转地址。"""
+    from dywatch.render import _URL_OK
+
+    for payload in HOSTILE:
+        event = Event(
+            EventKind.NEW_POST, sec_user_id="u1", nickname="阿直*#", payload=payload
+        )
+        message = render_event(
+            event, now=datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc)
+        )
+        if message.card_markdown is None:
+            assert message.card_url is None
+            continue
+        assert message.card_url and _URL_OK.match(message.card_url)
+        assert message.card_markdown.startswith("### 新")
+        for line in message.card_markdown.split("\n"):
+            trailing = len(line) - len(line.rstrip("\\"))
+            assert trailing % 2 == 0, f"卡片行尾有落单的反斜杠：{line[-40:]!r}"

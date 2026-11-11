@@ -77,6 +77,59 @@ def test_dingtalk_signs_when_a_secret_is_given_and_mentions_people():
     assert body["at"] == {"atMobiles": ["13800000000"], "isAtAll": False}
 
 
+def _new_post_message() -> Message:
+    from dywatch.models import Content, Kind
+
+    content = Content(
+        content_id="7496063824002403638",
+        kind=Kind.VIDEO,
+        title="好Q弹的猪鼻子",
+        web_url="https://www.douyin.com/video/7496063824002403638",
+        created_at=datetime(2026, 11, 10, 10, 24, tzinfo=timezone.utc),
+        cover_url="https://p3-pc-sign.douyinpic.com/cover.jpeg",
+    )
+    return render_event(
+        Event(
+            EventKind.NEW_POST,
+            sec_user_id="u1",
+            nickname="阿Z想开了",
+            content_id=content.content_id,
+            payload={"content": content},
+        ),
+        now=datetime(2026, 11, 10, 10, 25, tzinfo=timezone.utc),
+    )
+
+
+def test_dingtalk_sends_new_posts_as_an_action_card():
+    message = _new_post_message()
+    url, body = DingTalkChannel(token="tok", secret="SECx").request(message)
+
+    assert "sign=" in url, "ActionCard 也要加签"
+    assert body["msgtype"] == "actionCard"
+    assert body["actionCard"] == {
+        "title": message.subject,
+        "text": message.card_markdown,
+        "singleTitle": "点击观看",
+        "singleURL": "https://www.douyin.com/video/7496063824002403638",
+    }
+
+
+def test_dingtalk_keeps_markdown_for_new_posts_when_mentioning_people():
+    """ActionCard 不支持 @：配了 @ 就退回 markdown，不能悄悄把 @ 丢掉。"""
+    message = _new_post_message()
+    _, body = DingTalkChannel(token="tok", at_mobiles=("13800000000",)).request(message)
+
+    assert body["msgtype"] == "markdown"
+    assert body["at"] == {"atMobiles": ["13800000000"], "isAtAll": False}
+
+
+def test_dingtalk_other_events_stay_markdown():
+    _, body = DingTalkChannel(token="tok").request(
+        make_message(EventKind.TITLE_CHANGED)
+    )
+    assert body["msgtype"] == "markdown"
+
+
 def test_wecom_payload():
     message = make_message()
     url, body = WeComChannel(key="KEY-1").request(message)

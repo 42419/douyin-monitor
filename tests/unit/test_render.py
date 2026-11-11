@@ -403,3 +403,63 @@ def test_self_degraded_shows_an_unknown_reason_as_is():
     message = self_degraded(reason="something_new")
     # markdown 里下划线会被转义（`something\\_new`），所以拿纯文本版本比
     assert "原因：something_new" in message.text
+
+
+def _new_post(content: Content, **extra) -> "Message":
+    return render_event(
+        Event(
+            EventKind.NEW_POST,
+            sec_user_id="u1",
+            nickname="阿Z想开了",
+            content_id=content.content_id,
+            payload={"content": content, **extra},
+        ),
+        now=NOW,
+    )
+
+
+def test_new_post_card_is_the_original_bash_layout():
+    """钉钉 ActionCard 版就是最早 bash 脚本的样子：用户 / 标题 / 时间 / 检测时间 / 封面。"""
+    message = _new_post(make_content(title="好Q弹的猪鼻子"))
+
+    assert message.card_url == "https://www.douyin.com/video/7496063824002403638"
+    blocks = message.card_markdown.split("\n\n")
+    assert blocks[0] == "### 新视频发布"
+    assert blocks[1] == "用户：阿Z想开了"
+    assert blocks[2] == "标题：好Q弹的猪鼻子"
+    assert blocks[3].startswith("时间：") and blocks[3].count(":") == 2
+    assert blocks[4].startswith("检测时间：")
+    assert blocks[5] == "![封面](https://p3-pc-sign.douyinpic.com/cover.jpeg)"
+    assert len(blocks) == 6
+    assert "- " not in message.card_markdown
+
+
+def test_new_post_card_falls_back_to_a_video_url_and_otherwise_to_markdown():
+    # 没有作品链接：视频可以按 id 拼出地址（旧脚本就是这么跳的）
+    video = _new_post(make_content(web_url=""))
+    assert video.card_url == "https://www.douyin.com/video/7496063824002403638"
+    # 图文没有可靠的拼法 → 不出卡片，钉钉渠道会退回 markdown
+    album = _new_post(make_content(web_url="", kind=Kind.IMAGE_ALBUM, image_count=3))
+    assert album.card_markdown is None and album.card_url is None
+
+
+def test_card_fields_do_not_leak_into_the_webhook_payload():
+    """卡片只是钉钉渠道挑版式用的，webhook 载荷契约不变。"""
+    payload = _new_post(make_content()).as_dict()
+    assert "card_markdown" not in payload and "card_url" not in payload
+
+
+def test_other_events_have_no_card_and_no_bullets():
+    message = render_event(
+        Event(
+            EventKind.POST_REMOVED,
+            sec_user_id="u1",
+            nickname="阿Z想开了",
+            payload={
+                "removed": [{"title": "甲", "created_at": "2026-11-03T12:44:00+00:00"}]
+            },
+        ),
+        now=NOW,
+    )
+    assert message.card_markdown is None
+    assert "- " not in message.markdown.replace("\\-", "")

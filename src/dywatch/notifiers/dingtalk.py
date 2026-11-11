@@ -1,4 +1,8 @@
-"""钉钉群机器人（markdown + 加签）。
+"""钉钉群机器人（markdown / ActionCard + 加签）。
+
+"新作品"用 ActionCard（最早 bash 版的样子：标题、用户、时间、封面图 + 整块"点击观看"）；
+其它事件仍是 markdown。ActionCard 不支持 @，所以配了 `at_mobiles` 时新作品也走 markdown，
+免得把 @ 悄悄丢了。
 
 机器人的安全设置若是「加签」，URL 必须带 `timestamp` 与 `sign`；若是「自定义关键词」，
 则消息里必须出现那个词——标题带着它，所以这里不需要额外处理。
@@ -10,6 +14,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from .. import messages as msg
 from .base import HttpChannel, sign_dingtalk_url
 
 
@@ -27,6 +32,16 @@ class DingTalkChannel(HttpChannel):
         url = f"{self.webhook}?access_token={self.token}"
         if self.secret:
             url = sign_dingtalk_url(url, self.secret, time.time())
+        if message.card_markdown and message.card_url and not self.at_mobiles:
+            return url, {
+                "msgtype": "actionCard",
+                "actionCard": {
+                    "title": message.subject,
+                    "text": message.card_markdown,
+                    "singleTitle": msg.CARD_BUTTON,
+                    "singleURL": message.card_url,
+                },
+            }
         body: dict[str, Any] = {
             "msgtype": "markdown",
             "markdown": {"title": message.subject, "text": message.markdown},
