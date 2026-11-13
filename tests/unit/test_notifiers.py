@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -68,7 +69,7 @@ def test_dingtalk_payload_matches_the_official_shape():
 
 
 def test_dingtalk_signs_when_a_secret_is_given_and_mentions_people():
-    message = make_message()
+    message = replace(make_message(), severity="error")
     url, body = DingTalkChannel(
         token="tok", secret="SECx", at_mobiles=("13800000000",)
     ).request(message)
@@ -114,13 +115,25 @@ def test_dingtalk_sends_new_posts_as_an_action_card():
     }
 
 
-def test_dingtalk_keeps_markdown_for_new_posts_when_mentioning_people():
-    """ActionCard 不支持 @：配了 @ 就退回 markdown，不能悄悄把 @ 丢掉。"""
-    message = _new_post_message()
+@pytest.mark.parametrize(
+    ("severity", "mentions"), [("info", False), ("warning", True), ("error", True)]
+)
+def test_dingtalk_mentions_people_only_on_alerts(severity, mentions):
+    """`AT_MOBILES` 是"告警时 @"：新作品、已恢复这类普通通知（info）不 @。"""
+    message = replace(make_message(), severity=severity)
     _, body = DingTalkChannel(token="tok", at_mobiles=("13800000000",)).request(message)
 
-    assert body["msgtype"] == "markdown"
-    assert body["at"] == {"atMobiles": ["13800000000"], "isAtAll": False}
+    assert ("at" in body) is mentions
+
+
+def test_dingtalk_new_posts_stay_a_card_even_with_mentions_configured():
+    """新作品不 @，所以配了 `AT_MOBILES` 也不影响它用 ActionCard。"""
+    _, body = DingTalkChannel(token="tok", at_mobiles=("13800000000",)).request(
+        _new_post_message()
+    )
+
+    assert body["msgtype"] == "actionCard"
+    assert "at" not in body
 
 
 def test_dingtalk_other_events_stay_markdown():
