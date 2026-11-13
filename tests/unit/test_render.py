@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
+
+import pytest
 
 from dywatch.messages import (
     fmt_count,
@@ -257,6 +260,9 @@ def test_one_line_strips_control_characters_and_truncates():
     assert one_line("长" * 10, limit=5) == "长长长长…"
     assert one_line("普通昵称") == "普通昵称"
     assert strip_controls("x\x07y") == "x y"
+    # 三个"行分隔符"（NEL / LS / PS）不是 C0 控制字符，但在渲染器里就是一次真实换行：
+    # 卡片正文是 `- ` 列表，标题里混进一个 U+2028 就能把一条作品撑成两行。
+    assert one_line("a\u2028b\u2029c\u0085d") == "a b c d"
 
 
 def test_revived_and_title_changed_render_with_context():
@@ -418,20 +424,114 @@ def _new_post(content: Content, **extra) -> "Message":
     )
 
 
-def test_new_post_card_is_the_original_bash_layout():
-    """钉钉 ActionCard 版就是最早 bash 脚本的样子：用户 / 标题 / 时间 / 检测时间 / 封面。"""
+def test_new_post_card_is_a_compact_field_list():
+    """钉钉 ActionCard 版：标题带昵称，字段收在一个列表里（卡片只有钉钉读，可以用 `- `），封面单独一块。"""
     message = _new_post(make_content(title="好Q弹的猪鼻子"))
 
     assert message.card_url == "https://www.douyin.com/video/7496063824002403638"
     blocks = message.card_markdown.split("\n\n")
-    assert blocks[0] == "### 新视频发布"
-    assert blocks[1] == "用户：阿Z想开了"
-    assert blocks[2] == "标题：好Q弹的猪鼻子"
-    assert blocks[3].startswith("时间：") and blocks[3].count(":") == 2
-    assert blocks[4].startswith("检测时间：")
-    assert blocks[5] == "![封面](https://p3-pc-sign.douyinpic.com/cover.jpeg)"
-    assert len(blocks) == 6
-    assert "- " not in message.card_markdown
+    assert blocks[0] == "### 阿Z想开了 发布了新视频", (
+        "标题必须带昵称，否则群里看不出是谁发的"
+    )
+    rows = blocks[1].split("\n")
+    assert rows[0] == "- **标题**：好Q弹的猪鼻子"
+    assert rows[1].startswith("- **发布时间**：") and rows[1].count(":") == 2
+    assert rows[2].startswith("- **检测时间**：")
+    assert len(rows) == 3, (
+        "三个字段必须在同一个列表块里，不能每行一段；昵称已在标题里，正文不再重复"
+    )
+    assert blocks[2] == "![封面](https://p3-pc-sign.douyinpic.com/cover.jpeg)"
+    assert len(blocks) == 3
+
+
+@pytest.mark.parametrize(
+    ("kind", "payload"),
+    [
+        (EventKind.NEW_POST, {"content": make_content()}),
+        (EventKind.REVIVED, {"title": "旧作", "kind": "video"}),
+        (EventKind.TITLE_CHANGED, {"old": "旧", "new": "新", "kind": "video"}),
+        (
+            EventKind.GAP_DETECTED,
+            {
+                "oldest_in_page": "2026-01-01T00:00:00+00:00",
+                "previous_newest": "2026-01-01T00:00:00+00:00",
+                "fetch_count": 15,
+            },
+        ),
+        (EventKind.NEVER_SEEN, {"rounds": 3}),
+        (EventKind.ACCOUNT_FAILED, {"fails": 5, "code": "X", "message": "m"}),
+        (EventKind.UPSTREAM_DEGRADED, {"code": "x", "rounds": 1, "gate_seconds": 60}),
+        (
+            EventKind.SELF_DEGRADED,
+            {"reason": "disk_low", "free_mb": 1, "free_limit_mb": 2},
+        ),
+    ],
+)
+def test_field_labels_are_bold(kind, payload):
+    """每个字段行都是 `**标签**：值`，**逐个事件**都要守。
+
+    `**` 是钉钉与企业微信 markdown 的**交集**里唯一的强调手段（列表、表格、行内代码都
+    至少有一边不支持），也是这张通知看着有没有层次的唯一来源。去掉它不会报错、不会丢字段，
+    只是整条消息退回一坨平文——所以要有断言守着，别让哪次重构悄悄改回 `标签：值`。
+
+    只测一条事件是不够的：`new_post` 的字段最多、用户最先看到，它的一条行若退回平文，
+    别的用例全绿也发现不了。
+    """
+    message = render_event(
+        Event(kind, sec_user_id="u1", nickname="阿Z想开了", payload=payload), now=NOW
+    )
+
+    # 引用块（`> `）里的说明文字含全角冒号但不是字段；标题行也不是
+    rows = [
+        line
+        for line in message.markdown.split("\n")
+        if "：" in line and not line.startswith(("### ", "> "))
+    ]
+    assert rows, f"{kind.value} 应该有字段行"
+    for line in rows:
+        assert re.fullmatch(r"\*\*[^*\n]+\*\*：.*", line), (
+            f"{kind.value} 的字段行没加粗：{line!r}"
+        )
+
+
+def test_card_list_survives_a_hostile_title():
+    """标题里的 `-`、`**`、换行都不能把卡片的列表结构撑坏。
+
+    抖音标题真的会带这些字符（`- **加粗**` 是最常见的组合）。换行被 `one_line` 压平、
+    `-` 与 `*` 被 `md_escape` 转义之后，四行仍然必须是四个列表项，不能多出一行。
+    """
+    message = _new_post(make_content(title="- **加粗**\n第二行"))
+
+    list_rows = [r for r in message.card_markdown.split("\n") if r.startswith("- ")]
+    assert len(list_rows) == 3, f"列表被标题撑成了 {len(list_rows)} 行"
+    assert all(r.startswith("- **") for r in list_rows)
+    assert "\\- \\*\\*加粗\\*\\* 第二行" in message.card_markdown
+
+
+def test_plain_text_keeps_literal_asterisks():
+    """纯文本版只去掉**版面自己加**的 `**`，标题里真的写了 `a**b` 要原样留着。
+
+    这条守的是 `_to_text` 的顺序：先去 `**` 再反转义。反过来做会把 `a\\*\\*b` 反转义成
+    `a**b` 之后一并删掉，用户看到的标题就变成 `ab`。
+    """
+    message = _new_post(make_content(title="a**b"))
+
+    assert "a**b" in message.text
+    assert "**标题**" not in message.text, "版面的加粗标记仍然要清掉"
+    assert "**" not in message.text.replace("a**b", "")
+
+
+def test_plain_text_keeps_asterisks_inside_urls():
+    """URL 里的 `**` 是地址的一部分，纯文本版删掉它就换成了另一个地址（点开 404）。
+
+    `_link` 把 URL 原样写进正文，不过 `md_escape`（否则 `?a=1&b=2` 里的字符会被转义成
+    别的东西）。所以"全局删掉 `**`"会连地址一起改：`a**b.jpeg` → `ab.jpeg`。
+    只剥行首的字段标签才安全。
+    """
+    message = _new_post(make_content(cover_url="https://p3.douyinpic.com/a**b.jpeg"))
+
+    assert "a**b.jpeg" in message.text
+    assert "查看封面图 <https://p3.douyinpic.com/a**b.jpeg>" in message.text
 
 
 def test_new_post_card_falls_back_to_a_video_url_and_otherwise_to_markdown():

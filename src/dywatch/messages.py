@@ -33,10 +33,11 @@ KIND_LIVE = "直播回放"
 KIND_UNKNOWN = "作品"
 
 # --- 条目 -------------------------------------------------------------------
-#: 字段行的标签。**全部走 `- **标签**：值` 一种形状**（见 render.py 的版式说明）。
+#: 字段行的标签。**全部走 `**标签**：值` 一种形状**（见 render.py 的版式说明）。
+#: 不加 `- ` 圆点：企业微信的 markdown 不支持列表，会把 `- ` 原样显示出来。
 ROW_TITLE = "标题"
-ROW_TITLE_OLD = "原"
-ROW_TITLE_NEW = "新"
+ROW_TITLE_OLD = "原标题"
+ROW_TITLE_NEW = "新标题"
 ROW_TYPE = "类型"
 ROW_PUBLISHED = "发布"
 ROW_DURATION = "时长"
@@ -49,7 +50,6 @@ ROW_DETAIL = "详情"
 ROW_ROUNDS = "已出现轮次"
 ROW_IMPACT = "影响"
 ROW_REASON = "原因"
-ROW_FAILS = "连续失败"
 ROW_OLDEST = "本页最旧作品"
 ROW_PREVIOUS = "上轮见到的最新作品"
 GAP_NOTE = "距上次发布 {gap}"
@@ -67,13 +67,13 @@ MORE_ITEMS = "…另有 {count} 条"
 LINK_POST = "打开作品"
 LINK_COVER = "查看封面图"
 
-# --- 钉钉 ActionCard 版"新作品"（沿用最早 bash 版的样子，见 render._new_post_card）----
-CARD_HEADING = "新{kind}发布"
-CARD_USER = "用户"
-CARD_PUBLISHED = "时间"
+# --- 钉钉 ActionCard 版"新作品"（独立跳转按钮，见 render._new_post_card）----
+#: 卡片标题带昵称：群里滚动的是一条条独立卡片，只写"新视频发布"看不出是谁发的。
+CARD_HEADING = "{nickname} 发布了新{kind}"
+CARD_PUBLISHED = "发布时间"
 CARD_DETECTED = "检测时间"
 CARD_COVER_ALT = "封面"
-#: ActionCard 底部整块可点的按钮文案
+#: ActionCard 底部那个按钮的文案（独立跳转：`btns` 里唯一的一项）
 CARD_BUTTON = "点击观看"
 
 #: 正文超长时的收尾（企业微信正文上限 4096 字节，见 render.MAX_BODY_BYTES）
@@ -95,7 +95,7 @@ NOTE_GAP = (
     "被采集到。建议调大 FETCH_COUNT（当前 {fetch_count}，上限 50）。"
 )
 NOTE_CONFIG = "这是配置问题而不是网络问题：{code} —— 修好之前每个账号都会一直失败。"
-NOTE_GATE = "上游整体不可用，本轮已整体跳过，这与某个账号无关。"
+NOTE_GATE = "上游整体不可用，这与某个账号无关。"
 NOTE_SELF = "dywatch 仍在运行（这条通知就是它发的），但状态库一旦写不进去，作品变化就无法记录。请尽快处理。"
 
 #: `self_degraded` 的原因代码 → 人话。代码是程序自己产生的（`loop._self_check_reasons`），
@@ -112,9 +112,11 @@ SELF_DETAIL_DISK = "剩余 {free_mb} MB，低于阈值 {limit_mb} MB（SELF_CHEC
 #: 而这条通知本身是 `post_removed`，看的人会据此以为作品还在。
 NOTE_PAYLOAD_UNREADABLE = "这条事件的载荷形状无法读取（removed 是 {shape}）：请查看 Web 面板的账号详情与日志。"
 
-#: 控制字符（C0 + DEL）：换行、回车、制表、ESC 都属于"会让一行文本变成两行或改变终端状态"
-#: 的那一类。外部字符串（昵称、标题）在写进日志这类"一行一条"的地方之前先过 `one_line`。
-_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+#: 控制字符（C0 + DEL）与三个"行分隔符"（NEL / LS / PS，U+0085 / U+2028 / U+2029）：
+#: 它们都属于"会让一行文本变成两行或改变终端状态"的那一类。外部字符串（昵称、标题）在写进
+#: 日志或通知这类"一行一条"的地方之前先过 `one_line`——U+2028 不会被任何渲染器当成空格，
+#: 它在卡片列表里就是一次真实断行。
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\u0085\u2028\u2029]")
 
 
 def strip_controls(text: str, replacement: str = " ") -> str:

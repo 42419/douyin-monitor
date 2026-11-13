@@ -110,8 +110,13 @@ def test_dingtalk_sends_new_posts_as_an_action_card():
     assert body["actionCard"] == {
         "title": message.subject,
         "text": message.card_markdown,
-        "singleTitle": "点击观看",
-        "singleURL": "https://www.douyin.com/video/7496063824002403638",
+        "btnOrientation": "0",
+        "btns": [
+            {
+                "title": "点击观看",
+                "actionURL": "https://www.douyin.com/video/7496063824002403638",
+            }
+        ],
     }
 
 

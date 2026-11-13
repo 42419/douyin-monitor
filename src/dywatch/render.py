@@ -4,7 +4,7 @@
 Markdown（钉钉/企业微信/Server 酱）、纯文本（Telegram/Bark/webhook）、短标题（通知栏/Bark）。
 渲染一次、各渠道各取所需，比每个渠道自己拼一遍要少一半不一致。
 
-## 版式：每个字段自成一段，不用列表圆点
+## 版式：每个字段写成 `**标签**：值`，自成一段，不用列表圆点
 
 钉钉与企业微信**共用同一个 `markdown` 字段**，所以版式取两者的交集
 （钉钉：[消息发送与接收类型]；企业微信：[群机器人消息推送配置]）：
@@ -12,17 +12,20 @@ Markdown（钉钉/企业微信/Server 酱）、纯文本（Telegram/Bark/webhook
 | 元素 | 钉钉 | 企业微信 markdown |
 | ---------------- | -- | ------------------------------- |
 | `###` 标题 | ✅ | ✅（`#` 与文字之间要有空格） |
+| `**加粗**` | ✅ | ✅ |
 | `[文字](链接)` | ✅ | ✅ |
 | `>` 引用 | ✅ | ✅ |
 | `- ` 无序列表 | ✅ | ✗（原样显示 `- `）——**不用** |
 | 表格 / 代码块 / 行内代码 / 分隔线 / 斜体 | ✗ | ✗ |
 
-最早的 bash 版就是 `标签：值` 一行一段，清爽；后来改成 `- **标签**：值` 列表，圆点多了反而乱，
-所以改回来。分行靠**段落之间的空行**：钉钉把**单个**换行当软换行折叠（官方建议 `\\n` 前后各加
+标签加粗是唯一的强调手段：交集里只有 `**` 两边都认，值本身一律不加装饰。
+分行靠**段落之间的空行**：钉钉把**单个**换行当软换行折叠（官方建议 `\\n` 前后各加
 两个空格才有硬换行），相邻两行只隔一个换行会挤成一整行——那正是第一版"太乱"的根因。
 空行隔开的段落两边都能正确分行，且不依赖行尾那些不可见的空格。
 
-新作品在钉钉里另走 ActionCard（`Message.card_markdown` / `card_url`，见 `_new_post_card`）。
+新作品在钉钉里另走**独立跳转 ActionCard**（`Message.card_markdown` / `card_url`，
+见 `_new_post_card`）：那份正文只有钉钉读，所以里面可以用 `- ` 列表；列表项本身就是
+块级元素，**单换行**分隔即可，不会被"软换行折叠"那条规则吃掉。
 
 ## 两个长度约束
 
@@ -86,7 +89,7 @@ class Message:
     text: str
     sec_user_id: str | None = None
     content_id: str | None = None
-    #: 钉钉 ActionCard 版正文与整块跳转地址（目前只有"新作品"有）。**不进 `as_dict`**：
+    #: 钉钉 ActionCard 版正文与按钮跳转地址（目前只有"新作品"有）。**不进 `as_dict`**：
     #: 这是给钉钉渠道挑版式用的，不是 webhook 载荷契约的一部分。
     card_markdown: str | None = None
     card_url: str | None = None
@@ -115,7 +118,7 @@ def _clip(raw: Any, limit: int = TITLE_CLIP) -> str:
 def _val(raw: Any, limit: int = 120) -> str:
     """字段值：**压成一行**（控制字符与换行换空格）**再转义**。
 
-    外部字符串（标题、上游报错、账号 ID）都可能带换行；带进 `- **标签**：值` 这种一行式
+    外部字符串（标题、上游报错、账号 ID）都可能带换行；带进 `**标签**：值` 这种一行式
     字段里，换行就会撑出一个裸段落行——而钉钉会把裸行折叠进上一行，整段就花了。
     """
     return msg.md_escape(msg.one_line(_clip(raw, limit)))
@@ -126,8 +129,13 @@ def _title(value: Any, limit: int = TITLE_CLIP) -> str:
 
 
 def _field(label: str, value: Any) -> str:
-    """一个字段段落：`标签：值`。段落之间由 `_card` 统一隔一个空行。"""
-    return f"{label}：{value}"
+    """一个字段段落：`**标签**：值`。
+
+    标签加粗是唯一的强调手段——钉钉与企业微信都支持 `**`；列表、表格、行内代码至少有一边
+    会原样显示，所以不用（见模块头注释与 DESIGN D20）。加粗落在**转义之后**：`label` 是常量
+    不含 `*`，而值里的 `*` 已被 `_val` 转成 `\\*`，不会被误当成加粗标记。
+    """
+    return f"**{label}**：{value}"
 
 
 def _item(text: str) -> str:
@@ -225,6 +233,9 @@ def _cap(markdown: str, limit: int = MAX_BODY_BYTES) -> str:
 
 _ESCAPE_INVERSE = re.compile(r"\\(.)")
 _MD_LINK = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
+#: 行首的字段标签加粗：`**标题**：值`。**只剥这一种形状**——全局 `replace("**", "")`
+#: 会把值里的 `a**b` 和链接 URL 里的 `**` 一起吃掉（实测：封面地址变成另一个地址，点开 404）。
+_TAG_BOLD = re.compile(r"(?m)^\*\*([^*\n]+)\*\*：")
 
 
 def _to_text(markdown: str) -> str:
@@ -253,8 +264,12 @@ def _to_text(markdown: str) -> str:
         else:
             lines.append(line)
     text = _MD_LINK.sub(lambda m: f"{m.group(1)} <{m.group(2)}>", "\n".join(lines))
+    # 去掉标签加粗要**在反转义之前**：此时正文里的 `*` 还是 `\*`，只有版面自己加的 `**`
+    # 是裸的。而且只认**行首**的 `**标签**：`——值里的 `a**b` 与 URL 里的 `**` 是用户数据，
+    # 删掉就换了一个字符串（链接会 404），它们既不在行首、也不成对出现在冒号前。
+    text = _TAG_BOLD.sub(r"\1：", text)
     text = _ESCAPE_INVERSE.sub(r"\1", text)
-    return text.replace("**", "").replace("\u200b", "")
+    return text.replace("\u200b", "")
 
 
 def render_event(event: Event, *, now: datetime | None = None) -> Message:
@@ -285,27 +300,27 @@ def render_event(event: Event, *, now: datetime | None = None) -> Message:
 def _new_post_card(
     payload: Mapping[str, Any], md_name: str, now: datetime | None
 ) -> tuple[str, str] | None:
-    """钉钉 ActionCard 版"新作品"：最早那版 bash 脚本的样子，`(正文, 跳转地址)`。
+    """钉钉 ActionCard 版"新作品"：`(正文, 跳转地址)`。
 
     ```
-    ### 新视频发布
+    ### 阿Z想开了 发布了新视频
 
-    用户：xxx
-
-    标题：xxx
-
-    时间：2026-11-10 18:24:00
-
-    检测时间：2026-11-10 18:25:03
+    - **标题**：xxx
+    - **发布时间**：2026-11-10 18:24:00
+    - **检测时间**：2026-11-10 18:25:03
 
     ![封面](https://…)
     ```
 
-    **这里是"裸段落行"版式的唯一例外**（见模块头注释）：每一行之间都隔着空行，所以钉钉会把
-    它们当成各自独立的段落；挤成一坨的只是"单个换行"。标题、昵称仍然先压成一行再转义。
+    **标题带昵称**：群里同时有多条卡片，只写"新视频发布"看不出是谁发的；正文因此
+    不再重复一行"用户"，三个字段就够了。
+
+    **这里可以用列表**：卡片正文只有钉钉会读（`Message.card_markdown` 不被任何其它渠道取用），
+    不受"钉钉 ∩ 企业微信"那条约束。字段挤在同一个列表块里，比每行之间空一行紧凑得多；
+    封面单独成块，视觉上和字段分开。标题、昵称仍然先压成一行再转义。
 
     没有可用的作品链接（既没有合法的 `web_url`，也无法给视频拼出地址）就返回 None，
-    钉钉渠道会退回通用的 markdown 版——整块可点的卡片没有地址可跳，不如不用。
+    钉钉渠道会退回通用的 markdown 版——没有地址就没有按钮可放，不如不用。
     """
     content = payload.get("content")
     if content is None:
@@ -316,14 +331,18 @@ def _new_post_card(
         if content.kind is not Kind.VIDEO or not _URL_OK.match(url):
             return None
 
-    heading = msg.CARD_HEADING.format(kind=msg.kind_label(content.kind))
+    heading = msg.CARD_HEADING.format(
+        nickname=md_name, kind=msg.kind_label(content.kind)
+    )
     detected = now or datetime.now(timezone.utc)
+    rows = [
+        (msg.ROW_TITLE, _title(content.title)),
+        (msg.CARD_PUBLISHED, msg.fmt_time(content.created_at, seconds=True)),
+        (msg.CARD_DETECTED, msg.fmt_time(detected, seconds=True)),
+    ]
     blocks = [
         f"### {heading}",
-        f"{msg.CARD_USER}：{md_name}",
-        f"{msg.ROW_TITLE}：{_title(content.title)}",
-        f"{msg.CARD_PUBLISHED}：{msg.fmt_time(content.created_at, seconds=True)}",
-        f"{msg.CARD_DETECTED}：{msg.fmt_time(detected, seconds=True)}",
+        "\n".join(f"- **{label}**：{value}" for label, value in rows),
     ]
     cover = str(content.cover_url or "").strip()
     if _URL_OK.match(cover):
@@ -444,8 +463,8 @@ def _build(
             md_name,
             fails=_val(payload.get("fails") or "?", 10),
         )
+        # 失败次数已经写在标题里（"连续失败 N 次"），正文不再重复一遍
         rows = [
-            _field(msg.ROW_FAILS, _val(payload.get("fails") or "?", 10)),
             _field(msg.ROW_CODE, _val(payload.get("code") or "?", 40)),
             _field(
                 msg.ROW_DETAIL, _val(payload.get("message") or "（上游没有给出详情）")
@@ -470,12 +489,8 @@ def _build(
     if kind is EventKind.STALE_NO_UPDATE:
         days = _val(payload.get("days") or "?", 10)
         subject, heading = _titles(msg.T_STALE, plain_name, md_name, days=days)
-        # 这两行是"陈述"而不是"字段"，所以不套 `标签：`：套上去会读成
-        # "发布：已 14 天没有新作品"（标签和值在说两件事）
-        rows = [
-            _item(f"已 {days} 天没有新作品"),
-            _item("只提醒一次，该账号发布新作品后重新计时"),
-        ]
+        # "已 N 天没有新作品"就是标题本身，正文只留"这件事需要你做什么"
+        rows = [_item("只提醒一次，该账号发布新作品后重新计时")]
         return subject, _card(heading, rows)
 
     if kind is EventKind.UPSTREAM_DEGRADED:

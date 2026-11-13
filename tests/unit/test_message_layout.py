@@ -206,7 +206,7 @@ def test_a_long_title_is_clipped_before_escaping():
     md = render_event(event).markdown
     assert "…" in md, "超长标题要截断"
     assert title not in md, "不该原样塞进去"
-    row = next(line for line in md.split("\n") if line.startswith("标题："))
+    row = next(line for line in md.split("\n") if line.startswith("**标题**："))
     assert not row.rstrip().endswith("\\"), "截断点不能留下落单的反斜杠"
 
 
@@ -237,7 +237,9 @@ def test_plain_text_variant_is_free_of_markdown(kind):
     for payload in HOSTILE:
         event = Event(kind, sec_user_id="u1", nickname="阿直", payload=payload)
         text = render_event(event).text
-        assert "**" not in text
+        # 只要求"字段标签的加粗被剥掉"：值里真的写了 `a**b`、URL 里带 `**` 都必须原样保留
+        # （全局删除会把用户的标题改短、把链接改成另一个地址）。
+        assert not re.search(r"(?m)^\*\*[^*\n]+\*\*：", text), "字段行的加粗标记要清掉"
         assert "# " not in text and not text.startswith("#")
         assert "](http" not in text, "链接要展开成 `文字 <url>`，不该留下 markdown 语法"
         assert "\u200b" not in text, "零宽空格只对 markdown 渠道有意义"
@@ -261,7 +263,7 @@ def test_new_post_card_survives_hostile_payloads():
             assert message.card_url is None
             continue
         assert message.card_url and _URL_OK.match(message.card_url)
-        assert message.card_markdown.startswith("### 新")
+        assert message.card_markdown.startswith("### ")
         for line in message.card_markdown.split("\n"):
             trailing = len(line) - len(line.rstrip("\\"))
             assert trailing % 2 == 0, f"卡片行尾有落单的反斜杠：{line[-40:]!r}"

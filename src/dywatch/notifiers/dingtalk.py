@@ -1,6 +1,10 @@
 """钉钉群机器人（markdown / ActionCard + 加签）。
 
-"新作品"用 ActionCard（最早 bash 版的样子：标题、用户、时间、封面图 + 整块"点击观看"）；
+"新作品"用**独立跳转 ActionCard**（`btns` 数组 + `btnOrientation: "0"`，见钉钉
+「消息发送与接收类型」的 ActionCard 一节）：卡片正文是字段列表 + 封面，底部一个
+「点击观看」按钮跳到作品页。不用 `singleTitle`/`singleURL` 那种整体跳转——
+整块可点的卡片看不出哪里能点，按钮才是明确的动作位。
+
 其它事件仍是 markdown。
 
 **@ 只对告警生效**（`ALERT_SEVERITIES`：warning / error，如作品消失、监控异常、上游异常）；
@@ -40,13 +44,19 @@ class DingTalkChannel(HttpChannel):
         if self.secret:
             url = sign_dingtalk_url(url, self.secret, time.time())
         if message.card_markdown and message.card_url:
+            # 独立跳转 ActionCard：一个按钮。`btnOrientation="0"` 是竖排（文档定义的取值），
+            # 与 sampleActionCard2 那类"卡片正文 + 竖向按钮"的形态一致。
+            #
+            # 这个分支在下面的 `at` 之前返回。今天只有 `new_post`（info）会填卡片，所以
+            # `AT_MOBILES` 不受影响；**将来若有 warning/error 事件也用卡片，必须把 `at`
+            # 并进卡片体**，否则它会静默失效（告警不 @ 人，没有报错、没有日志）。
             return url, {
                 "msgtype": "actionCard",
                 "actionCard": {
                     "title": message.subject,
                     "text": message.card_markdown,
-                    "singleTitle": msg.CARD_BUTTON,
-                    "singleURL": message.card_url,
+                    "btnOrientation": "0",
+                    "btns": [{"title": msg.CARD_BUTTON, "actionURL": message.card_url}],
                 },
             }
         body: dict[str, Any] = {
