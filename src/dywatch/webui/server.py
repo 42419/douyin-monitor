@@ -218,9 +218,8 @@ def metrics_text(settings: Settings) -> str:
     )
 
     out = _Exposition()
-    out = _Exposition()
-    _emit_accounts(out, users, stale_days, buckets)
-    _emit_rounds(out, data, gate, self_check)
+    _emit_accounts(out, users, buckets)
+    _emit_process(out, data, gate, self_check)
     _emit_upstream(out, upstream)
     _emit_archive(out, archive)
     _emit_notify(out, notify)
@@ -232,7 +231,6 @@ def metrics_text(settings: Settings) -> str:
 def _emit_accounts(
     out: _Exposition,
     users: Sequence[Mapping[str, Any]],
-    stale_days: int,
     buckets: Mapping[str, int],
 ) -> None:
     out.add(
@@ -273,7 +271,7 @@ def _emit_accounts(
     )
 
 
-def _emit_rounds(
+def _emit_process(
     out: _Exposition,
     data: Mapping[str, Any],
     gate: Mapping[str, Any],

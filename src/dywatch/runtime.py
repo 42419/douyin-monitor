@@ -24,7 +24,7 @@ from .alerts import Deduplicator
 from .dtk import DtkClient
 from .loop import MonitorLoop
 from .messages import one_line
-from .notifiers import build_notifier
+from .notifiers import AnyNotifier, build_notifier
 from .pacer import RequestPacer, RoundWaiter
 from .pipeline import ArchiveTrigger
 from .scheduler import GlobalGate
@@ -185,7 +185,7 @@ class Runtime:
     logger: StructuredLogger
     store: StateStore
     client: DtkClient
-    notifier: Any
+    notifier: AnyNotifier
     pacer: RequestPacer
     waiter: RoundWaiter
     gate: GlobalGate

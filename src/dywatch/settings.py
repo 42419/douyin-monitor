@@ -23,14 +23,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Mapping
 
-from .targets import SPECS, TargetSet, parse_targets
+from . import targets
+from .targets import TargetSet, parse_targets
 
 #: 通知渠道名 -> 该渠道必填的键（缺失时启动报错，而不是到了要推送时才发现）
 #: 旧写法（`NOTIFY_CHANNELS` + 单值凭据键）下，每个渠道必需的环境变量。
 #: **从 `targets.SPECS` 派生**：渠道"要哪些字段"只该有一处事实——抄第二份的话，
 #: 加渠道时忘了一处就会静默少校验一个凭据（而那正是最该被拦住的配置错误）。
+#:
+#: 注意写全 `targets.SPECS`：本模块 200 行往后还有一个 `SPECS`（环境变量键 →
+#: `SettingSpec`）。直接 `from .targets import SPECS` 会被后者遮蔽，只是靠"常量
+#: 定义在前"才碰巧正确——那种正确迟早会被人挪位置挪坏。
 CHANNEL_REQUIRED: Final[Mapping[str, tuple[str, ...]]] = {
-    kind: spec.legacy for kind, spec in SPECS.items() if spec.legacy
+    kind: spec.legacy for kind, spec in targets.SPECS.items() if spec.legacy
 }
 
 LOG_LEVELS: Final[tuple[str, ...]] = ("DEBUG", "INFO", "WARNING", "ERROR")

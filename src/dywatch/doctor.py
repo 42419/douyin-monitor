@@ -1,9 +1,10 @@
 """`dywatch doctor` —— 自检。
 
 它回答一个问题：**现在这套配置能不能真的跑起来**。所以检查按依赖顺序排：
-Key → scope → 身份 → 实例 → 账号，前一步过不去，后一步的结论就没有意义。
+凭据 → scope → 归档下载（可选）→ 身份 → 实例 → 账号，前一步过不去，后一步的结论
+就没有意义。
 
-放在独立模块而不是 `cli.py` 里：这是一整个子系统（五类检查，每类有自己的失败语义与
+放在独立模块而不是 `cli.py` 里：这是一整个子系统（六段检查，每段有自己的失败语义与
 修复指引），而 `cli` 的职责只是"解析参数、分派"。两者的改动理由从来不在一起。
 
 **每一项检查都必须给出可执行的下一步**：`✗` 说明这里过不去，紧跟的几行就是"怎么办"。
@@ -13,7 +14,7 @@ Key → scope → 身份 → 实例 → 账号，前一步过不去，后一步�
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from . import __version__
 from .dtk import DtkClient, MonitorError
@@ -50,13 +51,15 @@ async def run_doctor(settings: Settings, *, out: Out = print) -> int:
         user_agent=str(settings["DTK_USER_AGENT"]),
         identity=str(settings["DTK_IDENTITY"]),
     ) as client:
-        user = await _check_credentials(client, out, problems)
-        if user is None:
+        me = await _check_credentials(client, out, problems)
+        if me is None:
             return 2
+        user = me.get("user") or {}
         scopes = _check_scopes(user, settings, out, problems)
         if settings["ARCHIVE_DOWNLOAD_ENABLED"]:
             await _check_archive_download(client, scopes, out, problems)
         _check_identity(user, settings, scopes, out, problems)
+        _report_rate(me, out)
         await _check_instance(client, settings, out, problems)
         await _check_accounts(client, settings, out, problems)
 
@@ -74,7 +77,11 @@ async def run_doctor(settings: Settings, *, out: Out = print) -> int:
 async def _check_credentials(
     client: DtkClient, out: Out, problems: list[str]
 ) -> dict[str, Any] | None:
-    """`auth/me`：Key 本身是否被接受。返回 `data.user`，不可用时返回 `None`。"""
+    """`auth/me`：Key 本身是否被接受。返回整个响应体，不可用时返回 `None`。
+
+    返回整个 `me` 而不是 `data.user`：速率上限那一行要打在"身份检查之后"，
+    与原版 `cmd_doctor` 的输出顺序保持一致（顺序变了就是可观察的行为变化）。
+    """
     try:
         me = await client.me()
     except MonitorError as exc:
@@ -90,11 +97,7 @@ async def _check_credentials(
         f"✓ 凭据有效：username={user.get('username')} role={user.get('role')} via={user.get('via')}"
     )
     out(f"  scopes: {', '.join(sorted(scopes))}")
-    rate = me.get("rate_limit_per_min")
-    out(
-        f"  速率上限: {rate if rate is not None else '未单独设置（用实例默认 120/分钟）'}"
-    )
-    return user
+    return me
 
 
 def _check_scopes(
@@ -276,6 +279,14 @@ async def _check_accounts(
             f"（非置顶 {non_top} / 置顶 {pinned}，count={settings['FETCH_COUNT']}）"
             f" {elapsed}ms has_more={page.has_more}{note}"
         )
+
+
+def _report_rate(me: Mapping[str, Any], out: Out) -> None:
+    """Key 自己的速率上限。放在身份检查之后，与重构前的输出顺序一致。"""
+    rate = me.get("rate_limit_per_min")
+    out(
+        f"  速率上限: {rate if rate is not None else '未单独设置（用实例默认 120/分钟）'}"
+    )
 
 
 def _report_pacing(settings: Settings, out: Out) -> None:

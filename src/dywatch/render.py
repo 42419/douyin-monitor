@@ -33,7 +33,7 @@ Markdown（钉钉/企业微信/Server 酱）、纯文本（Telegram/Bark/webhook
   取更严的那个再留余量 → `MAX_BODY_BYTES`，超了在**行边界**截断并附一句说明。
 - **单条作品标题**：抖音标题可以很长，整段塞进通知会淹掉其它字段 → `_title()` 截断。
   截断发生在**转义之前**：先转义再截断会把 `\\*` 切成落单的反斜杠，通知里就留下一个坏掉的
-  转义序列（`webui._label` 踩过同一个坑）。
+  转义序列（`webui.server._label` 踩过同一个坑）。
 
 [消息发送与接收类型]: https://open.dingtalk.com/document/development/robot-message-type
 [群机器人消息推送配置]: https://developer.work.weixin.qq.com/document/path/91770

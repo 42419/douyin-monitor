@@ -21,6 +21,10 @@ def parse_dt(raw: Any) -> datetime | None:
 
     三个细节都是踩过的：`Z` 后缀要显式换成 `+00:00`（3.11 之前 `fromisoformat`
     不认）、裸时间按 UTC 处理（上游给的都是 UTC）、非字符串一律当"没给"。
+
+    合并前的两份实现在这一点上**不完全一致**：`dtk` 那份有 `.strip()`，
+    `webui.queries` 那份没有。这里取的是更宽容的版本——带首尾空白的值原本会
+    在详情页显示成空，现在能解析。这是放宽而不是收紧，有测试钉住。
     """
     if not raw or not isinstance(raw, str):
         return None

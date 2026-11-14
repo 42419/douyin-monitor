@@ -341,6 +341,9 @@ def tombstone_reason(reason: str) -> str:
     return TOMBSTONE_REASONS.get(reason, reason)
 
 
+#: 只导出函数。`T_*` / `ROW_*` / `NOTE_*` 这些模板常量是本模块的**拼装素材**，
+#: 由这里的函数组装成句子；外部只需要"给我一句话"，不需要知道句子由哪些片段拼成。
+#: 需要新文案时加函数，不要直接把常量导出去用——那会让文案有两个出处。
 __all__ = [
     "event_label",
     "fmt_count",

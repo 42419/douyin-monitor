@@ -824,6 +824,9 @@ def test_parse_dt_accepts_z_suffix_and_naive_values():
     assert parse_dt("2026-09-16T12:00:00").tzinfo is not None
     assert parse_dt("不是时间") is None
     assert parse_dt(None) is None
+    # 合并自两份实现：`dtk` 那份会 strip 首尾空白，`queries` 那份不会。
+    # 统一到更宽容的版本，所以这一条是宽松化后的行为，不是原本就有的。
+    assert parse_dt(" 2026-09-16T12:00:00Z ").tzinfo is not None
 
 
 def test_urllib_parse_roundtrip_for_ids():

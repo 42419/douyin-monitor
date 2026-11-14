@@ -16,6 +16,7 @@ src/dywatch/
 ├── dtk.py          DTK v5 HTTP 客户端（信封 / 错误码归一化 / wait→202→轮询）
 ├── users.py        users.conf 解析与校验
 ├── models.py       值对象（frozen dataclass）
+├── errors.py       MonitorError 与错误码分类（dtk 与 diff 共用，避免 diff import dtk）
 ├── diff.py         判定纯函数 —— 零 I/O，可脱网单测
 ├── state.py        SQLite（一轮一个事务）
 ├── messages.py     全部文案与格式化
