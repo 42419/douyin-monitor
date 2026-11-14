@@ -660,5 +660,8 @@ def main(argv: list[str] | None = None) -> int:
     return asyncio.run(cmd_run(settings, once=True))
 
 
+__all__ = ["main"]
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())

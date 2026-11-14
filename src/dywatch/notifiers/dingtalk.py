@@ -66,3 +66,9 @@ class DingTalkChannel(HttpChannel):
         if self.at_mobiles and message.severity in ALERT_SEVERITIES:
             body["at"] = {"atMobiles": list(self.at_mobiles), "isAtAll": False}
         return url, body
+
+
+__all__ = [
+    "ALERT_SEVERITIES",
+    "DingTalkChannel",
+]

@@ -341,4 +341,21 @@ def tombstone_reason(reason: str) -> str:
     return TOMBSTONE_REASONS.get(reason, reason)
 
 
-__all__ = [name for name in dir() if not name.startswith("_")]
+__all__ = [
+    "event_label",
+    "fmt_count",
+    "fmt_duration",
+    "fmt_gap",
+    "fmt_stats",
+    "fmt_tags",
+    "fmt_time",
+    "freq_hint",
+    "frequency_stats",
+    "hours_since",
+    "kind_label",
+    "md_escape",
+    "newest_post_at",
+    "one_line",
+    "strip_controls",
+    "tombstone_reason",
+]
