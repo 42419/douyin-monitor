@@ -28,7 +28,9 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
-    "ruff>=0.16",
+    # 锁大版本：ruff 的格式化规则会随小版本变，而 CI 每次都装最新的——0.17 把
+    # `should_send(...)` 那种折行合并成一行，于是本地绿、CI 红。升级时手动改这里。
+    "ruff>=0.17.4,<0.18",
 ]
 
 [project.scripts]
