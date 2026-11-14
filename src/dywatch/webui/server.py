@@ -218,6 +218,23 @@ def metrics_text(settings: Settings) -> str:
     )
 
     out = _Exposition()
+    out = _Exposition()
+    _emit_accounts(out, users, stale_days, buckets)
+    _emit_rounds(out, data, gate, self_check)
+    _emit_upstream(out, upstream)
+    _emit_archive(out, archive)
+    _emit_notify(out, notify)
+    _emit_features(out, features)
+    _emit_state(out, counts, keep_days)
+    return out.text()
+
+
+def _emit_accounts(
+    out: _Exposition,
+    users: Sequence[Mapping[str, Any]],
+    stale_days: int,
+    buckets: Mapping[str, int],
+) -> None:
     out.add(
         "dywatch_users",
         "gauge",
@@ -255,6 +272,13 @@ def metrics_text(settings: Settings) -> str:
         ],
     )
 
+
+def _emit_rounds(
+    out: _Exposition,
+    data: Mapping[str, Any],
+    gate: Mapping[str, Any],
+    self_check: Mapping[str, Any],
+) -> None:
     out.add(
         "dywatch_rounds_total",
         "counter",
@@ -297,6 +321,8 @@ def metrics_text(settings: Settings) -> str:
         [((), self_check.get("free_mb"))],
     )
 
+
+def _emit_upstream(out: _Exposition, upstream: Mapping[str, Any]) -> None:
     out.add(
         "dywatch_upstream_ok",
         "gauge",
@@ -372,6 +398,8 @@ def metrics_text(settings: Settings) -> str:
             [((), storage.get("identities"))],
         )
 
+
+def _emit_archive(out: _Exposition, archive: Mapping[str, Any]) -> None:
     pending = _as_int(archive.get("pending")) if archive.get("enabled") else 0
     out.add(
         "dywatch_archive_pending",
@@ -386,6 +414,8 @@ def metrics_text(settings: Settings) -> str:
         [((), 1 if (archive.get("enabled") and archive.get("muted_code")) else 0)],
     )
 
+
+def _emit_notify(out: _Exposition, notify: Mapping[str, Any]) -> None:
     channels = notify.get("channels")
     out.add(
         "dywatch_notify_channels",
@@ -400,6 +430,8 @@ def metrics_text(settings: Settings) -> str:
         [((), 1 if notify.get("silent") else 0)],
     )
 
+
+def _emit_features(out: _Exposition, features: Mapping[str, Any]) -> None:
     out.add(
         "dywatch_feature_enabled",
         "gauge",
@@ -413,6 +445,8 @@ def metrics_text(settings: Settings) -> str:
         ],
     )
 
+
+def _emit_state(out: _Exposition, counts: Mapping[str, Any], keep_days: int) -> None:
     # ---- 状态库规模：**读不出来时少几行，而不是报 0** ----
     # 报 0 会让人去查"为什么事件突然没了"，而真相是库读不出来（`dywatch_state_readable 0`
     # 就在同一份文本里，所以这个区分是有用的，不是啰嗦）
@@ -453,7 +487,6 @@ def metrics_text(settings: Settings) -> str:
             "Distinct posts with at least one engagement snapshot.",
             [((), counts["metric_posts"])],
         )
-    return out.text()
 
 
 def json_body(payload: Any) -> bytes:
