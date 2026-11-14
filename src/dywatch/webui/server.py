@@ -161,14 +161,6 @@ class _Exposition:
         for labels, value in rows:
             self._lines.append(f"{name}{_labels(labels)} {_num(value)}")
 
-    def declare(self, name: str, kind: str, help_: str) -> None:
-        """只声明不给样本。用于"值可能是 0 但必须存在"的指标。
-
-        Prometheus 的计数器在归零时消失会让 `rate()` 出现断点；这里的取舍是
-        **已经 emit 过就继续 emit**，所以空集合的 counter 也要声明一次。
-        """
-        self._declare(name, kind, help_)
-
     def _declare(self, name: str, kind: str, help_: str) -> None:
         if name in self._names:
             return
