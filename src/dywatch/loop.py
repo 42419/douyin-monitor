@@ -32,7 +32,7 @@ from .dtk import MonitorError
 from .messages import freq_hint, frequency_stats, hours_since, newest_post_at
 from .models import AuthorState, DiffConfig, Event, EventKind, RoundResult
 from .pacer import RequestPacer, RoundWaiter
-from .pipeline import ArchiveTrigger, notify_system_event, run_author
+from .pipeline import ArchiveTrigger, RoundDeps, notify_system_event, run_author
 from .protocols import DtkClientLike, LoggerLike, NotifierLike
 from .scheduler import GlobalGate
 from .settings import Settings
@@ -71,7 +71,7 @@ class MonitorLoop:
         self.archive_trigger = archive_trigger
         self.log = logger
         self.stop = stop or asyncio.Event()
-        self.cfg = DiffConfig.from_settings(settings)
+        cfg = DiffConfig.from_settings(settings)
         self._users_mtime: float | None = None
         self._users: list[UserEntry] = []
         self._rounds = 0
@@ -85,6 +85,22 @@ class MonitorLoop:
         self._upstream_status_at: float = 0.0
         #: 本轮的状态库写入是否失败过（`record_round` / 快照）。每轮开头清零。
         self._store_write_failed = False
+        #: 一轮里不变的协作者与开关，`run_author` 每轮复用（见 `pipeline.RoundDeps`）。
+        #: `ARCHIVE_ENABLED` / `METRICS_ENABLED` 来自 `.env`，改它们要重启进程，
+        #: 所以在这里读一次与每轮读等价。
+        self.deps = RoundDeps(
+            client=client,
+            store=store,
+            notifier=notifier,
+            dedup=dedup,
+            pacer=pacer,
+            gate=gate,
+            cfg=cfg,
+            logger=logger,
+            archive_trigger=archive_trigger,
+            archive_enabled=bool(settings["ARCHIVE_ENABLED"]),
+            metrics_enabled=bool(settings["METRICS_ENABLED"]),
+        )
 
     # ------------------------------------------------------------------ users
     def reload_users(self, *, force: bool = False) -> bool:
@@ -432,20 +448,10 @@ class MonitorLoop:
                 author = author.with_updates(nickname=entry.nickname)
 
             return await run_author(
+                deps=self.deps,
                 author=author,
                 nickname=entry.nickname,
-                client=self.client,
-                store=self.store,
-                notifier=self.notifier,
-                dedup=self.dedup,
-                pacer=self.pacer,
-                gate=self.gate,
-                cfg=self.cfg,
                 now=now,
-                archive_enabled=bool(self.settings["ARCHIVE_ENABLED"]),
-                archive_trigger=self.archive_trigger,
-                metrics_enabled=bool(self.settings["METRICS_ENABLED"]),
-                logger=self.log,
             )
 
     def _log_summary(self, summary: dict[str, int], duration_ms: int) -> None:

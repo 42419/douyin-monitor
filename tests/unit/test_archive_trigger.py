@@ -31,6 +31,7 @@ from dywatch.models import (
 from dywatch.pipeline import (
     ARCHIVE_MAX_ATTEMPTS,
     ArchiveTrigger,
+    RoundDeps,
     run_author,
 )
 from dywatch.scheduler import GlobalGate
@@ -434,9 +435,7 @@ async def _run_one_round(tmp_path, *, download_error: Exception | None = None):
     gate = GlobalGate(default_seconds=60, backoff_after=2, backoff_max=600)
     trigger = ArchiveTrigger(client=client, pacer=pacer, logger=Logger())
 
-    result = await run_author(
-        author=author,
-        nickname="示例",
+    deps = RoundDeps(
         client=client,
         store=store,
         notifier=Notifier(order),
@@ -444,11 +443,11 @@ async def _run_one_round(tmp_path, *, download_error: Exception | None = None):
         pacer=pacer,
         gate=gate,
         cfg=DiffConfig(),
-        now=now,
         archive_enabled=False,
         archive_trigger=trigger,
         logger=Logger(),
     )
+    result = await run_author(deps=deps, author=author, nickname="示例", now=now)
     return result, order, store, gate, pacer, trigger
 
 

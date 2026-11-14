@@ -26,7 +26,7 @@ from dywatch.models import (
     Page,
     PostState,
 )
-from dywatch.pipeline import notify_system_event, run_author
+from dywatch.pipeline import RoundDeps, notify_system_event, run_author
 from dywatch.scheduler import GlobalGate
 from dywatch.state import StateStore
 
@@ -103,9 +103,7 @@ async def _run_round(tmp_path, notifier: RecordingNotifier | None = None):
         ),
     )
     notifier = notifier or RecordingNotifier()
-    result = await run_author(
-        author=author,
-        nickname="阿直",
+    deps = RoundDeps(
         client=Client(),
         store=store,
         notifier=notifier,
@@ -113,10 +111,10 @@ async def _run_round(tmp_path, notifier: RecordingNotifier | None = None):
         pacer=Pacer(),
         gate=GlobalGate(default_seconds=60, backoff_after=2, backoff_max=600),
         cfg=DiffConfig(),
-        now=NOW,
         archive_enabled=False,
         logger=Logger(),
     )
+    result = await run_author(deps=deps, author=author, nickname="阿直", now=NOW)
     return result, notifier, store
 
 

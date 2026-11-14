@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -54,23 +55,44 @@ ARCHIVE_CONFIG_MUTE_SECONDS = 3600
 ARCHIVE_CAPACITY_MUTE_SECONDS = 300
 
 
+@dataclass(frozen=True, slots=True)
+class RoundDeps:
+    """一轮里**不变**的外部协作者与开关。
+
+    原来的 `run_author` 有 14 个关键字参数，其中 10 个是这些整轮不动的东西：
+    每加一个协作者就要改签名、改调用点、改测试。收进一个对象之后，
+    `run_author` 只收"这一轮的输入"（账号、昵称、时间），`MonitorLoop` 在构造时
+    建一次 `RoundDeps`，之后每轮复用。
+    """
+
+    client: DtkReader
+    store: StateStore
+    notifier: NotifierLike
+    dedup: Deduplicator
+    pacer: RequestPacer
+    gate: GlobalGate
+    cfg: DiffConfig
+    logger: LoggerLike | None = None
+    archive_trigger: ArchiveTrigger | None = None
+    archive_enabled: bool = True
+    metrics_enabled: bool = True
+
+
 async def run_author(
     *,
+    deps: RoundDeps,
     author: AuthorState,
     nickname: str,
-    client: DtkReader,
-    store: StateStore,
-    notifier: NotifierLike,
-    dedup: Deduplicator,
-    pacer: RequestPacer,
-    gate: GlobalGate,
-    cfg: DiffConfig,
     now: datetime,
-    archive_enabled: bool = True,
-    archive_trigger: ArchiveTrigger | None = None,
-    metrics_enabled: bool = True,
-    logger: LoggerLike | None = None,
 ) -> RoundResult:
+    # 解包成短名：函数体里 60 多处要用它们，`deps.xxx` 写满一屏反而更难读。
+    # 这一行同时是"这一轮依赖了哪些协作部件"的清单。
+    client, store, notifier = deps.client, deps.store, deps.notifier
+    dedup, pacer, gate = deps.dedup, deps.pacer, deps.gate
+    cfg, logger = deps.cfg, deps.logger
+    archive_trigger, archive_enabled = deps.archive_trigger, deps.archive_enabled
+    metrics_enabled = deps.metrics_enabled
+
     started = time.monotonic()
     author = author.with_updates(nickname=nickname or author.nickname)
 
@@ -686,4 +708,9 @@ def _log(logger: LoggerLike | None, level: str, event: str, **fields: Any) -> No
     getattr(logger, level, logger.info)(event, **fields)
 
 
-__all__ = ["CONFIG_ERROR_GATE_SECONDS", "notify_system_event", "run_author"]
+__all__ = [
+    "CONFIG_ERROR_GATE_SECONDS",
+    "RoundDeps",
+    "notify_system_event",
+    "run_author",
+]
