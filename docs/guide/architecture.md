@@ -4,7 +4,9 @@
 
 ```
 src/dywatch/
-├── cli.py          命令入口（run/once/doctor/status/config-check/add/test-notify）
+├── cli.py          命令入口（解析参数、分派）
+├── doctor.py       自检：Key → scope → 身份 → 实例 → 账号，逐项给修复指引
+├── protocols.py    协作者契约（DtkReader / NotifierLike / LoggerLike）
 ├── settings.py     SettingSpec 注册表 + 跨项校验 + 来源追溯
 ├── runtime.py      结构化日志 / 单实例锁 / 装配
 ├── loop.py         轮次循环（users.conf 热加载、并发、汇总、状态快照）

@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from dywatch import cli
+from dywatch import cli, doctor
 from dywatch.settings import load_settings
 from dywatch.state import StateStore
 from dywatch.users import load_users_conf
@@ -384,14 +384,14 @@ async def test_doctor_requires_archive_scope_only_when_archive_is_enabled(
 
             return Page(items=())
 
-    monkeypatch.setattr(cli, "DtkClient", _Client)
+    monkeypatch.setattr(doctor, "DtkClient", _Client)
     # 零个账号也能跑 doctor（自检的对象是实例、凭据与 scope，不是账号列表）
     (tmp_path / "users.conf").write_text("", encoding="utf-8")
 
     enabled = settings_for(
         tmp_path, DTK_IDENTITY="3f9c0a52-1b2c-4d5e-8f90-123456789abc"
     )
-    code_enabled = await cli.cmd_doctor(enabled)
+    code_enabled = await doctor.run_doctor(enabled)
     assert code_enabled == 1, "默认开启归档 + 缺 archive:read 必须判为需要处理"
 
     disabled = settings_for(
@@ -399,7 +399,7 @@ async def test_doctor_requires_archive_scope_only_when_archive_is_enabled(
         ARCHIVE_ENABLED="false",
         DTK_IDENTITY="3f9c0a52-1b2c-4d5e-8f90-123456789abc",
     )
-    code_disabled = await cli.cmd_doctor(disabled)
+    code_disabled = await doctor.run_doctor(disabled)
     assert code_disabled == 0, "关掉归档时缺 archive:read 不该算问题"
 
 
@@ -438,14 +438,14 @@ async def test_doctor_requires_identity_manage_when_an_identity_is_pinned(
 ):
     """`identity:manage` 的必需性跟着 `DTK_IDENTITY` 走——配了身份就必须有这个 scope。"""
     monkeypatch.setattr(
-        cli, "DtkClient", _doctor_client_factory(["douyin:read", "archive:read"])
+        doctor, "DtkClient", _doctor_client_factory(["douyin:read", "archive:read"])
     )
     (tmp_path / "users.conf").write_text("", encoding="utf-8")
 
     settings = settings_for(
         tmp_path, DTK_IDENTITY="3f9c0a52-1b2c-4d5e-8f90-123456789abc"
     )
-    code = await cli.cmd_doctor(settings)
+    code = await doctor.run_doctor(settings)
     out = capsys.readouterr().out
 
     assert code == 1
@@ -458,7 +458,7 @@ async def test_doctor_requires_operator_role_for_a_pinned_identity(
 ):
     """DTK 的 pin 校验 role（`require_credential_access`），不只是 scope。"""
     monkeypatch.setattr(
-        cli,
+        doctor,
         "DtkClient",
         _doctor_client_factory(
             ["douyin:read", "archive:read", "identity:manage"], role="viewer"
@@ -469,7 +469,7 @@ async def test_doctor_requires_operator_role_for_a_pinned_identity(
     settings = settings_for(
         tmp_path, DTK_IDENTITY="3f9c0a52-1b2c-4d5e-8f90-123456789abc"
     )
-    code = await cli.cmd_doctor(settings)
+    code = await doctor.run_doctor(settings)
     out = capsys.readouterr().out
 
     assert code == 1
@@ -481,14 +481,14 @@ async def test_doctor_flags_a_missing_identity_as_a_problem(
 ):
     """没配 `DTK_IDENTITY` 时监控会退回拿不到最新作品的那条路——doctor 必须判为问题。"""
     monkeypatch.setattr(
-        cli,
+        doctor,
         "DtkClient",
         _doctor_client_factory(["douyin:read", "archive:read", "identity:manage"]),
     )
     (tmp_path / "users.conf").write_text("", encoding="utf-8")
 
     settings = settings_for(tmp_path)
-    code = await cli.cmd_doctor(settings)
+    code = await doctor.run_doctor(settings)
     out = capsys.readouterr().out
 
     assert code == 1
