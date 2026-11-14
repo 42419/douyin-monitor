@@ -23,16 +23,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Mapping
 
-from .targets import TargetSet, parse_targets
+from .targets import SPECS, TargetSet, parse_targets
 
 #: 通知渠道名 -> 该渠道必填的键（缺失时启动报错，而不是到了要推送时才发现）
+#: 旧写法（`NOTIFY_CHANNELS` + 单值凭据键）下，每个渠道必需的环境变量。
+#: **从 `targets.SPECS` 派生**：渠道"要哪些字段"只该有一处事实——抄第二份的话，
+#: 加渠道时忘了一处就会静默少校验一个凭据（而那正是最该被拦住的配置错误）。
 CHANNEL_REQUIRED: Final[Mapping[str, tuple[str, ...]]] = {
-    "dingtalk": ("DINGTALK_TOKEN", "DINGTALK_SECRET"),
-    "wecom": ("WECOM_WEBHOOK_KEY",),
-    "bark": ("BARK_DEVICE_KEY",),
-    "serverchan": ("SERVERCHAN_SENDKEY",),
-    "telegram": ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"),
-    "webhook": ("WEBHOOK_URL",),
+    kind: spec.legacy for kind, spec in SPECS.items() if spec.legacy
 }
 
 LOG_LEVELS: Final[tuple[str, ...]] = ("DEBUG", "INFO", "WARNING", "ERROR")

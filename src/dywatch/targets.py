@@ -76,18 +76,37 @@ class TargetSpec:
     optional: tuple[str, ...] = ()
     #: 属于凭据的字段：`dywatch config-check` 与日志里要遮蔽
     secrets: tuple[str, ...] = ()
+    #: 旧写法（`NOTIFY_CHANNELS` + 单值 env 键）下这个渠道必需的环境变量。
+    #: 放在这里而不是 `settings.py` 再抄一份：同一个渠道"要哪些字段"只该有一处事实。
+    legacy: tuple[str, ...] = ()
 
 
 #: 类型 -> 字段表。这里的键名**刻意用渠道自己的说法**（token / key / sendkey），
 #: 而不是大写环境变量名——它出现在一行配置里，短一点更好写、也更好读。
 SPECS: Final[Mapping[str, TargetSpec]] = {
-    "dingtalk": TargetSpec(("token",), ("secret",), secrets=("token", "secret")),
-    "wecom": TargetSpec(("key",), secrets=("key",)),
-    "bark": TargetSpec(("device_key",), ("server",), secrets=("device_key",)),
-    "serverchan": TargetSpec(("sendkey",), secrets=("sendkey",)),
-    "telegram": TargetSpec(("bot_token", "chat_id"), secrets=("bot_token",)),
+    "dingtalk": TargetSpec(
+        ("token",),
+        ("secret",),
+        secrets=("token", "secret"),
+        legacy=("DINGTALK_TOKEN", "DINGTALK_SECRET"),
+    ),
+    "wecom": TargetSpec(("key",), secrets=("key",), legacy=("WECOM_WEBHOOK_KEY",)),
+    "bark": TargetSpec(
+        ("device_key",),
+        ("server",),
+        secrets=("device_key",),
+        legacy=("BARK_DEVICE_KEY",),
+    ),
+    "serverchan": TargetSpec(
+        ("sendkey",), secrets=("sendkey",), legacy=("SERVERCHAN_SENDKEY",)
+    ),
+    "telegram": TargetSpec(
+        ("bot_token", "chat_id"),
+        secrets=("bot_token",),
+        legacy=("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"),
+    ),
     # webhook 的 URL 本身可能就是带密钥的回调地址，一并遮蔽
-    "webhook": TargetSpec(("url",), secrets=("url",)),
+    "webhook": TargetSpec(("url",), secrets=("url",), legacy=("WEBHOOK_URL",)),
 }
 
 #: `name` 是所有类型通用的元字段（不是渠道参数）
