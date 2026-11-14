@@ -21,7 +21,7 @@ import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Final, Iterable, Mapping
+from typing import Any, Final, Mapping
 
 from .targets import TargetSet, parse_targets
 
@@ -734,20 +734,3 @@ def resolve_env_file(
     if home:
         return Path(home) / ".env"
     return Path.cwd() / ".env"
-
-
-def settings_for_cli(explicit_env: str | None = None) -> Settings:
-    return load_settings(resolve_env_file(explicit_env))
-
-
-def cast_value(key: str, raw: str) -> Any:
-    """Expose the caster for callers that read a value from somewhere else."""
-    return _cast(SPECS[key].cast, raw)
-
-
-def all_keys() -> Iterable[str]:
-    return (spec.key for spec in SETTINGS)
-
-
-def _unused(_: Callable[..., Any]) -> None:  # pragma: no cover
-    """Keep the Callable import honest for type checkers reading this file."""
