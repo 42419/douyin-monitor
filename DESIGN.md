@@ -511,6 +511,28 @@ dtk_<12 位十六进制前缀>_<32 位 base64url>     共 49 字符，必须以 
 
 `Content` 字段、`user/posts` / `archive` / `auth/me` 参数、`identity=` 的角色要求均未变。
 
+### 2.9 版本复核（2026-11-14，dtk 5.1.10 → 5.1.11）
+
+本地 clone 已到 **5.1.11**（HEAD `3c045e1`）。5.1.10..5.1.11 共 11 个提交，`src/` 只动了 10 个文件，
+**没有一处落在本工具的契约面上**：`api/routes/content.py`、`api/routes/downloads.py`、`api/envelope.py`、
+`services/fetch.py`、`services/archive.py`、`models/content.py`、`platforms/douyin/`、`identity/`、
+`scheduler/` 全部零改动。
+
+| 变化                                                                                       | 影响 / 处理                                                                                                               |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| 新增错误码 `MEDIA_WITHHELD`（403，不可重试，commit `88cad66`）：作品读全了，但平台不给媒体 | **TikTok Shop 视频专属**（`platforms/tiktok/parser.py`）。本工具只读抖音，`user/posts` 不会返回该码，`errors.py` 不必登记 |
+| TikTok 列表允许"无媒体作品"随页返回（`media.video: null`），整页不再 502                   | 同上，仅 TikTok。抖音侧的"这条没有可下载媒体"仍是 `INVALID_PARAM`，`ArchiveTrigger._on_failure` 照旧跳过                  |
+| TikTok 搜索 cursor 带 search id、第二页可翻                                                | 本工具不翻页、不搜 TikTok                                                                                                 |
+| A-Bogus 签名快约 9%（SM3 `_expand` 重写，commit `69a23ef`）                                | 签名结果逐字节不变，只影响 DTK 自身 CPU                                                                                   |
+| `Task.result` / `Task.error` 改 `none_as_null`（commit `6acfc8d`，修 retention 每轮重写）  | DTK 内部维护；`GET /tasks/{id}` 的响应形状不变                                                                            |
+| 镜像构建支持 apt / PyPI 镜像源（commit `3c045e1`）                                         | 只影响自建镜像时的构建速度                                                                                                |
+| 控制台单条作品表单支持短链分享文案                                                         | 与本工具无关                                                                                                              |
+
+发布说明明写 **"No new migrations, no new settings, and API keys need nothing"**——升级零动作。
+
+**将来若扩到 TikTok**（当前不做）：`MEDIA_WITHHELD` 要并入 `ArchiveTrigger._on_failure` 的
+`INVALID_PARAM` 分支（终态、跳过、不重试），而不是让它落到"可重试失败"里空转。
+
 ---
 
 ## 3. 从 v5 学到并要落地的架构原则
