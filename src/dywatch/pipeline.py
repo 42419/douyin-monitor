@@ -33,6 +33,7 @@ from .models import (
     RoundResult,
 )
 from .pacer import RequestPacer
+from .protocols import DtkReader, LoggerLike, NotifierLike
 from .render import render_event
 from .scheduler import GlobalGate
 from .state import StateStore
@@ -57,9 +58,9 @@ async def run_author(
     *,
     author: AuthorState,
     nickname: str,
-    client: Any,
+    client: DtkReader,
     store: StateStore,
-    notifier: Any,
+    notifier: NotifierLike,
     dedup: Deduplicator,
     pacer: RequestPacer,
     gate: GlobalGate,
@@ -68,7 +69,7 @@ async def run_author(
     archive_enabled: bool = True,
     archive_trigger: ArchiveTrigger | None = None,
     metrics_enabled: bool = True,
-    logger: Any = None,
+    logger: LoggerLike | None = None,
 ) -> RoundResult:
     started = time.monotonic()
     author = author.with_updates(nickname=nickname or author.nickname)
@@ -289,11 +290,11 @@ class ArchiveTrigger:
     def __init__(
         self,
         *,
-        client: Any,
+        client: DtkReader,
         pacer: RequestPacer,
         pin: bool = False,
         max_per_round: int = 10,
-        logger: Any = None,
+        logger: LoggerLike | None = None,
     ) -> None:
         self._client = client
         self._pacer = pacer
@@ -529,11 +530,11 @@ class ArchiveTrigger:
 async def notify_system_event(
     event: Event,
     *,
-    notifier: Any,
+    notifier: NotifierLike,
     dedup: Deduplicator,
     store: StateStore | None = None,
     now: datetime | None = None,
-    logger: Any = None,
+    logger: LoggerLike | None = None,
     level: str = "warning",
 ) -> int | None:
     """系统级事件（上游异常 / 自身降级）的**唯一**出口：落库 → 投递 → 回写投递结果。
@@ -610,9 +611,9 @@ async def _notify_upstream(
     error: MonitorError,
     seconds: int,
     *,
-    notifier: Any,
+    notifier: NotifierLike,
     dedup: Deduplicator,
-    logger: Any,
+    logger: LoggerLike | None,
     store: StateStore | None = None,
     now: datetime | None = None,
 ) -> None:
@@ -640,7 +641,7 @@ async def _notify_upstream(
     )
 
 
-async def _deliver(notifier: Any, event: Event) -> dict[str, Any]:
+async def _deliver(notifier: NotifierLike, event: Event) -> dict[str, Any]:
     message = render_event(event)
     delivery = await notifier.send(message)
     return delivery.as_dict()
@@ -679,7 +680,7 @@ def _summarize(
     )
 
 
-def _log(logger: Any, level: str, event: str, **fields: Any) -> None:
+def _log(logger: LoggerLike | None, level: str, event: str, **fields: Any) -> None:
     if logger is None:
         return
     getattr(logger, level, logger.info)(event, **fields)

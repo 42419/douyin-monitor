@@ -33,6 +33,7 @@ from .messages import freq_hint, frequency_stats, hours_since, newest_post_at
 from .models import AuthorState, DiffConfig, Event, EventKind, RoundResult
 from .pacer import RequestPacer, RoundWaiter
 from .pipeline import ArchiveTrigger, notify_system_event, run_author
+from .protocols import DtkClientLike, LoggerLike, NotifierLike
 from .scheduler import GlobalGate
 from .settings import Settings
 from .state import StateStore
@@ -48,13 +49,13 @@ class MonitorLoop:
         *,
         settings: Settings,
         store: StateStore,
-        client: Any,
-        notifier: Any,
+        client: DtkClientLike,
+        notifier: NotifierLike,
         pacer: RequestPacer,
         waiter: RoundWaiter,
         gate: GlobalGate,
         dedup: Deduplicator,
-        logger: Any,
+        logger: LoggerLike,
         archive_trigger: ArchiveTrigger | None = None,
         stop: asyncio.Event | None = None,
     ) -> None:

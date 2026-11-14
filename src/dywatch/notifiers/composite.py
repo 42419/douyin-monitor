@@ -6,8 +6,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Union
+from typing import Union
 
+import httpx
+
+from ..settings import Settings
+from ..targets import Target
 from .bark import BarkChannel
 from .base import HttpChannel, Notifier
 from .dingtalk import DingTalkChannel
@@ -20,7 +24,7 @@ from .wecom import WeComChannel
 AnyNotifier = Union[Notifier, NullNotifier]
 
 
-def build_channels(settings: Any) -> list[HttpChannel]:
+def build_channels(settings: Settings) -> list[HttpChannel]:
     """Build one channel object per configured target.
 
     两条路径：
@@ -38,7 +42,7 @@ def build_channels(settings: Any) -> list[HttpChannel]:
     return _build_legacy(settings, at_mobiles)
 
 
-def _build_from_target(target: Any, at_mobiles: tuple[str, ...]) -> HttpChannel:
+def _build_from_target(target: Target, at_mobiles: tuple[str, ...]) -> HttpChannel:
     """按 `NOTIFY_TARGETS` 的一个条目建渠道。必填字段在解析阶段已经校验过。"""
     fields = target.fields
     name = target.name
@@ -71,7 +75,7 @@ def _build_from_target(target: Any, at_mobiles: tuple[str, ...]) -> HttpChannel:
     )  # pragma: no cover
 
 
-def _build_legacy(settings: Any, at_mobiles: tuple[str, ...]) -> list[HttpChannel]:
+def _build_legacy(settings: Settings, at_mobiles: tuple[str, ...]) -> list[HttpChannel]:
     """旧写法：`NOTIFY_CHANNELS` + 单值凭据键。**保留是为了不破坏已有部署的 .env。**
 
     旧写法一个类型只有**一份**凭据，但 `NOTIFY_CHANNELS=dingtalk,dingtalk` 这种写法是**能**
@@ -139,7 +143,9 @@ def _build_legacy(settings: Any, at_mobiles: tuple[str, ...]) -> list[HttpChanne
     return built
 
 
-def build_notifier(settings: Any, *, client: Any = None) -> AnyNotifier:
+def build_notifier(
+    settings: Settings, *, client: httpx.AsyncClient | None = None
+) -> AnyNotifier:
     if settings["SILENT_MODE"]:
         return NullNotifier()
     return Notifier(
