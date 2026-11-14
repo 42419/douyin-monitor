@@ -4,7 +4,7 @@
 按职责分层的依赖方向（单向、无环）：
 
     cli → runtime → loop → pipeline → {dtk, diff, state, notifiers, alerts}
-    diff / models / messages / render / errors  —— 纯逻辑，不 import 上面任何一个
+    diff / models / messages / render / errors / timeutil —— 纯逻辑，不 import 上面任何一个
     dtk                                —— 唯一知道 HTTP 的地方
     state                              —— 唯一持久化出口
     notifiers                          —— 唯一知道第三方 payload 的地方

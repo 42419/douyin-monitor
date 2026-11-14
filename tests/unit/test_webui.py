@@ -40,7 +40,7 @@ from dywatch.webui import (
     user_detail,
 )
 from dywatch.webui.common import _escape_html, _quantize_blocks
-from dywatch.webui.queries import _parse_dt
+from dywatch.timeutil import parse_dt
 from dywatch.webui.server import _Handler, _PanelServer
 
 NOW = datetime.now(timezone.utc)
@@ -820,10 +820,10 @@ def test_panel_server_starts_and_stops_cleanly(tmp_path):
 
 
 def test_parse_dt_accepts_z_suffix_and_naive_values():
-    assert _parse_dt("2026-09-16T12:00:00Z").tzinfo is not None
-    assert _parse_dt("2026-09-16T12:00:00").tzinfo is not None
-    assert _parse_dt("不是时间") is None
-    assert _parse_dt(None) is None
+    assert parse_dt("2026-09-16T12:00:00Z").tzinfo is not None
+    assert parse_dt("2026-09-16T12:00:00").tzinfo is not None
+    assert parse_dt("不是时间") is None
+    assert parse_dt(None) is None
 
 
 def test_urllib_parse_roundtrip_for_ids():

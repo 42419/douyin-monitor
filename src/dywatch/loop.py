@@ -36,6 +36,7 @@ from .pipeline import ArchiveTrigger, notify_system_event, run_author
 from .scheduler import GlobalGate
 from .settings import Settings
 from .state import StateStore
+from .timeutil import int_or_none, iso
 from .users import UserEntry, load_users_conf
 
 
@@ -325,11 +326,11 @@ class MonitorLoop:
                 "upstream.status_failed", error=f"{type(exc).__name__}: {exc}"[:160]
             )
             return
-        self._upstream_status = summarize_upstream_status(data, checked_at=_iso(now))
+        self._upstream_status = summarize_upstream_status(data, checked_at=iso(now))
 
     def _mark_upstream_unavailable(self, code: str, now: datetime) -> None:
         previous = dict(self._upstream_status or {})
-        previous.update({"ok": False, "error": code, "checked_at": _iso(now)})
+        previous.update({"ok": False, "error": code, "checked_at": iso(now)})
         self._upstream_status = previous
 
     # ------------------------------------------------------------------ 自身检查
@@ -407,7 +408,7 @@ class MonitorLoop:
         self._self_check = {
             "ok": not reasons,
             "reasons": sorted(reasons),
-            "checked_at": _iso(now),
+            "checked_at": iso(now),
             **checks,
         }
 
@@ -506,12 +507,12 @@ class MonitorLoop:
                     "consecutive_fails": state.consecutive_fails,
                     "last_error": state.last_error,
                     "last_error_code": state.last_error_code,
-                    "last_seen_at": _iso(state.last_seen_at),
-                    "last_update_at": _iso(state.last_update_at),
-                    "last_new_video_at": _iso(state.last_new_video_at),
+                    "last_seen_at": iso(state.last_seen_at),
+                    "last_update_at": iso(state.last_update_at),
+                    "last_new_video_at": iso(state.last_new_video_at),
                     # 面板上的"多久没更新"用这两个：最新作品的发布时间，而不是"上次检测到变化"
                     # 的时间——后者会被一次删除/改名刷新，看起来像账号很活跃，是误导。
-                    "newest_post_at": _iso(newest),
+                    "newest_post_at": iso(newest),
                     "hours_since_newest_post": hours_since(newest),
                     "update_frequency": freq[0] if freq else None,
                     # 面板的频率气泡要用到这两个数：只有分级文案说不清"这个分级是怎么来的"
@@ -605,7 +606,7 @@ def summarize_upstream_status(
                 ok = value.get("ok")
                 entry: dict[str, Any] = {
                     "ok": bool(ok) if ok is not None else None,
-                    "latency_ms": _int_or_none(value.get("latency_ms")),
+                    "latency_ms": int_or_none(value.get("latency_ms")),
                 }
                 # `configured` / `detail_code` 是 DTK 对 browser_rpc 实际会给的两个字段
                 # （见 DTK `routes/system.py::_browser_rpc_status`）：没有它们，面板只能说
@@ -626,10 +627,10 @@ def summarize_upstream_status(
     if isinstance(raw_pool, Mapping):
         for name, value in raw_pool.items():
             if name == "total_active":
-                pool["total_active"] = _int_or_none(value)
+                pool["total_active"] = int_or_none(value)
             elif isinstance(value, Mapping):
                 pool[str(name)] = {
-                    str(state): _int_or_none(count) or 0
+                    str(state): int_or_none(count) or 0
                     for state, count in value.items()
                 }
 
@@ -637,15 +638,15 @@ def summarize_upstream_status(
     raw_storage = data.get("storage")
     if isinstance(raw_storage, Mapping):
         storage = {
-            "db_size_bytes": _int_or_none(raw_storage.get("db_size_bytes")),
-            "identities": _int_or_none(raw_storage.get("identities")),
+            "db_size_bytes": int_or_none(raw_storage.get("db_size_bytes")),
+            "identities": int_or_none(raw_storage.get("identities")),
         }
 
     return {
         "ok": True,
         "checked_at": checked_at,
         "version": str(data.get("version") or "") or None,
-        "uptime_seconds": _int_or_none(data.get("uptime_seconds")),
+        "uptime_seconds": int_or_none(data.get("uptime_seconds")),
         "components": components,
         "pool": pool,
         "storage": storage,
@@ -660,20 +661,6 @@ def _detail_code(value: Any) -> str | None:
     if isinstance(value, str) and _DETAIL_CODE_RE.fullmatch(value):
         return value
     return None
-
-
-def _int_or_none(value: Any) -> int | None:
-    """缺值是 `None`，不是 0 —— 与 `models.py` 的第一条契约同源。"""
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
 
 
 __all__ = ["MonitorLoop", "summarize_upstream_status"]

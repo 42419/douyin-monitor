@@ -41,6 +41,7 @@ from ..state import (
     read_latest_post_metrics,
     read_post_metric_series,
 )
+from ..timeutil import parse_dt
 from ..users import load_users_conf
 from . import trend
 from .common import _format_post_age, classify_account
@@ -143,8 +144,8 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
             "title": post["title"] or "(无标题)",
             "kind": kind_label(Kind.parse(post["kind"])),
             "is_top": bool(post["is_top"]),
-            "date": fmt_time(_parse_dt(post["created_at"])),
-            "first_seen": fmt_time(_parse_dt(post["first_seen_at"])),
+            "date": fmt_time(parse_dt(post["created_at"])),
+            "first_seen": fmt_time(parse_dt(post["first_seen_at"])),
             "absent_rounds": int(post["absent_rounds"] or 0),
             "metrics": _metrics_json(latest.get(str(post["content_id"]))),
         }
@@ -161,8 +162,8 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
         "consecutive_fails": row["consecutive_fails"],
         "newest_post_ago": _format_post_age(hours),
         "newest_post_at": fmt_time(newest),
-        "initialized_at": fmt_time(_parse_dt(author["initialized_at"])),
-        "last_seen_at": fmt_time(_parse_dt(author["last_seen_at"])),
+        "initialized_at": fmt_time(parse_dt(author["initialized_at"])),
+        "last_seen_at": fmt_time(parse_dt(author["last_seen_at"])),
         "update_frequency": freq[0] if freq else None,
         "freq_hint": freq_hint(freq),
         "runs": int(author["runs"] or 0),
@@ -172,14 +173,14 @@ def user_detail(settings: Settings, sec_user_id: str) -> dict[str, Any] | None:
         "removed": [
             {
                 "content_id": row_["content_id"],
-                "date": fmt_time(_parse_dt(row_["removed_at"])),
+                "date": fmt_time(parse_dt(row_["removed_at"])),
                 "reason": tombstone_reason(row_["reason"]),
             }
             for row_ in removed
         ],
         "events": [
             {
-                "ts": fmt_time(_parse_dt(event["ts"])),
+                "ts": fmt_time(parse_dt(event["ts"])),
                 "label": event_label(event["kind"]),
                 "content_id": event["content_id"],
             }
@@ -265,20 +266,9 @@ def _post_state(post: sqlite3.Row) -> PostState:
         content_id=post["content_id"],
         kind=Kind.parse(post["kind"]),
         title=post["title"] or "",
-        created_at=_parse_dt(post["created_at"]),
+        created_at=parse_dt(post["created_at"]),
         is_top=bool(post["is_top"]),
     )
-
-
-def _parse_dt(value: Any) -> datetime | None:
-    if not value or not isinstance(value, str):
-        return None
-    text = value[:-1] + "+00:00" if value.endswith("Z") else value
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 # =================== 事件 ===================

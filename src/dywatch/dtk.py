@@ -24,13 +24,13 @@ from __future__ import annotations
 
 import asyncio
 import random
-from datetime import datetime, timezone
 from typing import Any, Final, Mapping, Sequence
 
 import httpx
 
 from .errors import MonitorError
 from .models import ArchiveItem, Content, Kind, Page
+from .timeutil import int_or_none, parse_dt
 
 #: 写请求（归档下载、pin）的超时。DTK 受理一个下载请求是本地操作，正常都在 1 秒内；
 #: 10 秒还不回来就是它不对劲，再等下去只会把整轮的结束时间往后拖——写请求在旁路上，
@@ -40,29 +40,6 @@ WRITE_TIMEOUT: Final[float] = 10.0
 # ---------------------------------------------------------------------------
 # 解析（纯函数，可脱网单测）
 # ---------------------------------------------------------------------------
-
-
-def _parse_dt(raw: Any) -> datetime | None:
-    if not raw or not isinstance(raw, str):
-        return None
-    text = raw.strip()
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
-def _int_or_none(raw: Any) -> int | None:
-    """Keep DTK's `None != 0` promise: absence stays `None`."""
-    if raw is None or isinstance(raw, bool):
-        return None
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return None
 
 
 #: `Retry-After` 里不该出现、但真出现时说明这不是我们预期的秒数（HTTP-date 里全是这些）。
@@ -178,18 +155,18 @@ def parse_content(node: Mapping[str, Any], *, raw_included: bool = False) -> Con
         title=str(node.get("title") or ""),
         description=str(node.get("description") or ""),
         web_url=str(node.get("web_url") or ""),
-        created_at=_parse_dt(node.get("created_at")),
-        duration_ms=_int_or_none(node.get("duration_ms")),
+        created_at=parse_dt(node.get("created_at")),
+        duration_ms=int_or_none(node.get("duration_ms")),
         is_top=is_top,
         is_deleted=bool(node.get("is_deleted")),
         is_private=bool(node.get("is_private")),
         cover_url=cover_url,
         image_count=len(images) if isinstance(images, Sequence) else 0,
-        digg_count=_int_or_none(stats.get("digg_count")),
-        comment_count=_int_or_none(stats.get("comment_count")),
-        share_count=_int_or_none(stats.get("share_count")),
-        collect_count=_int_or_none(stats.get("collect_count")),
-        play_count=_int_or_none(stats.get("play_count")),
+        digg_count=int_or_none(stats.get("digg_count")),
+        comment_count=int_or_none(stats.get("comment_count")),
+        share_count=int_or_none(stats.get("share_count")),
+        collect_count=int_or_none(stats.get("collect_count")),
+        play_count=int_or_none(stats.get("play_count")),
         tags=tuple(str(t) for t in tags),
         author_uid=str(author.get("sec_uid") or author.get("uid") or "") or None,
         author_nickname=str(author.get("nickname") or "") or None,
@@ -246,8 +223,8 @@ def parse_archive_item(node: Mapping[str, Any]) -> ArchiveItem:
         content_id=str(node.get("content_id") or ""),
         availability=str(node.get("availability") or "unknown"),
         stored=bool(node.get("stored")),
-        first_seen_at=_parse_dt(node.get("first_seen_at")),
-        last_seen_at=_parse_dt(node.get("last_seen_at")),
+        first_seen_at=parse_dt(node.get("first_seen_at")),
+        last_seen_at=parse_dt(node.get("last_seen_at")),
     )
 
 

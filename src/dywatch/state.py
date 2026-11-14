@@ -32,6 +32,7 @@ from .models import (
     RoundResult,
     Tombstone,
 )
+from .timeutil import iso
 
 SCHEMA_VERSION = 7
 
@@ -245,10 +246,6 @@ _MIGRATIONS: Final[Mapping[int, Callable[[sqlite3.Connection], None]]] = {
 }
 
 
-def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value is not None else None
-
-
 #: 一个账号一轮最多写多少行 `post_metrics`。一页 `FETCH_COUNT` 条，且只写"至少有一个数"的
 #: 那些行，所以这个上限只是防御性的（防止调用方传进来一个意想不到的长列表）。
 METRICS_MAX_ROWS_PER_ROUND = 200
@@ -283,7 +280,7 @@ def _json_default(value: Any) -> Any:
             "kind": value.kind.value,
             "title": value.title,
             "web_url": value.web_url,
-            "created_at": _iso(value.created_at),
+            "created_at": iso(value.created_at),
             "is_top": value.is_top,
         }
     if isinstance(value, datetime):
@@ -411,7 +408,7 @@ class StateStore:
                 with self._tx() as conn:
                     conn.execute(
                         "UPDATE authors SET nickname = ?, updated_at = ? WHERE sec_user_id = ?",
-                        (nickname, _iso(now), sec_user_id),
+                        (nickname, iso(now), sec_user_id),
                     )
                 # 昵称刚改过：重读一行，返回的状态才和库里一致
                 row = self._conn.execute(
@@ -431,7 +428,7 @@ class StateStore:
             conn.execute(
                 "INSERT INTO authors (sec_user_id, nickname, created_at, updated_at)"
                 " VALUES (?, ?, ?, ?)",
-                (sec_user_id, nickname, _iso(now), _iso(now)),
+                (sec_user_id, nickname, iso(now), iso(now)),
             )
         return AuthorState(sec_user_id=sec_user_id, nickname=nickname)
 
@@ -525,25 +522,25 @@ class StateStore:
                 (
                     state.sec_user_id,
                     state.nickname or sec_user_id,
-                    _iso(state.initialized_at),
+                    iso(state.initialized_at),
                     1 if state.ever_had_posts else 0,
                     state.consecutive_fails,
                     state.last_error,
                     state.last_error_code,
                     1 if state.fail_alerted else 0,
-                    _iso(state.last_fail_alert_at),
+                    iso(state.last_fail_alert_at),
                     state.all_gone_rounds,
                     state.empty_rounds,
                     1 if state.never_seen_alerted else 0,
-                    _iso(state.newest_seen_created_at),
+                    iso(state.newest_seen_created_at),
                     state.raw_refresh_round,
-                    _iso(state.last_new_video_at),
-                    _iso(state.last_update_at),
+                    iso(state.last_new_video_at),
+                    iso(state.last_update_at),
                     1 if state.stale_alerted else 0,
-                    _iso(state.last_seen_at),
+                    iso(state.last_seen_at),
                     state.runs,
-                    _iso(now),
-                    _iso(now),
+                    iso(now),
+                    iso(now),
                 ),
             )
 
@@ -559,10 +556,10 @@ class StateStore:
                         post.content_id,
                         post.kind.value,
                         post.title,
-                        _iso(post.created_at),
+                        iso(post.created_at),
                         1 if post.is_top else 0,
-                        _iso(post.first_seen_at),
-                        _iso(post.last_seen_at),
+                        iso(post.first_seen_at),
+                        iso(post.last_seen_at),
                         post.absent_rounds,
                         1 if post.absent_is_top else 0,
                     )
@@ -575,7 +572,7 @@ class StateStore:
                 "INSERT INTO tombstones (sec_user_id, content_id, removed_at, reason)"
                 " VALUES (?,?,?,?)",
                 [
-                    (sec_user_id, t.content_id, _iso(t.removed_at), t.reason)
+                    (sec_user_id, t.content_id, iso(t.removed_at), t.reason)
                     for t in state.tombstones
                 ],
             )
@@ -585,7 +582,7 @@ class StateStore:
                     "INSERT INTO events (ts, sec_user_id, content_id, kind, payload_json, delivery_json)"
                     " VALUES (?,?,?,?,?,?)",
                     (
-                        _iso(now),
+                        iso(now),
                         event.sec_user_id,
                         event.content_id,
                         event.kind.value,
@@ -629,7 +626,7 @@ class StateStore:
                 sec_user_id,
                 item.content_id,
                 hour,
-                _iso(now),
+                iso(now),
                 item.play_count,
                 item.digg_count,
                 item.comment_count,
@@ -673,7 +670,7 @@ class StateStore:
                 "INSERT INTO events (ts, sec_user_id, content_id, kind, payload_json, delivery_json)"
                 " VALUES (?,?,?,?,?,?)",
                 (
-                    _iso(now),
+                    iso(now),
                     event.sec_user_id or None,
                     event.content_id,
                     event.kind.value,
@@ -723,7 +720,7 @@ class StateStore:
                 "INSERT INTO rounds (ts, checked, new_count, deleted_count, title_changed,"
                 " failed, gate_state, duration_ms) VALUES (?,?,?,?,?,?,?,?)",
                 (
-                    _iso(now),
+                    iso(now),
                     checked,
                     new,
                     deleted,
@@ -770,11 +767,11 @@ class StateStore:
         with self._tx() as conn:
             conn.execute(
                 "DELETE FROM events WHERE ts < ?",
-                (_iso(now - timedelta(days=events_days)),),
+                (iso(now - timedelta(days=events_days)),),
             )
             conn.execute(
                 "DELETE FROM rounds WHERE ts < ?",
-                (_iso(now - timedelta(days=rounds_days)),),
+                (iso(now - timedelta(days=rounds_days)),),
             )
             if metrics_days > 0:
                 conn.execute(
@@ -837,10 +834,10 @@ def read_events(
     params: list[Any] = []
     if since is not None:
         clauses.append("ts >= ?")
-        params.append(_iso(since))
+        params.append(iso(since))
     if until is not None:
         clauses.append("ts < ?")
-        params.append(_iso(until))
+        params.append(iso(until))
     if kinds:
         names = _kind_names(kinds)
         if names is None:
@@ -890,7 +887,7 @@ def read_event_ticks(
     `sec_user_id` 与 `read_events` 同名同义：图上和下面的列表必须用**同一组过滤条件**，
     否则"柱子上有 5 根、列表里只有 1 条"会让人以为列表漏了数据。
     """
-    params: list[Any] = [_iso(since), _iso(until)]
+    params: list[Any] = [iso(since), iso(until)]
     clause = "WHERE ts >= ? AND ts < ?"
     if kinds:
         names = _kind_names(kinds)
