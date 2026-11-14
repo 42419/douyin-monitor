@@ -35,12 +35,13 @@ from dywatch.state import StateStore
 from dywatch.webui import (
     LED_SLOTS,
     PanelServer,
-    _escape_html,
-    _quantize_blocks,
     classify_account,
     render_page,
     user_detail,
 )
+from dywatch.webui.common import _escape_html, _quantize_blocks
+from dywatch.webui.queries import _parse_dt
+from dywatch.webui.server import _Handler, _PanelServer
 
 NOW = datetime.now(timezone.utc)
 ID_OK = "MS4wLjABAAAAok"
@@ -445,7 +446,7 @@ def test_metrics_label_never_ends_with_a_half_escape():
     `_label` 因此先截断再转义：只断言"结尾反斜杠成对"，因为落单的那一个会让
     Prometheus 认为转义没结束。
     """
-    from dywatch.webui import _label
+    from dywatch.webui.server import _label
 
     for raw in (
         "a" * 95 + '"' + "b",
@@ -763,7 +764,7 @@ def test_query_string_is_ignored(tmp_path):
 
 def test_status_server_silences_connection_reset_error(capsys):
     """公网扫描器连上就断开（ConnectionResetError）是常态噪音，不该打完整 traceback。"""
-    server = webui._PanelServer(("127.0.0.1", 0), webui._Handler)
+    server = _PanelServer(("127.0.0.1", 0), _Handler)
     try:
         try:
             raise ConnectionResetError("Connection reset by peer")
@@ -819,10 +820,10 @@ def test_panel_server_starts_and_stops_cleanly(tmp_path):
 
 
 def test_parse_dt_accepts_z_suffix_and_naive_values():
-    assert webui._parse_dt("2026-09-16T12:00:00Z").tzinfo is not None
-    assert webui._parse_dt("2026-09-16T12:00:00").tzinfo is not None
-    assert webui._parse_dt("不是时间") is None
-    assert webui._parse_dt(None) is None
+    assert _parse_dt("2026-09-16T12:00:00Z").tzinfo is not None
+    assert _parse_dt("2026-09-16T12:00:00").tzinfo is not None
+    assert _parse_dt("不是时间") is None
+    assert _parse_dt(None) is None
 
 
 def test_urllib_parse_roundtrip_for_ids():

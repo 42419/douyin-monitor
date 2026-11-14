@@ -31,7 +31,7 @@ from dywatch.scheduler import GlobalGate
 from dywatch.settings import load_settings
 from dywatch.targets import parse_targets
 from dywatch.users import INVISIBLE_CHARS, is_safe_id, parse_users
-from dywatch.webui import _metrics_label
+from dywatch.webui.server import _metrics_label
 
 NOW = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
 
@@ -271,7 +271,7 @@ def test_the_gate_banner_says_when_upstream_retry_after_was_capped():
     否则运维看到"闸门每十分钟开一次"只会以为上游一直在限流，而真相是
     "上游要求等更久、我们没完全照办"（DESIGN 修正 #32）。
     """
-    from dywatch.webui import _gate_html
+    from dywatch.webui.common import _gate_html
 
     capped = _gate_html(
         {
@@ -296,7 +296,7 @@ def test_the_gate_banner_says_when_upstream_retry_after_was_capped():
 
 
 def test_the_gate_banner_survives_a_hostile_capped_value():
-    from dywatch.webui import _gate_html
+    from dywatch.webui.common import _gate_html
 
     for junk in ("abc", None, [], {}):
         html = _gate_html(
@@ -326,7 +326,7 @@ def test_snapshot_field_coercion_never_raises_on_hostile_shapes():
     手工改坏快照（或旧版本写下的另一种形状）时，`/`、`/metrics`、`/api/health`
     曾经会在**写出任何响应之前**抛异常——连接被直接关掉，比 500 更难查。
     """
-    from dywatch.webui import _as_mapping
+    from dywatch.webui.common import _as_mapping
 
     assert _as_mapping("closed") == {}
     assert _as_mapping(["a"]) == {}
@@ -334,7 +334,7 @@ def test_snapshot_field_coercion_never_raises_on_hostile_shapes():
     assert _as_mapping(None) == {}
 
     # 真正被断言过的行为：坏形状下 `_gate_html` 不再抛
-    from dywatch.webui import _gate_html
+    from dywatch.webui.common import _gate_html
 
     assert _gate_html(_as_mapping("closed")) == ""
     assert "闸门关闭" not in _gate_html(_as_mapping("closed"))

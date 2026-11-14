@@ -6,8 +6,12 @@
 （SQLite，只 `SELECT`）。所以打开面板不消耗身份、不会碰到风控，也不会因为上游抖动而变慢。
 唯一一次"顺手多读一次库"发生在 `/metrics`（见 `server.metrics_text` 的说明）。
 
-路由清单在 `server` 的模块头。这里只做**门面**：把拆开的各部分重新导出一个名字，
-于是 `from dywatch.webui import render_page` 这类既有写法一行都不用改。
+路由清单在 `server` 的模块头。这里只做**门面**：把拆开的各部件的**公共 API** 重新导出一个名字，
+于是调用方只需要认识 `dywatch.webui` 一个包。
+
+以 `_` 开头的名字（`_escape_html`、`_label`、`_Handler` 这些）**刻意不在这里导出**：
+它们是各模块的内部细节，谁要用就 `from .common import _escape_html`，
+让"这是内部实现"这件事在 import 语句上就能看出来。
 
 模块地图（按依赖方向，上面的是下面的基础）：
 
@@ -42,15 +46,6 @@ from .common import (
     LED_SLOTS,
     STATUS_KEYS,
     STATUS_LEGEND,
-    _as_int,
-    _as_mapping,
-    _as_number,
-    _escape_html,
-    _gate_html,
-    _quantize_blocks,
-    _render_ledarray,
-    _render_stats,
-    _selfcheck_html,
     classify_account,
     event_tone,
     read_status,
@@ -68,15 +63,9 @@ from .page_events import (
     summarize_payload as summarize_event,
 )
 from .page_status import PANEL_TITLE, REFRESH_SECONDS, build_health, render_page
-from .queries import _parse_dt, user_detail
+from .queries import user_detail
 from .server import (
     PanelServer,
-    _Handler,
-    _PanelServer,
-    _dtk_ok,
-    _label,
-    _metrics_label,
-    _store_ok,
     access_urls,
     events_payload,
     guess_lan_ip,
@@ -94,22 +83,6 @@ __all__ = [
     "REFRESH_SECONDS",
     "STATUS_KEYS",
     "STATUS_LEGEND",
-    "_Handler",
-    "_PanelServer",
-    "_as_int",
-    "_as_mapping",
-    "_as_number",
-    "_dtk_ok",
-    "_escape_html",
-    "_gate_html",
-    "_label",
-    "_metrics_label",
-    "_parse_dt",
-    "_quantize_blocks",
-    "_render_ledarray",
-    "_render_stats",
-    "_selfcheck_html",
-    "_store_ok",
     "access_urls",
     "asset_bytes",
     "asset_version",
